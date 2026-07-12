@@ -83,6 +83,9 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
   border-bottom:1px solid var(--rule);
 }
 .topbar-in{max-width:var(--maxw);margin:0 auto;padding:0 24px;height:62px;display:flex;align-items:center;gap:26px}
+.tb-eth{font-family:var(--font-mono);font-size:12px;color:var(--cream-dim);white-space:nowrap;padding:5px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--ledger)}
+.tb-eth b{color:var(--gilt);font-weight:600}
+@media(max-width:560px){.tb-eth{display:none}}
 .brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
 .brand-seal{width:30px;height:30px;flex-shrink:0;color:var(--gilt);filter:drop-shadow(0 0 7px rgba(198,242,60,.5))}
 .brand-word{font-family:var(--font-display);font-weight:700;font-size:21px;letter-spacing:.04em;color:var(--cream)}
@@ -721,6 +724,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <button data-i18n="nav.chain" onclick="toast('Robinhood Chain — L2 explorer &amp; bridge coming soon','')">Robinhood Chain</button>
     </nav>
     <div class="topbar-right">
+      <span class="tb-eth" id="ethPx" title="Live ETH price · CoinGecko"><b>Ξ</b>&nbsp;$—</span>
       <button class="tb-icon tb-lang" id="langBtn" onclick="toggleLang()" title="Language" aria-label="Switch language">EN</button>
       <button class="tb-icon" id="themeBtn" onclick="toggleTheme()" title="Toggle light / dark" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg></button>
       <a class="tb-icon tb-social" href="#" onclick="return false" title="X" aria-label="X (Twitter)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.9 2H22l-7.6 8.7L23.3 22h-6.9l-5.4-7.1L4.8 22H1.7l8.2-9.4L.9 2h7.1l4.9 6.5L18.9 2zm-1.2 18h1.9L7.1 4H5.1l12.6 16z"/></svg></a>
@@ -1076,6 +1080,15 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <div class="panel t-stat"><div class="k">Earned all-time</div><div class="v" id="tr-alltime">0 ETH</div><div class="s">across <span id="tr-count">0</span> tokens</div></div>
       <div class="panel t-stat"><div class="k">Best earner</div><div class="v" id="tr-best">—</div><div class="s" id="tr-bestsub">launch something</div></div>
     </div>
+    <div class="panel" id="adminCard" style="display:none;margin-bottom:12px;padding:15px 18px">
+      <div style="font-size:11.5px;letter-spacing:.14em;color:var(--cream-mute);text-transform:uppercase;margin-bottom:11px">⚙ Protocol admin · owner only</div>
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <label style="font-size:13px;color:var(--cream-dim)">Deploy fee (ETH)</label>
+        <input id="adm-fee" type="number" step="0.0001" min="0" placeholder="0.001" style="width:120px;padding:8px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--ink-2);color:var(--cream);font-family:var(--font-mono)">
+        <button class="btn btn-line btn-mini" id="admSetBtn" onclick="adminSetDeployFee()">Update deploy fee</button>
+        <span id="adm-cur" style="font-size:12px;color:var(--cream-mute)"></span>
+      </div>
+    </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
       <button class="btn btn-gold" onclick="claimAll()">Sweep all to wallet</button>
     </div>
@@ -1282,6 +1295,8 @@ const EXPLORER = 'https://explorer.testnet.chain.robinhood.com';
 const FACTORY_ABI = [
   'function createToken((string name,string symbol,string metadataURI,uint16 buyLevyBps,uint16 sellLevyBps,bool decayAtGraduation,bool renounceRateControl,uint256 devBuyMinTokensOut,bytes32 vanitySalt)) payable returns (address token, address curve)',
   'function deployFee() view returns (uint256)',
+  'function owner() view returns (address)',
+  'function setDeployFee(uint256 fee)',
   'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
 ];
 const chainReady = () => !!(CHAIN && FACTORY_ADDR && typeof ethers !== 'undefined');
@@ -2164,6 +2179,42 @@ async function refreshDeployFee(){
   }catch(_){}
   syncCost();
 }
+/* Owner-only: show the admin card + let the factory owner change the deploy fee. */
+async function refreshAdmin(){
+  const card=document.getElementById('adminCard'); if(!card) return;
+  card.style.display='none';
+  try{
+    if(!chainReady() || !wallet) return;
+    const ro=new ethers.JsonRpcProvider(CHAIN.rpcUrls[0]);
+    const owner=await new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro).owner();
+    if(owner && owner.toLowerCase()===wallet.toLowerCase()){
+      card.style.display='block';
+      const cur=document.getElementById('adm-cur'); if(cur) cur.textContent='current: '+deployFeeEth+' ETH';
+      const inp=document.getElementById('adm-fee'); if(inp && !inp.value) inp.value=deployFeeEth;
+    }
+  }catch(_){}
+}
+async function adminSetDeployFee(){
+  const btn=document.getElementById('admSetBtn');
+  try{
+    if(!activeProvider){ toast('Connect the owner wallet first','seal'); connectWallet(); return; }
+    await ensureChain(activeProvider);
+    const eth=parseFloat(document.getElementById('adm-fee').value);
+    if(!(eth>=0)){ toast('Enter a valid fee in ETH','seal'); return; }
+    btn.disabled=true; btn.textContent='Confirm in wallet…';
+    const signer=await new ethers.BrowserProvider(activeProvider).getSigner();
+    const tx=await new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, signer).setDeployFee(ethers.parseEther(String(eth)));
+    toast('Updating deploy fee — waiting…','jade');
+    await tx.wait();
+    toast('Deploy fee set to '+eth+' ETH','jade');
+    btn.disabled=false; btn.textContent='Update deploy fee';
+    refreshDeployFee(); refreshAdmin();
+  }catch(err){
+    if(btn){ btn.disabled=false; btn.textContent='Update deploy fee'; }
+    const msg=(err&&(err.shortMessage||err.reason||err.message))||'failed';
+    toast('Fee update failed — '+esc(String(msg).slice(0,120)),'seal');
+  }
+}
 async function deploy(){
   const name = document.getElementById('c-name').value.trim();
   const ticker = document.getElementById('c-ticker').value.trim();
@@ -2290,6 +2341,7 @@ function closeModal(){ document.getElementById('modalBack').classList.remove('op
    TREASURY
    ================================================================ */
 function renderTreasury(){
+  refreshAdmin();   // show the owner-only deploy-fee control if the owner is connected
   const mine = TOKENS.filter(t=>t.mine);
   const rows = document.getElementById('tr-rows');
   if(!wallet || !mine.length){
@@ -2438,6 +2490,8 @@ async function refreshEthPrice(){
         ETH_USD = p;
         START_CAP = Math.round(START_ETH*ETH_USD);
         GRAD_CAP = Math.round(GRAD_ETH*ETH_USD);
+        const el=document.getElementById('ethPx');
+        if(el) el.innerHTML='<b>Ξ</b>&nbsp;$'+ETH_USD.toLocaleString('en-US',{maximumFractionDigits:2});
         renderStats(); renderGrid(); syncCost();
         if(currentTokenId) renderToken();
         return;
@@ -2457,6 +2511,7 @@ function init(){
   refreshDeployFee();   // show the real on-chain deploy fee (retry once ethers loads)
   setTimeout(refreshDeployFee, 1500);
   refreshEthPrice();    // real ETH/USD so the dollar figures aren't ~2x off
+  setInterval(refreshEthPrice, 45000);   // keep the ETH price live
   setInterval(simTick, 1700);
   setInterval(()=>{ if(currentTokenId) drawChart(tok()); }, 4000);
   window.addEventListener('resize', ()=>{ if(currentTokenId) drawChart(tok()); });
