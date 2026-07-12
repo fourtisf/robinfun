@@ -86,6 +86,13 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .tb-eth{font-family:var(--font-mono);font-size:12px;color:var(--cream-dim);white-space:nowrap;padding:5px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--ledger)}
 .tb-eth b{color:var(--gilt);font-weight:600}
 @media(max-width:560px){.tb-eth{display:none}}
+.wallet-menu{position:fixed;z-index:120;display:none;min-width:196px;background:var(--ledger);border:1px solid var(--rule-2);border-radius:12px;padding:6px;box-shadow:0 18px 44px -12px rgba(0,0,0,.72)}
+.wallet-menu.open{display:block}
+.wmenu-addr,.wmenu-item{width:100%;text-align:left;background:none;border:none;padding:9px 11px;border-radius:8px;cursor:pointer}
+.wmenu-addr{font-family:var(--font-mono);font-size:12px;color:var(--cream-dim);border-bottom:1px solid var(--rule);border-radius:8px 8px 0 0;margin-bottom:4px}
+.wmenu-item{font-size:13.5px;color:var(--cream)}
+.wmenu-addr:hover,.wmenu-item:hover{background:var(--ledger-2)}
+.wmenu-item.danger{color:var(--seal-bright)}
 .brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
 .brand-seal{width:30px;height:30px;flex-shrink:0;color:var(--gilt);filter:drop-shadow(0 0 7px rgba(198,242,60,.5))}
 .brand-word{font-family:var(--font-display);font-weight:700;font-size:21px;letter-spacing:.04em;color:var(--cream)}
@@ -1227,6 +1234,13 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   </div>
 </div>
 
+<!-- wallet dropdown (shown when connected) -->
+<div class="wallet-menu" id="walletMenu">
+  <button class="wmenu-addr" onclick="copyWalletAddr()" title="Copy address"><span id="wmenu-addr-txt">0x…</span> <span style="opacity:.55">⧉</span></button>
+  <button class="wmenu-item" onclick="closeWalletMenu();go('treasury')">💼 Treasury</button>
+  <button class="wmenu-item danger" onclick="disconnectWallet()">⏻ Disconnect</button>
+</div>
+
 <div class="toasts" id="toasts"></div>
 
 <!-- ======================= FOOTER ======================= -->
@@ -1322,11 +1336,26 @@ function walletOptions(){
 }
 
 async function connectWallet(){
-  // Already connected → the address button opens the Treasury.
-  if(wallet){ go('treasury'); return; }
+  // Already connected → the address button opens a small wallet menu.
+  if(wallet){ openWalletMenu(); return; }
   window.dispatchEvent(new Event('eip6963:requestProvider'));   // re-scan
   setTimeout(openWalletModal, 60);                              // let wallets announce
 }
+function openWalletMenu(){
+  const btn=document.getElementById('walletBtn'), menu=document.getElementById('walletMenu');
+  const t=document.getElementById('wmenu-addr-txt'); if(t) t.textContent=shortAddr(wallet||MY_ADDR);
+  const r=btn.getBoundingClientRect();
+  menu.style.top=(r.bottom+8)+'px';
+  menu.style.right=Math.max(8,(window.innerWidth-r.right))+'px';
+  menu.classList.add('open');
+}
+function closeWalletMenu(){ const m=document.getElementById('walletMenu'); if(m) m.classList.remove('open'); }
+function copyWalletAddr(){ if(wallet && navigator.clipboard){ navigator.clipboard.writeText(wallet).then(()=>toast('Address copied','jade')).catch(()=>{}); } }
+document.addEventListener('click',(e)=>{
+  const menu=document.getElementById('walletMenu'), btn=document.getElementById('walletBtn');
+  if(!menu || !menu.classList.contains('open')) return;
+  if(!menu.contains(e.target) && btn && !btn.contains(e.target)) closeWalletMenu();
+});
 
 function openWalletModal(){
   wmList = walletOptions();
@@ -1394,9 +1423,14 @@ function onWalletConnected(addr){
 
 function disconnectWallet(){
   wallet = null;
+  activeProvider = null;
   MY_ADDR = '0x7A3f19bC…C41d';
   document.getElementById('walletBtn').textContent = 'Connect wallet';
   const w = document.getElementById('c-wallet'); if(w) w.value = '';
+  closeWalletMenu();
+  const adm = document.getElementById('adminCard'); if(adm) adm.style.display = 'none';
+  toast('Wallet disconnected','jade');
+  if(document.getElementById('page-treasury').classList.contains('active')) renderTreasury();
 }
 function seedMyTokens(){
   // Real product: your tokens are the ones you launched (persisted in the
