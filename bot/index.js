@@ -10,7 +10,7 @@
 // "fee" is faucet ETH (free) — perfect for trying the whole flow. Switch to
 // mainnet RPC + treasury + a real fee when you go live.
 
-import { Bot } from 'grammy';
+import { Bot, InlineKeyboard } from 'grammy';
 import fs from 'node:fs';
 import path from 'node:path';
 import { isTxHash, isAddress, esc, ethToWei, weiToEth, verifyPayment } from './verify.js';
@@ -65,18 +65,36 @@ async function rpc(method, params) {
 // ------------------------------------------------------------------ wizard
 const STEPS = ['name', 'ticker', 'ca', 'fee', 'desc', 'website', 'x', 'tg', 'logo', 'pay'];
 const OPTIONAL = new Set(['fee', 'desc', 'website', 'x', 'tg', 'logo']);
+const STEP_NO = { name: 1, ticker: 2, ca: 3, fee: 4, desc: 5, website: 6, x: 7, tg: 8, logo: 9 };
+const TOTAL_STEPS = 9;
 const PROMPTS = {
-  name:    '🏷️ Send the <b>token name</b> (e.g. Sherwood).',
-  ticker:  '🔤 Now the <b>ticker</b> (e.g. WOOD).',
-  ca:      '📜 Paste the <b>contract address</b> (0x… 40 hex).',
-  fee:     '💸 Buy/sell <b>fee %</b> — e.g. <code>3/3</code>. Send /skip for 0/0.',
-  desc:    '📝 A short <b>description</b> (1–2 lines). /skip to leave blank.',
-  website: '🌐 <b>Website</b> URL? /skip if none.',
-  x:       '🐦 <b>X (Twitter)</b> URL? /skip if none.',
-  tg:      '💬 <b>Telegram</b> URL? /skip if none.',
-  logo:    '🖼️ Send the <b>logo</b> as a photo. /skip if none.',
+  name:    'Step 1/9 · 🏷️ What is the <b>token name</b>? (e.g. Sherwood)',
+  ticker:  'Step 2/9 · 🔤 And the <b>ticker</b>? (e.g. WOOD)',
+  ca:      'Step 3/9 · 📜 Paste the token <b>contract address</b> (0x…).',
+  fee:     'Step 4/9 · 💸 Pick the <b>creator fee</b> (buy / sell %):',
+  desc:    'Step 5/9 · 📝 Add a short <b>description</b> (1–2 lines), or tap Skip.',
+  website: 'Step 6/9 · 🌐 <b>Website</b> link? Or tap Skip.',
+  x:       'Step 7/9 · 🐦 <b>X (Twitter)</b> link? Or tap Skip.',
+  tg:      'Step 8/9 · 💬 <b>Telegram</b> link? Or tap Skip.',
+  logo:    'Step 9/9 · 🖼️ Send the <b>logo</b> as a photo, or tap Skip.',
 };
 const sessions = new Map();     // userId -> { i, data, ts }
+
+// ---- inline keyboards (tap, don't type) ----
+const kbCancel = () => new InlineKeyboard().text('✖️ Cancel', 'cancel');
+const kbSkip = () => new InlineKeyboard().text('⏭️ Skip', 'skip').text('✖️ Cancel', 'cancel');
+const kbFee = () => new InlineKeyboard()
+  .text('0 / 0 · no fee', 'fee:0:0').text('1 / 1', 'fee:1:1').row()
+  .text('3 / 3', 'fee:3:3').text('5 / 5', 'fee:5:5').row()
+  .text('✏️ Custom', 'fee:custom').text('✖️ Cancel', 'cancel');
+const kbMenu = () => new InlineKeyboard()
+  .text('🚀 List a token', 'start_list').row()
+  .text('💸 Listing fee', 'fee_info').text('❓ How it works', 'help').row()
+  .url('🌐 robinfun.io', SITE_URL);
+const kbPay = () => new InlineKeyboard().text('✅ I have paid — verify', 'paid').row().text('✖️ Cancel', 'cancel');
+const kbAgain = () => new InlineKeyboard().text('🚀 List another', 'start_list');
+
+const stepKeyboard = (step) => (step === 'fee' ? kbFee() : OPTIONAL.has(step) ? kbSkip() : kbCancel());
 
 function startWizard(ctx) {
   sessions.set(ctx.from.id, { i: 0, data: {}, ts: Date.now() });
@@ -86,7 +104,7 @@ function enterStep(ctx) {
   const s = sessions.get(ctx.from.id);
   const step = STEPS[s.i];
   if (step === 'pay') return sendPayInstructions(ctx, s);
-  return ctx.reply(PROMPTS[step], { parse_mode: 'HTML' });
+  return ctx.reply(PROMPTS[step], { parse_mode: 'HTML', reply_markup: stepKeyboard(step) });
 }
 function advance(ctx) { sessions.get(ctx.from.id).i++; return enterStep(ctx); }
 
@@ -99,12 +117,12 @@ function sendPayInstructions(ctx, s) {
     `CA: <code>${esc(d.ca)}</code>`,
     (d.buyFee || d.sellFee) ? `Fee: ${d.buyFee}/${d.sellFee}` : 'Fee: 0/0',
     '',
-    `To publish it, send <b>${esc(weiToEth(FEE_WEI))} ETH</b> to the Robinfun treasury on <b>${esc(CHAIN_NAME)}</b> (chainId ${esc(CHAIN_ID)}):`,
+    `Send <b>${esc(weiToEth(FEE_WEI))} ETH</b> to the Robinfun treasury on <b>${esc(CHAIN_NAME)}</b> (chainId ${esc(CHAIN_ID)}):`,
     `<code>${esc(TREASURY)}</code>`,
     '',
-    'Then paste the <b>transaction hash</b> here. Send /cancel to abort.',
+    '👉 After paying, tap <b>“I have paid”</b> and paste the <b>transaction hash</b>.',
   ];
-  return ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+  return ctx.reply(lines.join('\n'), { parse_mode: 'HTML', reply_markup: kbPay() });
 }
 
 // ------------------------------------------------------------------ finalize
@@ -164,49 +182,81 @@ async function finalize(ctx, s, from) {
 
   const link = CHANNEL_URL ? `\n📣 ${CHANNEL_URL}` : '';
   await ctx.reply(`🎉 <b>${esc(d.name)}</b> is live on the listings channel!${link}\n🌐 ${esc(SITE_URL)}`,
-    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } });
+    { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: kbAgain() });
 }
 
 // ------------------------------------------------------------------ bot
 const bot = new Bot(BOT_TOKEN);
 const priv = (ctx) => ctx.chat?.type === 'private';
 
-bot.command('start', (ctx) =>
+const sendMenu = (ctx) =>
   ctx.reply(
-    `🪶 <b>Robinfun listings</b>\n\nList your token on Robinfun and broadcast it to the community.\n\n` +
-    `• /list — submit a token\n• /fee — see the listing fee\n• /help — how it works\n\n🌐 ${esc(SITE_URL)}`,
-    { parse_mode: 'HTML', link_preview_options: { is_disabled: true } }));
+    `🪶 <b>Welcome to Robinfun listings</b>\n\nGet your token in front of the community — tap a button to begin.`,
+    { parse_mode: 'HTML', link_preview_options: { is_disabled: true }, reply_markup: kbMenu() });
 
-bot.command('help', (ctx) =>
+const sendHelp = (ctx) =>
   ctx.reply(
-    `<b>How listing works</b>\n\n1. /list and answer a few questions.\n2. Pay <b>${esc(weiToEth(FEE_WEI))} ETH</b> to the Robinfun treasury on ${esc(CHAIN_NAME)}.\n3. Paste the transaction hash — once it confirms, your token is auto-posted to the listings channel and the Robinfun board.\n\nSend /cancel any time to stop.`,
-    { parse_mode: 'HTML' }));
+    `<b>How listing works</b>\n\n1️⃣ Tap <b>List a token</b> and answer with a tap where you can.\n2️⃣ Pay the <b>${esc(weiToEth(FEE_WEI))} ETH</b> fee to the Robinfun treasury on ${esc(CHAIN_NAME)}.\n3️⃣ Tap <b>I have paid</b> and paste the tx hash — once it confirms, your token is auto-posted to the listings channel and the Robinfun board.\n\nYou can tap ✖️ Cancel any time.`,
+    { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🚀 List a token', 'start_list') });
 
-bot.command('fee', (ctx) =>
-  ctx.reply(`💸 Listing fee: <b>${esc(weiToEth(FEE_WEI))} ETH</b>\nNetwork: ${esc(CHAIN_NAME)} (chainId ${esc(CHAIN_ID)})\nTreasury: <code>${esc(TREASURY)}</code>`,
-    { parse_mode: 'HTML' }));
+const sendFeeInfo = (ctx) =>
+  ctx.reply(
+    `💸 <b>Listing fee: ${esc(weiToEth(FEE_WEI))} ETH</b>\nNetwork: ${esc(CHAIN_NAME)} (chainId ${esc(CHAIN_ID)})\nGoes to: <code>${esc(TREASURY)}</code>`,
+    { parse_mode: 'HTML', reply_markup: new InlineKeyboard().text('🚀 List a token', 'start_list') });
+
+bot.command('start', (ctx) => sendMenu(ctx));
+bot.command('help', (ctx) => sendHelp(ctx));
+bot.command('fee', (ctx) => sendFeeInfo(ctx));
 
 bot.command('cancel', (ctx) => {
-  if (sessions.delete(ctx.from.id)) return ctx.reply('Cancelled. Send /list to start over.');
-  return ctx.reply('Nothing to cancel. Send /list to begin.');
+  if (sessions.delete(ctx.from.id)) return ctx.reply('✖️ Cancelled.', { reply_markup: kbAgain() });
+  return sendMenu(ctx);
 });
 
 bot.command('list', (ctx) => {
-  if (!priv(ctx)) return ctx.reply('Please DM me to list a token: open a private chat and send /list.');
+  if (!priv(ctx)) return ctx.reply('Please DM me to list a token: open a private chat with me and tap Start.');
   return startWizard(ctx);
 });
 
 bot.command('skip', (ctx) => {
   const s = sessions.get(ctx.from.id);
-  if (!s) return ctx.reply('Nothing to skip. Send /list to begin.');
-  const step = STEPS[s.i];
-  if (!OPTIONAL.has(step)) return ctx.reply('This field is required — please provide a value.');
+  if (!s) return sendMenu(ctx);
+  if (!OPTIONAL.has(STEPS[s.i])) return ctx.reply('This one is required — please send a value.');
   return advance(ctx);
 });
 
 bot.command('stats', (ctx) => {
   if (!ADMIN_IDS.has(ctx.from.id)) return;
   return ctx.reply(`📊 Listings published: ${store.listed || 0}\nTx hashes on record: ${usedTx.size}\nActive wizards: ${sessions.size}`);
+});
+
+// ---- button taps ----
+bot.on('callback_query:data', async (ctx) => {
+  const data = ctx.callbackQuery.data;
+  await ctx.answerCallbackQuery().catch(() => {});    // stop the loading spinner
+  if (data === 'help') return sendHelp(ctx);
+  if (data === 'fee_info') return sendFeeInfo(ctx);
+  if (data === 'start_list') return startWizard(ctx);
+  if (data === 'cancel') { sessions.delete(ctx.from.id); return ctx.reply('✖️ Cancelled.', { reply_markup: kbAgain() }); }
+
+  const s = sessions.get(ctx.from.id);
+  if (!s) return ctx.reply('That button expired. Tap below to start.', { reply_markup: kbAgain() });
+  const step = STEPS[s.i];
+
+  if (data === 'skip') { if (OPTIONAL.has(step)) return advance(ctx); return; }
+  if (data === 'paid') {
+    if (step !== 'pay') return;
+    return ctx.reply('Paste your payment <b>transaction hash</b> (0x…) here.', { parse_mode: 'HTML', reply_markup: kbCancel() });
+  }
+  if (data.startsWith('fee:')) {
+    if (step !== 'fee') return;
+    const rest = data.slice(4);
+    if (rest === 'custom') return ctx.reply('Type the fee like <code>3/3</code> (buy/sell), or a single number.', { parse_mode: 'HTML', reply_markup: kbCancel() });
+    const [b, se] = rest.split(':').map(Number);
+    s.data.buyFee = Math.min(10, b || 0);
+    s.data.sellFee = Math.min(10, se || 0);
+    return advance(ctx);
+  }
 });
 
 // Logo photo → captured at the 'logo' step.
@@ -243,7 +293,7 @@ bot.on('message:text', async (ctx) => {
       d.ca = t; return advance(ctx);
     case 'fee': {
       const m = /^(\d{1,2})\s*[/ ]\s*(\d{1,2})$/.exec(t) || /^(\d{1,2})$/.exec(t);
-      if (!m) return ctx.reply('Send it like <code>3/3</code> (buy/sell), a single number, or /skip.', { parse_mode: 'HTML' });
+      if (!m) return ctx.reply('Send it like <code>3/3</code> (buy/sell) or a single number — or tap a preset above.', { parse_mode: 'HTML' });
       d.buyFee = Math.min(10, Number(m[1]));
       d.sellFee = Math.min(10, Number(m[2] ?? m[1]));
       return advance(ctx);
@@ -251,10 +301,10 @@ bot.on('message:text', async (ctx) => {
     case 'desc':
       d.desc = t.slice(0, 280); return advance(ctx);
     case 'website': case 'x': case 'tg':
-      if (!/\.[a-z]{2,}/i.test(t)) return ctx.reply('That does not look like a link. Send a URL or /skip.');
+      if (!/\.[a-z]{2,}/i.test(t)) return ctx.reply('That does not look like a link. Send a URL, or tap Skip.');
       d[step] = t; return advance(ctx);
     case 'logo':
-      return ctx.reply('Please send the logo as a <b>photo</b>, or /skip.', { parse_mode: 'HTML' });
+      return ctx.reply('Please send the logo as a <b>photo</b>, or tap Skip.', { parse_mode: 'HTML' });
   }
 });
 
