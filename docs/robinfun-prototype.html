@@ -9,6 +9,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- ethers.js — used to send the real on-chain createToken() launch. If it fails
+     to load, the Launch button falls back to the local simulation. -->
+<script defer src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
 <style>
 /* ================================================================
    Robinfun — design tokens
@@ -941,7 +944,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <div class="assurance"><span class="tick">✓</span><span><b>No blacklist, no pause, no mint.</b> Transfers can never be blocked or diluted.</span></div>
           <div class="assurance"><span class="tick">✓</span><span><b>LP 100% burned at graduation.</b> The Uniswap pool can never be pulled.</span></div>
           <div class="deploy-cost"><span>Deploy cost</span><span id="deployCost">0.002 ETH + gas</span></div>
-          <button class="btn btn-gold btn-lg btn-block" onclick="deploy()">Deploy token</button>
+          <button class="btn btn-gold btn-lg btn-block" id="deployBtn" onclick="deploy()">Deploy token</button>
         </div>
       </div>
     </div>
@@ -1261,13 +1264,25 @@ let LAUNCH_COUNT = 0;
 /* ---------------- wallet ---------------- */
 let wallet = null;
 let MY_ADDR = '0x7A3f19bC…C41d';   // display fallback until a real wallet connects
-/* Robinhood Chain (Arbitrum Orbit L2). Testnet chainId + RPC are still TBD
-   (brief §10.9). Fill this in and Connect will add/switch the network
-   automatically; leave null to connect on whatever network the wallet is on. */
-const CHAIN = null; /* e.g.
-  { chainId:'0x66eed', chainName:'Robinhood Chain',
-    nativeCurrency:{name:'Ether',symbol:'ETH',decimals:18},
-    rpcUrls:['https://rpc...'], blockExplorerUrls:['https://explorer...'] }; */
+/* Robinhood Chain testnet (Arbitrum Orbit L2, chainId 46630). Connect will
+   add/switch the wallet to this network automatically. */
+const CHAIN = {
+  chainId: '0xb626',   // 46630
+  chainName: 'Robinhood Chain Testnet',
+  nativeCurrency: { name:'Ether', symbol:'ETH', decimals:18 },
+  rpcUrls: ['https://rpc.testnet.chain.robinhood.com'],
+  blockExplorerUrls: ['https://explorer.testnet.chain.robinhood.com'],
+};
+/* Deployed RobinfunFactory (testnet). Launch calls createToken() here. */
+const FACTORY_ADDR = '0x1B57C272F120c7A907324751A544661f1b6Fbf59';
+const DEPLOY_FEE_WEI = 500000000000000n;   // 0.0005 ETH
+const EXPLORER = 'https://explorer.testnet.chain.robinhood.com';
+const FACTORY_ABI = [
+  'function createToken((string name,string symbol,string metadataURI,uint16 buyLevyBps,uint16 sellLevyBps,bool decayAtGraduation,bool renounceRateControl,uint256 devBuyMinTokensOut,bytes32 vanitySalt)) payable returns (address token, address curve)',
+  'function deployFee() view returns (uint256)',
+  'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
+];
+const chainReady = () => !!(CHAIN && FACTORY_ADDR && typeof ethers !== 'undefined');
 
 /* ---- Multi-wallet discovery (EIP-6963) ----
    Every installed injected wallet (MetaMask, Rabby, Coinbase, Brave, OKX, …)
@@ -2029,7 +2044,7 @@ async function apiCreateToken(t){
   const r = await fetch(API+'/api/tokens', {
     method:'POST', headers:{'content-type':'application/json'},
     body: JSON.stringify({
-      name:t.name, ticker:t.ticker, description:t.desc,
+      name:t.name, ticker:t.ticker, description:t.desc, ca:t.ca||'',
       website:t.website, x:t.x, tg:t.tg,
       buyFee:t.buyTax, sellFee:t.sellTax,
       decay:!!t.decay, renounce:!!t.renounced,
@@ -2051,6 +2066,7 @@ function tokenFromRecord(rec){
     created:rec.createdAt||Date.now(), lastTrade:rec.createdAt||Date.now(),
   });
   t.srvId = rec.id;
+  t.ca = rec.ca || '';
   return t;
 }
 async function loadServerTokens(){
@@ -2132,55 +2148,123 @@ function syncCost(){
   const b = parseFloat(document.getElementById('c-buyin').value)||0;
   document.getElementById('deployCost').textContent = (0.002+b).toFixed(3)+' ETH + gas';
 }
-function deploy(){
+async function deploy(){
   const name = document.getElementById('c-name').value.trim();
   const ticker = document.getElementById('c-ticker').value.trim();
   if(!name || !ticker){ toast('Name and ticker are required','seal'); return; }
   if(!wallet){ toast('Connect your wallet first','seal'); connectWallet(); return; }
-  const b = parseFloat(document.getElementById('r-buy').value);
-  const s = parseFloat(document.getElementById('r-sell').value);
-  const devBuy = parseFloat(document.getElementById('c-buyin').value)||0;
-  const t = mkTok({
-    name, ticker, emoji:null, logo:chosenLogo,
+  const meta = {
+    name, ticker,
     website: document.getElementById('c-web').value.trim(),
     x: document.getElementById('c-x').value.trim(),
     tg: document.getElementById('c-tg').value.trim(),
     desc: document.getElementById('c-desc').value.trim() || 'Freshly launched on Robinfun.',
-    buyTax:b, sellTax:s,
+    buyTax: parseFloat(document.getElementById('r-buy').value),
+    sellTax: parseFloat(document.getElementById('r-sell').value),
     decay: document.getElementById('c-decay').checked,
     renounced: document.getElementById('c-renounce').checked,
-    mcap: START_CAP + devBuy*ETH_USD*0.96,
-    vol24: devBuy*ETH_USD, chg24: devBuy>0? rnd(2,9):0,
-    holders: devBuy>0?2:1, replies:0, mine:true, creator:MY_ADDR||'you',
-    created: Date.now(), lastTrade: Date.now(), earnedEth: devBuy*b/100,
+    devBuy: parseFloat(document.getElementById('c-buyin').value)||0,
+  };
+  if(chainReady()) return realLaunch(meta);
+  return simulateLaunch(meta);
+}
+
+/* --- real on-chain launch: signs createToken() with the user's own wallet --- */
+async function realLaunch(meta){
+  const btn = document.getElementById('deployBtn');
+  const busy = (on,txt)=>{ if(btn){ btn.disabled=on; if(txt) btn.textContent=txt; } };
+  try{
+    if(!activeProvider){ toast('Connect your wallet first','seal'); connectWallet(); return; }
+    busy(true,'Switching network…');
+    await ensureChain(activeProvider);
+    if((await activeProvider.request({method:'eth_chainId'})) !== CHAIN.chainId){
+      toast('Switch your wallet to Robinhood Chain Testnet, then Deploy again','seal'); busy(false,'Deploy token'); return;
+    }
+    busy(true,'Confirm in wallet…');
+    const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
+    const factory = new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, signer);
+    const toBps = p => Math.max(0, Math.min(1000, Math.round((p||0)*100/50)*50));
+    const params = {
+      name: meta.name, symbol: meta.ticker.toUpperCase().replace(/[^A-Z0-9]/g,'').slice(0,16), metadataURI:'',
+      buyLevyBps: toBps(meta.buyTax), sellLevyBps: toBps(meta.sellTax),
+      decayAtGraduation: !!meta.decay, renounceRateControl: !!meta.renounced,
+      devBuyMinTokensOut: 0n, vanitySalt: ethers.ZeroHash,
+    };
+    let value = DEPLOY_FEE_WEI;
+    if(meta.devBuy>0) value += ethers.parseEther(String(meta.devBuy));
+
+    const tx = await factory.createToken(params, { value });
+    toast('Launch sent — waiting for confirmation…','jade');
+    busy(true,'Deploying…');
+    const receipt = await tx.wait();
+    let ca=null;
+    for(const lg of receipt.logs){
+      try{ const p=factory.interface.parseLog(lg); if(p && p.name==='TokenCreated'){ ca=p.args.token; break; } }catch(_){}
+    }
+    busy(false,'Deploy token');
+
+    const t = mkTok({
+      name:meta.name, ticker:meta.ticker, emoji:null, logo:chosenLogo,
+      website:meta.website, x:meta.x, tg:meta.tg, desc:meta.desc,
+      buyTax:meta.buyTax, sellTax:meta.sellTax, decay:meta.decay, renounced:meta.renounced,
+      mcap: START_CAP + meta.devBuy*ETH_USD*0.96, vol24: meta.devBuy*ETH_USD, chg24: meta.devBuy>0?rnd(2,9):0,
+      holders: meta.devBuy>0?2:1, replies:0, mine:true, creator:MY_ADDR||wallet,
+      created: Date.now(), lastTrade: Date.now(), earnedEth: 0,
+    });
+    t.ca = ca || '';
+    TOKENS.unshift(t); LAUNCH_COUNT++; lastDeployedId=t.id;
+    showLaunchReceipt(meta, t, { ca, txHash: tx.hash });
+    renderGrid(); renderStats(); clearLogo();
+    apiCreateToken(t).then(rec=>{ t.srvId=rec.id; if(rec.logo){ t.logo=rec.logo; renderGrid(); if(currentTokenId===t.id) renderToken(); } }).catch(()=>{});
+  }catch(err){
+    busy(false,'Deploy token');
+    const msg = (err && (err.shortMessage||err.reason||err.message)) || 'transaction failed';
+    if(err && (err.code===4001 || err.code==='ACTION_REJECTED' || /reject|denied/i.test(msg))) toast('Launch cancelled','seal');
+    else toast('Launch failed — '+esc(String(msg).slice(0,140)),'seal');
+    console.error(err);
+  }
+}
+
+/* --- simulation fallback (no chain configured / ethers didn't load) --- */
+function simulateLaunch(meta){
+  const t = mkTok({
+    name:meta.name, ticker:meta.ticker, emoji:null, logo:chosenLogo,
+    website:meta.website, x:meta.x, tg:meta.tg, desc:meta.desc,
+    buyTax:meta.buyTax, sellTax:meta.sellTax, decay:meta.decay, renounced:meta.renounced,
+    mcap: START_CAP + meta.devBuy*ETH_USD*0.96, vol24: meta.devBuy*ETH_USD, chg24: meta.devBuy>0?rnd(2,9):0,
+    holders: meta.devBuy>0?2:1, replies:0, mine:true, creator:MY_ADDR||'you',
+    created: Date.now(), lastTrade: Date.now(), earnedEth: meta.devBuy*meta.buyTax/100,
   });
   t.claimable = t.earnedEth*0.9;
-  TOKENS.unshift(t);
-  LAUNCH_COUNT++;
-  lastDeployedId = t.id;
-  /* modal receipt */
-  document.getElementById('m-title').textContent = name+' is live';
-  document.getElementById('m-sub').textContent = 'Deployed to Robinhood Chain · block #'+(9_412_000+Math.floor(rnd(0,999))).toLocaleString();
+  TOKENS.unshift(t); LAUNCH_COUNT++; lastDeployedId=t.id;
+  showLaunchReceipt(meta, t, {});
+  renderGrid(); renderStats(); clearLogo();
+  apiCreateToken(t).then(rec=>{ t.srvId=rec.id; if(rec.logo){ t.logo=rec.logo; renderGrid(); if(currentTokenId===t.id) renderToken(); } })
+    .catch(()=>{ toast('Launched — but the server was unreachable, so it may not persist','seal'); });
+}
+
+/* --- shared "you're live" receipt modal --- */
+function showLaunchReceipt(meta, t, opts){
+  const real = !!opts.ca;
+  document.getElementById('m-title').textContent = meta.name+' is live';
+  document.getElementById('m-sub').textContent = real
+    ? 'Deployed to Robinhood Chain Testnet' : 'Deployed to Robinhood Chain · block #'+(9_412_000+Math.floor(rnd(0,999))).toLocaleString();
+  const caLine = opts.ca
+    ? `<div class="r-line"><span>Contract</span><b><a href="${EXPLORER}/address/${opts.ca}" target="_blank" rel="noopener noreferrer" style="color:var(--gilt-bright)">${opts.ca.slice(0,10)}…${opts.ca.slice(-6)} ↗</a></b></div>` : '';
+  const txLine = opts.txHash
+    ? `<div class="r-line"><span>Tx</span><b><a href="${EXPLORER}/tx/${opts.txHash}" target="_blank" rel="noopener noreferrer" style="color:var(--gilt-bright)">${opts.txHash.slice(0,10)}… ↗</a></b></div>` : '';
   document.getElementById('m-receipt').innerHTML =
-    `<div class="r-line"><span>Token</span><b>${name} · $${ticker}</b></div>`+
+    `<div class="r-line"><span>Token</span><b>${esc(meta.name)} · $${esc(meta.ticker)}</b></div>`+
+    caLine +
     `<div class="r-line"><span>Supply</span><b>1,000,000,000 · all on curve</b></div>`+
-    `<div class="r-line"><span>Fee</span><b>${b}% buy / ${s}% sell${t.renounced?' · locked':''}</b></div>`+
-    `<div class="r-line"><span>Fee destination</span><b>${MY_ADDR}</b></div>`+
-    (devBuy>0? `<div class="r-line"><span>Dev buy</span><b>${devBuy.toFixed(3)} ETH</b></div>`:'')+
+    `<div class="r-line"><span>Fee</span><b>${meta.buyTax}% buy / ${meta.sellTax}% sell${meta.renounced?' · locked':''}</b></div>`+
+    `<div class="r-line"><span>Fee destination</span><b>${shortAddr(MY_ADDR)}</b></div>`+
+    (meta.devBuy>0? `<div class="r-line"><span>Dev buy</span><b>${meta.devBuy.toFixed(3)} ETH</b></div>`:'')+
+    txLine +
     `<div class="r-line total"><span>Starting cap</span><b>${fmtUsdFull(t.mcap)}</b></div>`;
-  const back = document.getElementById('modalBack');
-  back.classList.add('open');
+  document.getElementById('modalBack').classList.add('open');
   const stamp = document.getElementById('leviedStamp');
   stamp.classList.remove('slam'); void stamp.offsetWidth; stamp.classList.add('slam');
-  renderGrid(); renderStats();
-  clearLogo();   // reset the uploader for the next launch
-
-  /* Persist to the backend (optimistic — the token already shows locally).
-     On success, swap the in-memory data-URL logo for the stored server URL. */
-  apiCreateToken(t).then(rec=>{
-    t.srvId = rec.id;
-    if(rec.logo){ t.logo = rec.logo; renderGrid(); if(currentTokenId===t.id) renderToken(); }
-  }).catch(()=>{ toast('Launched — but the server was unreachable, so it may not persist','seal'); });
 }
 let lastDeployedId = null;
 function viewDeployed(){ closeModal(); if(lastDeployedId) openToken(lastDeployedId); }
