@@ -214,7 +214,7 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
         uint256 ethOut = address(this).balance - balanceBefore;
 
         emit LevyHarvested(token, tokensIn, ethOut);
-        _splitLevy(token, ethOut);
+        _splitHarvest(token, ethOut);
     }
 
     // ---------------------------------------------------------------- claims
@@ -296,6 +296,30 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
         creatorOwed[token] += creatorShare;
         creatorEarnedLifetime[token] += creatorShare;
         totalCreatorOwed += creatorShare;
+        protocolPending += protocolShare;
+        protocolEarnedLifetime += protocolShare;
+        emit LevyCollected(token, amount, creatorShare, protocolShare);
+    }
+
+    /// @dev Splits a post-graduation harvest. The harvested tokens are the
+    ///      creator levy PLUS the always-on protocol fee, so the creator is
+    ///      owed 90% of only the levy portion; the protocol keeps the other
+    ///      10% of the levy plus 100% of the protocol fee. The levy portion is
+    ///      taken as the average of the buy/sell rate (exact when they are
+    ///      equal or zero — the common cases, incl. every 0/0 token).
+    function _splitHarvest(address token, uint256 amount) private {
+        if (amount == 0) return;
+        uint256 levyRate =
+            (uint256(IRobinfunToken(token).buyLevyBps()) + IRobinfunToken(token).sellLevyBps()) / 2;
+        uint256 totalRate = levyRate + IRobinfunToken(token).PROTOCOL_FEE_BPS();
+        // creator's slice of the total = (levyRate * 90%) / totalRate
+        uint256 creatorShare = totalRate == 0 ? 0 : (amount * ((levyRate * CREATOR_SHARE_BPS) / BPS)) / totalRate;
+        uint256 protocolShare = amount - creatorShare;
+        if (creatorShare != 0) {
+            creatorOwed[token] += creatorShare;
+            creatorEarnedLifetime[token] += creatorShare;
+            totalCreatorOwed += creatorShare;
+        }
         protocolPending += protocolShare;
         protocolEarnedLifetime += protocolShare;
         emit LevyCollected(token, amount, creatorShare, protocolShare);

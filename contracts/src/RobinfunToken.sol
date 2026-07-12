@@ -42,6 +42,14 @@ contract RobinfunToken is ERC20Upgradeable, ERC20PermitUpgradeable {
     /// @notice Hard cap on either levy: 10% (enforced again by the factory).
     uint16 public constant MAX_LEVY_BPS = 1_000;
 
+    /// @notice Always-on protocol fee (0.5%) charged on post-graduation DEX
+    ///         trades, on top of any creator levy — so Robinfun keeps earning
+    ///         forever on every token, even ones launched with a 0/0 levy.
+    ///         (Pre-graduation, the bonding curve's flat 1% covers the protocol;
+    ///         this only applies once the token trades on the AMM pair.) The
+    ///         skim goes to the FeeRouter and is 100% protocol revenue.
+    uint16 public constant PROTOCOL_FEE_BPS = 50;
+
     uint16 private constant BPS = 10_000;
 
     // ---------------------------------------------------------------- state
@@ -200,18 +208,19 @@ contract RobinfunToken is ERC20Upgradeable, ERC20PermitUpgradeable {
     ///      is skimmed to the FeeRouter inside the same transfer, so wallets
     ///      never need a separate approval and no external calls are made.
     function _update(address from, address to, uint256 value) internal override {
-        // Mints (from == 0) and burns (to == 0) are never levied.
+        // Mints (from == 0) and burns (to == 0) are never taxed.
         if (from != address(0) && to != address(0) && !levyExempt[from] && !levyExempt[to]) {
             address pair = ammPair;
-            if (pair != address(0)) {
-                uint16 rate = from == pair ? buyLevyBps : (to == pair ? sellLevyBps : 0);
-                if (rate != 0) {
-                    uint256 levy = (value * rate) / BPS;
-                    if (levy != 0) {
-                        super._update(from, feeRouter, levy);
-                        unchecked {
-                            value -= levy;
-                        }
+            if (pair != address(0) && (from == pair || to == pair)) {
+                // Post-graduation DEX trade: this side's creator levy plus the
+                // always-on 0.5% protocol fee (so 0/0 tokens still pay Robinfun).
+                // Both skim to the FeeRouter, which splits after harvest.
+                uint256 rate = from == pair ? buyLevyBps : sellLevyBps;
+                uint256 fee = (value * (rate + PROTOCOL_FEE_BPS)) / BPS;
+                if (fee != 0) {
+                    super._update(from, feeRouter, fee);
+                    unchecked {
+                        value -= fee;
                     }
                 }
             }

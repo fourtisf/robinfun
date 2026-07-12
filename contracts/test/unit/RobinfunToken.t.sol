@@ -250,7 +250,7 @@ contract RobinfunTokenTest is BaseSetup {
     function test_transfer_sellToPairSkimsSellLevy() public {
         address pair = graduate(token, curve);
         uint256 amount = 1_000_000e18;
-        uint256 levy = (amount * SELL_LEVY) / BPS;
+        uint256 fee = (amount * (SELL_LEVY + token.PROTOCOL_FEE_BPS())) / BPS;
 
         uint256 pairBefore = token.balanceOf(pair);
         uint256 aliceBefore = token.balanceOf(alice);
@@ -258,15 +258,16 @@ contract RobinfunTokenTest is BaseSetup {
         vm.prank(alice);
         token.transfer(pair, amount);
 
-        assertEq(token.balanceOf(pair) - pairBefore, amount - levy, "pair receives amount minus levy");
-        assertEq(token.balanceOf(address(feeRouter)), levy, "levy skimmed to feeRouter");
+        assertEq(token.balanceOf(pair) - pairBefore, amount - fee, "pair receives amount minus levy + protocol fee");
+        assertEq(token.balanceOf(address(feeRouter)), fee, "levy + protocol fee skimmed to feeRouter");
         assertEq(aliceBefore - token.balanceOf(alice), amount, "sender debited the full amount");
     }
 
     function test_transfer_buyFromPairSkimsBuyLevy() public {
         address pair = graduate(token, curve);
         uint256 amount = 1_000_000e18;
-        uint256 levy = (amount * BUY_LEVY) / BPS;
+        // creator buy levy + the always-on 0.5% protocol fee
+        uint256 fee = (amount * (BUY_LEVY + token.PROTOCOL_FEE_BPS())) / BPS;
 
         uint256 pairBefore = token.balanceOf(pair);
 
@@ -274,8 +275,8 @@ contract RobinfunTokenTest is BaseSetup {
         vm.prank(pair);
         token.transfer(bob, amount);
 
-        assertEq(token.balanceOf(bob), amount - levy, "buyer receives amount minus levy");
-        assertEq(token.balanceOf(address(feeRouter)), levy, "levy skimmed to feeRouter");
+        assertEq(token.balanceOf(bob), amount - fee, "buyer receives amount minus levy + protocol fee");
+        assertEq(token.balanceOf(address(feeRouter)), fee, "levy + protocol fee skimmed to feeRouter");
         assertEq(pairBefore - token.balanceOf(pair), amount, "pair debited the full amount");
     }
 
@@ -309,22 +310,25 @@ contract RobinfunTokenTest is BaseSetup {
         assertEq(token.balanceOf(address(feeRouter)), routerBal - amount, "no skim back to feeRouter");
     }
 
-    function test_transfer_zeroLevyNoSkim() public {
+    /// @dev Even a 0/0 token pays the always-on 0.5% protocol fee on DEX trades
+    ///      (so Robinfun keeps earning post-graduation on every token).
+    function test_transfer_zeroLevyStillSkimsProtocolFee() public {
         (RobinfunToken t2, BondingCurve c2) = createToken(0, 0);
         address pair = graduate(t2, c2);
 
         uint256 amount = 1_000_000e18;
+        uint256 pf = (amount * t2.PROTOCOL_FEE_BPS()) / BPS; // 0.5%
         uint256 pairBefore = t2.balanceOf(pair);
 
         vm.prank(alice);
         t2.transfer(pair, amount); // sell leg
-        assertEq(t2.balanceOf(pair) - pairBefore, amount);
+        assertEq(t2.balanceOf(pair) - pairBefore, amount - pf, "sell leg pays the 0.5% protocol fee");
 
         vm.prank(pair);
         t2.transfer(bob, amount); // buy leg
-        assertEq(t2.balanceOf(bob), amount);
+        assertEq(t2.balanceOf(bob), amount - pf, "buy leg pays the 0.5% protocol fee");
 
-        assertEq(t2.balanceOf(address(feeRouter)), 0, "zero levy: nothing skimmed");
+        assertEq(t2.balanceOf(address(feeRouter)), 2 * pf, "0.5% protocol fee skimmed on both legs at 0/0");
     }
 
     // ---------------------------------------------------------------- anti-honeypot structure

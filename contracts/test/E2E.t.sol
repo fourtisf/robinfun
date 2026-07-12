@@ -72,7 +72,7 @@ contract E2ETest is BaseSetup {
         vm.stopPrank();
         assertGt(alice.balance, aliceEthBefore, "DEX sell paid out");
 
-        // ------------------------------------------------ 5. harvest → 90/10 split
+        // ------------------------------------------------ 5. harvest → split
         uint256 creatorBefore = feeRouter.creatorOwed(address(token));
         uint256 protocolBefore = feeRouter.protocolPending();
 
@@ -81,7 +81,9 @@ contract E2ETest is BaseSetup {
         uint256 creatorGain = feeRouter.creatorOwed(address(token)) - creatorBefore;
         uint256 protocolGain = feeRouter.protocolPending() - protocolBefore;
         assertGt(creatorGain, 0);
-        assertApproxEqAbs(creatorGain, protocolGain * 9, 10, "harvest splits 90/10");
+        // Harvest is creator levy (3%) + protocol fee (0.5%): creator gets 90%
+        // of the levy portion (270 bps), protocol the rest (80 bps) → 27:8.
+        assertApproxEqRel(creatorGain * 8, protocolGain * 27, 0.001e18, "harvest split 27:8");
         assertEq(token.balanceOf(address(feeRouter)), 0, "levy inventory fully harvested");
 
         // ------------------------------------------------ 6. creator claims (Treasury page)

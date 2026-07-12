@@ -1090,7 +1090,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   <div class="wrap">
     <div class="page-head">
       <h2 data-i18n="stake.h">Stake $ROBIN</h2>
-      <p data-i18n-html="stake.p">The protocol keeps a 1% curve fee and 10% of every creator fee across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.</p>
+      <p data-i18n-html="stake.p">The protocol keeps a 1% curve fee, a 0.5% post-graduation fee on every token, and 10% of every creator fee across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.</p>
     </div>
     <div class="stake-grid">
       <div class="panel t-stat"><div class="k">Est. APR · 30d</div><div class="v gold" id="stk-apr">—%</div><div class="s">paid in ETH</div></div>
@@ -1148,6 +1148,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           </div>
           <div class="panel-title">Where the yield comes from</div>
           <div class="stake-src"><span class="n">1%</span><span><b>Curve trade fee.</b> Every buy and sell on every bonding curve pays a flat 1% to the protocol.</span></div>
+          <div class="stake-src"><span class="n">0.5%</span><span><b>Post-graduation fee.</b> After a token graduates to Uniswap, every trade still pays 0.5% to the protocol — forever, on every token.</span></div>
           <div class="stake-src"><span class="n">10%</span><span><b>Protocol fee cut.</b> Of every creator fee collected platform-wide, 90% goes to the creator, 10% to stakers.</span></div>
           <div class="stake-src"><span class="n">100%</span><span><b>Streamed to stakers.</b> All of it is swapped to ETH and distributed pro-rata to staked $ROBIN. The protocol keeps nothing extra.</span></div>
         </div>
@@ -1409,7 +1410,7 @@ const I18N = {
     'treasury.h':'Treasury',
     'treasury.p':'Fees from your tokens are harvested to ETH automatically and accrue here. Claim per token, or sweep everything at once.',
     'stake.h':'Stake $ROBIN',
-    'stake.p':'The protocol keeps a 1% curve fee and 10% of every creator fee across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.',
+    'stake.p':'The protocol keeps a 1% curve fee, a 0.5% post-graduation fee on every token, and 10% of every creator fee across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.',
     'docs.h':'How Robinfun works',
     'docs.p':'Pump-style fair launches, plus one thing nobody else gives creators: a revenue stream written into the token itself.'
   },
@@ -1425,7 +1426,7 @@ const I18N = {
     'treasury.h':'金库',
     'treasury.p':'你代币产生的费用会自动兑换成 ETH 并在此累积。可按代币领取，或一键全部提取。',
     'stake.h':'质押 $ROBIN',
-    'stake.p':'协议在全平台收取 1% 曲线手续费，以及每笔创作者费用的 10%。质押 $ROBIN，这些收入会以<b>真实 ETH</b> 返还给你 — 无通胀、无增发，只是把平台抽成分给持有者。',
+    'stake.p':'协议在全平台收取 1% 曲线手续费、每个代币毕业后 0.5% 的交易费，以及每笔创作者费用的 10%。质押 $ROBIN，这些收入会以<b>真实 ETH</b> 返还给你 — 无通胀、无增发，只是把平台抽成分给持有者。',
     'docs.h':'Robinfun 如何运作',
     'docs.p':'Pump 式公平发射，外加别人不会给创作者的东西：写入代币本身的收入流。'
   }

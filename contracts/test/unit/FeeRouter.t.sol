@@ -174,9 +174,35 @@ contract FeeRouterTest is BaseSetup {
         assertGt(ethOut, 0);
         assertEq(token.balanceOf(address(feeRouter)), 0, "all inventory swapped");
 
-        uint256 creatorShare = (ethOut * 9_000) / BPS;
+        // Harvested tokens = creator levy (3%) + the 0.5% protocol fee, so the
+        // creator is owed 90% of only the levy portion: ethOut * (300*0.9)/(300+50).
+        uint256 levyRate = (uint256(BUY_LEVY) + SELL_LEVY) / 2;
+        uint256 totalRate = levyRate + token.PROTOCOL_FEE_BPS();
+        uint256 creatorShare = (ethOut * ((levyRate * 9_000) / BPS)) / totalRate;
         assertEq(feeRouter.creatorOwed(address(token)) - creatorOwedBefore, creatorShare);
         assertEq(feeRouter.protocolPending() - protocolBefore, ethOut - creatorShare);
+    }
+
+    /// @dev The whole point of the protocol fee: a token launched with a 0/0
+    ///      creator levy STILL earns Robinfun 0.5% on every post-graduation DEX
+    ///      trade, and 100% of it goes to the protocol (nothing to the creator).
+    function test_harvest_zeroLevyTokenEarnsProtocolPostGraduation() public {
+        (RobinfunToken t0, BondingCurve c0) = createToken(0, 0);
+        graduate(t0, c0);
+
+        address[] memory path = new address[](2);
+        path[0] = address(weth);
+        path[1] = address(t0);
+        vm.prank(bob);
+        dexRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: 0.5 ether}(0, path, bob, block.timestamp);
+        assertGt(t0.balanceOf(address(feeRouter)), 0, "0.5% protocol fee skimmed even at 0/0");
+
+        uint256 creatorBefore = feeRouter.creatorOwed(address(t0));
+        uint256 protocolBefore = feeRouter.protocolPending();
+        feeRouter.harvest(address(t0), 0, block.timestamp);
+
+        assertEq(feeRouter.creatorOwed(address(t0)), creatorBefore, "0/0 creator earns nothing");
+        assertGt(feeRouter.protocolPending() - protocolBefore, 0, "protocol earns from a 0/0 token after graduation");
     }
 
     function test_harvest_zeroInventoryReverts() public {

@@ -24,6 +24,7 @@ interface IRobinfunToken is IERC20 {
     function curve() external view returns (address);
     function buyLevyBps() external view returns (uint16);
     function sellLevyBps() external view returns (uint16);
+    function PROTOCOL_FEE_BPS() external view returns (uint16);
     function decayAtGraduation() external view returns (bool);
     function rateControlRenounced() external view returns (bool);
     function graduated() external view returns (bool);
