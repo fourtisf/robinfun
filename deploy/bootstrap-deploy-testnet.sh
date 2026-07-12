@@ -92,7 +92,16 @@ log "Deployer ${DEPLOYER} balance: ${BAL} wei"
 [ "$BAL" != "0" ] || die "Deployer has 0 ETH. Fund ${DEPLOYER} at faucet.testnet.chain.robinhood.com, then re-run."
 
 log "Deploying to Robinhood Chain testnet (${RPC})"
-forge script script/DeployTestnet.s.sol $SOLC_FLAGS --rpc-url "$RPC" --broadcast -vvv 2>&1 | tee /tmp/robinfun-deploy.log
+# Arbitrum's gas = L2 execution + L1 data posting. forge's local estimate only
+# covers L2 execution, so it sets the tx gas limit too low and deploys run out
+# of gas on-chain (confirmed: gasUsed == gasLimit). Multiply the estimate to
+# cover the L1 component (testnet gas is free, so a big buffer is harmless) and
+# send txs one at a time (--slow) so each is estimated against live state and a
+# failure stops the run immediately. Bump GAS_MULT if a deploy still runs out.
+GAS_MULT="${GAS_MULT:-600}"
+log "Gas estimate multiplier: ${GAS_MULT}% (--slow)"
+forge script script/DeployTestnet.s.sol $SOLC_FLAGS --rpc-url "$RPC" --broadcast \
+    --slow --gas-estimate-multiplier "$GAS_MULT" -vvv 2>&1 | tee /tmp/robinfun-deploy.log
 
 log "Done. Copy the addresses below (also in broadcast/DeployTestnet.s.sol/46630/run-latest.json):"
 grep -E "WETH|DEX (factory|router)|FeeRouter|Factory|tokenImpl|treasury|deployFee" /tmp/robinfun-deploy.log || true
