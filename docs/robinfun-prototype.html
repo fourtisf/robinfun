@@ -1228,8 +1228,9 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 /* ================================================================
    Robinfun prototype engine — all data simulated client-side
    ================================================================ */
-const ETH_USD = 3850;
-const GRAD_CAP = 44000, START_CAP = 4000;
+let ETH_USD = 1800;                                    // refreshed live from a price API on load
+const START_ETH = 4000/3850, GRAD_ETH = 44000/3850;   // ETH-denominated caps (curve was sized at ETH=$3850)
+let START_CAP = Math.round(START_ETH*ETH_USD), GRAD_CAP = Math.round(GRAD_ETH*ETH_USD);
 const fmtUsd = n => n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n>=1e3 ? '$'+(n/1e3).toFixed(1)+'k' : '$'+n.toFixed(0);
 const fmtUsdFull = n => '$'+Math.round(n).toLocaleString('en-US');
 const fmtEth = n => n.toFixed(n<0.01?5:n<1?4:3)+' ETH';
@@ -2421,6 +2422,20 @@ function toast(html, kind){
 }
 
 /* ---------------- init ---------------- */
+/* Live ETH price so all USD figures track reality (curve is ETH-denominated). */
+async function refreshEthPrice(){
+  try{
+    const r = await fetch('https://api.coinbase.com/v2/prices/ETH-USD/spot');
+    const p = parseFloat((await r.json())?.data?.amount);
+    if(p>0){
+      ETH_USD = p;
+      START_CAP = Math.round(START_ETH*ETH_USD);
+      GRAD_CAP = Math.round(GRAD_ETH*ETH_USD);
+      renderStats(); renderGrid(); syncCost();
+      if(currentTokenId) renderToken();
+    }
+  }catch(_){}
+}
 function init(){
   initLogoUpload();
   onSlider(true);
@@ -2432,6 +2447,7 @@ function init(){
   routeFromLocation();  // show the page that matches the current URL (deep links / refresh)
   refreshDeployFee();   // show the real on-chain deploy fee (retry once ethers loads)
   setTimeout(refreshDeployFee, 1500);
+  refreshEthPrice();    // real ETH/USD so the dollar figures aren't ~2x off
   setInterval(simTick, 1700);
   setInterval(()=>{ if(currentTokenId) drawChart(tok()); }, 4000);
   window.addEventListener('resize', ()=>{ if(currentTokenId) drawChart(tok()); });
