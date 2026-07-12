@@ -81,4 +81,7 @@ Or re-run `./bootstrap.sh` after `git pull`.
   script (it deletes `/etc/nginx/sites-enabled/default`).
 - **502/404:** confirm `/var/www/robinfun/index.html` exists and
   `nginx -t` passes.
+- **`Could not get lock /var/lib/dpkg/...`:** the VPS is still running its
+  first-boot updates. The script now waits up to 5 min for the lock; if it still
+  errors, wait ~2 minutes and re-run.
 - **Check logs:** `journalctl -u nginx --no-pager | tail`, `tail /var/log/nginx/error.log`.

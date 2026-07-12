@@ -26,10 +26,14 @@ die() { printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = "0" ] || die "Run as root (you are $(whoami)). Try: sudo ./bootstrap.sh"
 
 # --------------------------------------------------------------- packages
-log "Installing nginx, certbot and firewall"
+# A freshly booted cloud VPS runs cloud-init / unattended-upgrades, which hold
+# the apt lock for a minute or two. `DPkg::Lock::Timeout` makes apt wait for it
+# instead of aborting with a scary lock error.
+log "Installing nginx, certbot and firewall (waiting for apt if the VPS just booted)"
 export DEBIAN_FRONTEND=noninteractive
-apt-get update -y
-apt-get install -y nginx certbot python3-certbot-nginx ufw curl
+APT_OPTS="-o DPkg::Lock::Timeout=300"
+apt-get $APT_OPTS update -y
+apt-get $APT_OPTS install -y nginx certbot python3-certbot-nginx ufw curl
 
 # --------------------------------------------------------------- site files
 log "Publishing the site to ${WEBROOT}"
@@ -47,8 +51,14 @@ chown -R www-data:www-data "$WEBROOT"
 chmod -R a+rX "$WEBROOT"
 
 # --------------------------------------------------------------- nginx (HTTP)
-log "Writing the nginx server block"
-cat > /etc/nginx/sites-available/robinfun.conf <<NGINX
+CONF=/etc/nginx/sites-available/robinfun.conf
+# On a re-run after HTTPS is already set up, certbot has added a `listen 443`
+# block to this file — don't clobber it, or we'd briefly (or, if certbot then
+# hiccups, lastingly) drop HTTPS. Only (re)write the base HTTP block on the
+# first run or before HTTPS exists.
+if [ ! -f "$CONF" ] || ! grep -q "listen 443" "$CONF"; then
+    log "Writing the nginx server block"
+    cat > "$CONF" <<NGINX
 server {
     listen 80;
     listen [::]:80;
@@ -78,8 +88,11 @@ server {
     gzip_min_length 1024;
 }
 NGINX
+else
+    log "HTTPS server block already present — leaving certbot's config in place"
+fi
 
-ln -sf /etc/nginx/sites-available/robinfun.conf /etc/nginx/sites-enabled/robinfun.conf
+ln -sf "$CONF" /etc/nginx/sites-enabled/robinfun.conf
 rm -f /etc/nginx/sites-enabled/default          # drop the "Welcome to nginx" placeholder
 nginx -t                                        # fail loudly on a bad config
 systemctl enable nginx >/dev/null 2>&1 || true
@@ -88,9 +101,16 @@ systemctl reload nginx
 # --------------------------------------------------------------- firewall
 # Order matters: allow SSH BEFORE enabling the firewall so we never lock ourselves out.
 log "Configuring the firewall (SSH stays open)"
-ufw allow OpenSSH >/dev/null 2>&1 || ufw allow 22/tcp >/dev/null 2>&1 || true
+ufw allow 22/tcp >/dev/null 2>&1 || true         # port-based rule (always available)
+ufw allow OpenSSH >/dev/null 2>&1 || true        # named profile (belt and suspenders)
 ufw allow 'Nginx Full' >/dev/null 2>&1 || true   # ports 80 + 443
-yes | ufw enable >/dev/null 2>&1 || true
+# Only enable the firewall once an SSH allow rule is actually in place — never
+# risk locking the user out of their own server.
+if ufw show added 2>/dev/null | grep -qiE 'allow.*(22|ssh)'; then
+    yes | ufw enable >/dev/null 2>&1 || true
+else
+    log "No SSH allow rule detected — skipping firewall enable to avoid a lockout."
+fi
 
 # --------------------------------------------------------------- HTTPS
 log "Requesting a Let's Encrypt certificate for ${DOMAIN} and ${WWW}"
@@ -99,15 +119,12 @@ if certbot --nginx -d "${DOMAIN}" -d "${WWW}" \
     systemctl reload nginx
     log "Live: https://${DOMAIN}  (HTTP auto-redirects to HTTPS, auto-renews via certbot timer)"
 else
-    cat >&2 <<EOF
-
-\033[1;33mHTTPS step did not complete.\033[0m The site is already live over HTTP:
-    http://${DOMAIN}
-Common causes:
-  - DNS A record for ${DOMAIN} is not yet pointing at this server (give it a few minutes), or
-  - port 80/443 is blocked upstream.
-Verify DNS, then re-run this script — everything else is idempotent.
-EOF
+    printf '\n\033[1;33mHTTPS step did not complete.\033[0m The site is already live over HTTP:\n' >&2
+    printf '    http://%s\n' "${DOMAIN}" >&2
+    printf 'Common causes:\n' >&2
+    printf '  - DNS A record for %s is not yet pointing at this server (give it a few minutes), or\n' "${DOMAIN}" >&2
+    printf '  - port 80/443 is blocked upstream.\n' >&2
+    printf 'Verify DNS (dig +short %s), then re-run this script — everything else is idempotent.\n' "${DOMAIN}" >&2
 fi
 
 log "Done."
