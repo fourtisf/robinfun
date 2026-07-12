@@ -1560,22 +1560,60 @@ function genTrade(t, ts){
 
 /* ---------------- routing ---------------- */
 let currentTokenId = null;
-function go(page){
+/* ---------------- client-side routing: real URLs per page ---------------- */
+const ROUTES = {
+  home:     {path:'/',           title:'Robinfun — Fair-Launch Bonding Curves on Robinhood Chain'},
+  create:   {path:'/create',     title:'Create a token · Robinfun'},
+  stake:    {path:'/staking',    title:'Staking · Robinfun'},
+  docs:     {path:'/whitepaper', title:'Whitepaper · Robinfun'},
+  treasury: {path:'/treasury',   title:'Treasury · Robinfun'},
+};
+const PATH_TO_PAGE = {'':'home', 'create':'create', 'staking':'stake', 'whitepaper':'docs', 'treasury':'treasury'};
+let pendingTokenId = null;   // deep-linked /token/<id> awaiting the async server load
+function tokenById(id){ return TOKENS.find(t=>t.id===id); }
+function setRoute(path, title){
+  if(title) document.title = title;
+  if(location.protocol === 'file:') return;   // local file preview — History API unavailable
+  try{ if(location.pathname !== path) history.pushState({}, '', path); }catch(e){}
+}
+function routeFromLocation(){
+  const segs = location.pathname.replace(/^\/+|\/+$/g,'').split('/');
+  const first = decodeURIComponent(segs[0]||'');
+  if(first === 'token' && segs[1]){
+    const id = decodeURIComponent(segs[1]);
+    if(tokenById(id)) openToken(id, false);
+    else { pendingTokenId = id; go('home', false); }   // show board until tokens arrive
+    return;
+  }
+  go(PATH_TO_PAGE[first] || 'home', false);
+}
+window.addEventListener('popstate', routeFromLocation);
+
+function go(page, push){
+  if(push === undefined) push = true;
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
-  document.getElementById('page-'+page).classList.add('active');
+  const el = document.getElementById('page-'+page);
+  (el || document.getElementById('page-home')).classList.add('active');
+  if(!el) page = 'home';
   document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active', b.dataset.nav===page));
   document.getElementById('nav').classList.remove('open');
   if(page==='treasury') renderTreasury();
   if(page==='stake') renderStake();
   if(page!=='token') currentTokenId = null;
+  const r = ROUTES[page];
+  if(r){ push ? setRoute(r.path, r.title) : (document.title = r.title); }
   window.scrollTo({top:0, behavior:'instant'});
 }
-function openToken(id){
+function openToken(id, push){
+  if(push === undefined) push = true;
   currentTokenId = id;
   document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
   document.getElementById('page-token').classList.add('active');
   document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
   renderToken(true);
+  const t = tokenById(id);
+  const title = t ? ('$'+t.ticker+' — '+t.name+' · Robinfun') : 'Token · Robinfun';
+  push ? setRoute('/token/'+encodeURIComponent(id), title) : (document.title = title);
   window.scrollTo({top:0, behavior:'instant'});
 }
 
@@ -2033,6 +2071,9 @@ async function loadServerTokens(){
       if(wallet) seedMyTokens();   // mark my launches as mine for the Treasury
       renderGrid(); renderStats(); renderTape();
     }
+    if(pendingTokenId && tokenById(pendingTokenId)){   // resolve a deep-linked /token/<id>
+      const id = pendingTokenId; pendingTokenId = null; openToken(id, false);
+    }
   }catch(e){ /* backend unreachable — keep the local board */ }
 }
 function syncPreview(){
@@ -2289,6 +2330,7 @@ function init(){
   renderGrid();
   renderTape();
   loadServerTokens();   // pull persisted launches from the backend (async)
+  routeFromLocation();  // show the page that matches the current URL (deep links / refresh)
   setInterval(simTick, 1700);
   setInterval(()=>{ if(currentTokenId) drawChart(tok()); }, 4000);
   window.addEventListener('resize', ()=>{ if(currentTokenId) drawChart(tok()); });

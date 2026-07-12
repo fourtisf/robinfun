@@ -68,7 +68,9 @@ server {
     index index.html;
 
     location / {
-        try_files \$uri \$uri/ =404;
+        # SPA fallback: /create, /staking, /whitepaper, /token/<id> all serve
+        # index.html so client-side routing + refresh/deep-links work.
+        try_files \$uri \$uri/ /index.html;
     }
 
     location = /index.html {
@@ -91,6 +93,10 @@ NGINX
 else
     log "HTTPS server block already present — leaving certbot's config in place"
 fi
+
+# Idempotently upgrade older configs (incl. the block certbot copied into the
+# 443 server) to the SPA fallback, so deep links stop 404-ing on existing installs.
+sed -i 's#try_files $uri $uri/ =404;#try_files $uri $uri/ /index.html;#g' "$CONF"
 
 ln -sf "$CONF" /etc/nginx/sites-enabled/robinfun.conf
 rm -f /etc/nginx/sites-enabled/default          # drop the "Welcome to nginx" placeholder
