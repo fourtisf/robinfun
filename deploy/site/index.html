@@ -368,6 +368,11 @@ body.light .stake-orbit text{fill:#3C9A1B}
 .upload:hover{border-color:var(--gilt)}
 .upload .big{font-size:26px;margin-bottom:6px}
 .upload p{font-size:12.5px;color:var(--cream-mute)}
+.upload.drag{border-color:var(--gilt);background:var(--gilt-dim)}
+.upload .big img.upl-img{width:60px;height:60px;object-fit:cover;border-radius:12px;display:block;margin:0 auto}
+.tlogo,.lead-logo,#tk-logo{overflow:hidden}
+.tlogo img.logo-img,.lead-logo img.logo-img,#tk-logo img.logo-img{width:100%;height:100%;object-fit:cover;display:block}
+.upl-remove{color:var(--gilt);text-decoration:underline;cursor:pointer;background:none;border:none;font:inherit;padding:0}
 .emoji-pick{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;justify-content:center}
 .emoji-pick button{font-size:19px;padding:5px 7px;border-radius:8px;border:1px solid transparent;transition:all .12s}
 .emoji-pick button:hover{background:var(--ledger-2)}
@@ -825,10 +830,11 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <textarea id="c-desc" maxlength="240" placeholder="What's the story? One or two lines."></textarea>
         </div>
         <div class="field">
-          <label>Image <span>— pick a placeholder for the prototype</span></label>
-          <div class="upload" onclick="document.getElementById('emojiRow').scrollIntoView({block:'nearest'})">
+          <label>Image <span>— upload a logo, or pick an emoji</span></label>
+          <div class="upload" id="dropzone">
             <div class="big" id="upl-emoji">🪶</div>
-            <p>Drop an image here, or choose an emoji stand-in below</p>
+            <p id="upl-hint">Drop a logo here or click to upload · or pick an emoji below</p>
+            <input type="file" id="logoInput" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" hidden>
             <div class="emoji-pick" id="emojiRow"></div>
           </div>
         </div>
@@ -1236,15 +1242,53 @@ let LAUNCH_COUNT = 4212 + TOKENS.length;
 
 /* ---------------- wallet ---------------- */
 let wallet = null;
-const MY_ADDR = '0x7A3f19bC…C41d';
-function connectWallet(){
+let MY_ADDR = '0x7A3f19bC…C41d';   // display fallback until a real wallet connects
+/* Robinhood Chain (Arbitrum Orbit L2). Testnet chainId + RPC are still TBD
+   (brief §10.9). Fill this in and Connect will add/switch the network
+   automatically; leave null to connect on whatever network the wallet is on. */
+const CHAIN = null; /* e.g.
+  { chainId:'0x66eed', chainName:'Robinhood Chain',
+    nativeCurrency:{name:'Ether',symbol:'ETH',decimals:18},
+    rpcUrls:['https://rpc...'], blockExplorerUrls:['https://explorer...'] }; */
+
+async function connectWallet(){
+  // Already connected → the address button opens the Treasury.
   if(wallet){ go('treasury'); return; }
-  wallet = MY_ADDR;
-  document.getElementById('walletBtn').textContent = shortAddr('0x7A3f19bCe482aa10C41d');
-  const w = document.getElementById('c-wallet'); if(w && !w.value) w.value = wallet;
-  toast('Wallet connected — <b>'+wallet+'</b>','jade');
+  const eth = window.ethereum;
+  if(!eth){
+    toast('No EVM wallet found — install <b>MetaMask</b> or Rabby','seal');
+    window.open('https://metamask.io/download/','_blank');
+    return;
+  }
+  try{
+    const accounts = await eth.request({method:'eth_requestAccounts'});
+    if(!accounts || !accounts.length){ toast('Wallet connection cancelled','seal'); return; }
+    await ensureChain(eth);
+    onWalletConnected(accounts[0]);
+  }catch(err){
+    toast('Wallet connection failed'+(err && err.code===4001?' — you rejected the request':''),'seal');
+  }
+}
+
+async function ensureChain(eth){
+  if(!CHAIN) return;
+  try{
+    await eth.request({method:'wallet_switchEthereumChain', params:[{chainId:CHAIN.chainId}]});
+  }catch(e){
+    if(e && e.code===4902){
+      try{ await eth.request({method:'wallet_addEthereumChain', params:[CHAIN]}); }catch(_){}
+    }
+  }
+}
+
+function onWalletConnected(addr){
+  wallet = addr;
+  MY_ADDR = addr;                       // real connected address flows everywhere
+  document.getElementById('walletBtn').textContent = shortAddr(addr);
+  const w = document.getElementById('c-wallet'); if(w) w.value = addr;
+  toast('Wallet connected — <b>'+shortAddr(addr)+'</b>','jade');
   seedMyTokens();
-  /* seed a $ROBIN balance + an existing stake so the staking page feels live */
+  /* seed a demo $ROBIN balance + stake so the staking page feels live */
   if(LEVY_BAL===0 && myStake===0){
     LEVY_BAL = 1_250_000;
     myStake = 850_000;
@@ -1253,6 +1297,22 @@ function connectWallet(){
   }
   renderTreasury();
   if(document.getElementById('page-stake').classList.contains('active')) renderStake();
+}
+
+function disconnectWallet(){
+  wallet = null;
+  MY_ADDR = '0x7A3f19bC…C41d';
+  document.getElementById('walletBtn').textContent = 'Connect wallet';
+  const w = document.getElementById('c-wallet'); if(w) w.value = '';
+}
+
+/* React to the user switching accounts / disconnecting in their wallet. */
+if(window.ethereum && window.ethereum.on){
+  window.ethereum.on('accountsChanged', (accs)=>{
+    if(!accs || !accs.length) disconnectWallet();
+    else onWalletConnected(accs[0]);
+  });
+  window.ethereum.on('chainChanged', ()=>{ /* network changed — nothing to re-render yet */ });
 }
 function seedMyTokens(){
   if(TOKENS.some(t=>t.mine)) return;
@@ -1485,7 +1545,7 @@ function cardHtml(t){
   <div class="tcard" id="card-${t.id}" onclick="openToken('${t.id}')" role="button" tabindex="0" onkeydown="if(event.key==='Enter')openToken('${t.id}')">
     <button class="watch-star${WATCH.has(t.id)?' on':''}" onclick="toggleWatch(event,'${t.id}')" aria-label="Toggle watchlist" title="Add to watchlist">${starSvg(WATCH.has(t.id))}</button>
     <div class="tcard-top">
-      <div class="tlogo">${t.emoji}</div>
+      <div class="tlogo">${tLogo(t)}</div>
       <div style="min-width:0;flex:1">
         <div class="tname-row"><span class="tname">${t.name}</span><span class="tticker">$${t.ticker}</span>${t.graduated?'<span class="grad-pill">◆ GRAD</span>':''}</div>
         <div style="margin-top:5px">${stampHtml(t)}</div>
@@ -1540,7 +1600,7 @@ function renderLead(){
   box.innerHTML = top.map(t=>{
     const up = t.chg24>=0;
     return `<div class="lead-row" onclick="openToken('${t.id}')">
-      <div class="lead-coin"><div class="lead-logo">${t.emoji}</div><span class="lead-nm">${t.ticker}</span></div>
+      <div class="lead-coin"><div class="lead-logo">${tLogo(t)}</div><span class="lead-nm">${t.ticker}</span></div>
       <div class="lead-mc">${fmtUsd(t.mcap)}<small class="${up?'up':'down'}">${up?'▲':'▼'} ${Math.abs(t.chg24).toFixed(1)}%</small></div>
       <div class="lead-vol">${fmtUsd(t.vol24)}</div>
     </div>`;
@@ -1569,7 +1629,7 @@ let side = 'buy';
 
 function renderToken(fresh){
   const t = tok(); if(!t) return;
-  document.getElementById('tk-logo').textContent = t.emoji;
+  document.getElementById('tk-logo').innerHTML = tLogo(t);
   document.getElementById('tk-name').textContent = t.name;
   document.getElementById('tk-ticker').textContent = '$'+t.ticker;
   document.getElementById('tk-stamp').innerHTML = stampHtml(t);
@@ -1797,16 +1857,53 @@ function doTrade(){
    ================================================================ */
 const EMOJIS = ['🪶','🏹','🎩','🐀','💰','🏰','🍺','💘','🎯','😭','🫳','📜','🌲','🪙','🔥','🦅'];
 let chosenEmoji = '🪶';
+let chosenLogo = null;   // data-URL of an uploaded logo, or null → use the emoji
 function buildEmojiRow(){
   document.getElementById('emojiRow').innerHTML = EMOJIS.map(e=>
     `<button type="button" class="${e===chosenEmoji?'sel':''}" onclick="event.stopPropagation();pickEmoji('${e}',this)">${e}</button>`).join('');
 }
 function pickEmoji(e,btn){
   chosenEmoji = e;
-  document.getElementById('upl-emoji').textContent = e;
+  chosenLogo = null;                          // picking an emoji clears the upload
+  const box = document.getElementById('upl-emoji'); if(box) box.textContent = e;
+  const hint = document.getElementById('upl-hint');
+  if(hint) hint.textContent = 'Drop a logo here or click to upload · or pick an emoji below';
   document.querySelectorAll('#emojiRow button').forEach(b=>b.classList.remove('sel'));
   btn.classList.add('sel');
 }
+
+/* ---- logo upload (client-side; stored on the token as a data URL) ---- */
+function initLogoUpload(){
+  const dz = document.getElementById('dropzone');
+  const input = document.getElementById('logoInput');
+  if(!dz || !input) return;
+  dz.addEventListener('click', (e)=>{ if(e.target.closest('#emojiRow')||e.target.closest('.upl-remove')) return; input.click(); });
+  input.addEventListener('change', ()=>{ if(input.files && input.files[0]) handleLogo(input.files[0]); });
+  ['dragover','dragenter'].forEach(ev=> dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.add('drag'); }));
+  ['dragleave','dragend'].forEach(ev=> dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.remove('drag'); }));
+  dz.addEventListener('drop', e=>{ e.preventDefault(); dz.classList.remove('drag'); const f=e.dataTransfer.files && e.dataTransfer.files[0]; if(f) handleLogo(f); });
+}
+function handleLogo(file){
+  if(!file.type || !file.type.startsWith('image/')){ toast('Please choose an image file','seal'); return; }
+  if(file.size > 2*1024*1024){ toast('Image too large — max 2 MB','seal'); return; }
+  const reader = new FileReader();
+  reader.onload = ()=>{
+    chosenLogo = reader.result;
+    document.getElementById('upl-emoji').innerHTML = '<img src="'+chosenLogo+'" alt="logo" class="upl-img">';
+    document.getElementById('upl-hint').innerHTML = file.name+' · <button type="button" class="upl-remove" onclick="clearLogo(event)">remove</button>';
+  };
+  reader.onerror = ()=> toast('Could not read that image','seal');
+  reader.readAsDataURL(file);
+}
+function clearLogo(e){
+  if(e) e.stopPropagation();
+  chosenLogo = null;
+  const box = document.getElementById('upl-emoji'); if(box) box.textContent = chosenEmoji;
+  const hint = document.getElementById('upl-hint'); if(hint) hint.textContent = 'Drop a logo here or click to upload · or pick an emoji below';
+  const input = document.getElementById('logoInput'); if(input) input.value = '';
+}
+/* Token logo: uploaded image if present, otherwise the emoji stand-in. */
+function tLogo(t){ return t && t.logo ? '<img class="logo-img" src="'+t.logo+'" alt="">' : (t? t.emoji : ''); }
 function syncPreview(){
   const tk = document.getElementById('c-ticker');
   tk.value = tk.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
@@ -1867,12 +1964,12 @@ function deploy(){
   const name = document.getElementById('c-name').value.trim();
   const ticker = document.getElementById('c-ticker').value.trim();
   if(!name || !ticker){ toast('Name and ticker are required','seal'); return; }
-  if(!wallet){ connectWallet(); }
+  if(!wallet){ toast('Connect your wallet first','seal'); connectWallet(); return; }
   const b = parseFloat(document.getElementById('r-buy').value);
   const s = parseFloat(document.getElementById('r-sell').value);
   const devBuy = parseFloat(document.getElementById('c-buyin').value)||0;
   const t = mkTok({
-    name, ticker, emoji:chosenEmoji,
+    name, ticker, emoji:chosenEmoji, logo:chosenLogo,
     desc: document.getElementById('c-desc').value.trim() || 'Freshly launched on Robinfun.',
     buyTax:b, sellTax:s,
     decay: document.getElementById('c-decay').checked,
@@ -1901,6 +1998,7 @@ function deploy(){
   const stamp = document.getElementById('leviedStamp');
   stamp.classList.remove('slam'); void stamp.offsetWidth; stamp.classList.add('slam');
   renderGrid(); renderStats();
+  clearLogo();   // reset the uploader for the next launch
 }
 let lastDeployedId = null;
 function viewDeployed(){ closeModal(); if(lastDeployedId) openToken(lastDeployedId); }
@@ -1934,7 +2032,7 @@ function renderTreasury(){
   document.getElementById('tr-bestsub').textContent = best.earnedEth.toFixed(3)+' ETH all-time';
   rows.innerHTML = mine.map(t=>`
     <div class="t-row">
-      <div class="t-tok"><div class="tlogo">${t.emoji}</div>
+      <div class="t-tok"><div class="tlogo">${tLogo(t)}</div>
         <div style="min-width:0"><div style="font-weight:600;font-size:14px">${t.name} <span class="tticker">$${t.ticker}</span></div>
         <div style="margin-top:3px">${stampHtml(t)} ${t.graduated?'<span class="mono up" style="font-size:9.5px">◆ GRADUATED</span>':''}</div></div>
       </div>
@@ -2042,6 +2140,7 @@ function toast(html, kind){
 /* ---------------- init ---------------- */
 function init(){
   buildEmojiRow();
+  initLogoUpload();
   onSlider(true);
   projector();
   renderStats();
