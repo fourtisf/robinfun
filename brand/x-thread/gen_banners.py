@@ -174,9 +174,9 @@ banners[3] = frame(3, eb("The Robinfun edge"),
 banners[4] = frame(4, eb("Fair launch"),
   '''<h1 style="font-size:70px;max-width:1200px">No presale. No team bags.<br><span class="lime">LP 100% burned.</span></h1>
      <div class="rows">
-       <div class="row"><span class="tk">◆</span><span>Start at a <b>$4,000</b> market cap — 1B supply, all on the bonding curve.</span></div>
+       <div class="row"><span class="tk">◆</span><span><b>1B supply</b>, all on the bonding curve — no presale, no team allocation.</span></div>
        <div class="row"><span class="tk">◆</span><span>Price moves deterministically. A flat <b>1% curve fee</b>, no snipers' edge.</span></div>
-       <div class="row"><span class="tk">◆</span><span>Graduate at <b>~$44,000</b> to Uniswap — the pool's LP is <b>100% burned</b>.</span></div>
+       <div class="row"><span class="tk">◆</span><span>Graduates to Uniswap once <b>~2.6 ETH</b> is raised — the pool's LP is <b>100% burned</b>.</span></div>
      </div>''')
 
 # 05 — SAFETY / WRITTEN INTO THE CONTRACT

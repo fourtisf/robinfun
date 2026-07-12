@@ -183,6 +183,17 @@ body.light .stake-orbit circle,body.light .stake-orbit ellipse{stroke:#3C9A1B}
 body.light .stake-orbit text{fill:#3C9A1B}
 
 /* ---------------- ticker tape ---------------- */
+.testnet-bar{display:flex;align-items:center;justify-content:center;gap:11px;position:relative;z-index:3;
+  background:linear-gradient(90deg,rgba(255,91,74,.14),rgba(255,91,74,.07));border-bottom:1px solid rgba(255,91,74,.32);
+  padding:8px 44px 8px 16px;font-family:var(--font-mono);font-size:12px;color:var(--cream-dim);text-align:center;line-height:1.4}
+.testnet-bar b{color:var(--seal-bright);font-weight:700}
+.testnet-bar .tn-txt b:not(:first-child){color:var(--cream)}
+.tn-dot{width:8px;height:8px;border-radius:50%;background:var(--seal);box-shadow:0 0 9px var(--seal);flex-shrink:0;animation:pulse 2s infinite}
+.tn-x{position:absolute;right:12px;top:50%;transform:translateY(-50%);color:var(--cream-mute);font-size:13px;
+  border:none;background:none;cursor:pointer;padding:4px 7px;border-radius:6px}
+.tn-x:hover{color:var(--cream);background:rgba(255,255,255,.06)}
+.testnet-bar.hidden{display:none}
+@media(max-width:640px){.testnet-bar{font-size:11px;padding:7px 40px 7px 12px}}
 .tape{border-bottom:1px solid var(--rule);background:var(--ink-2);overflow:hidden;position:relative;z-index:1}
 .tape-track{display:flex;gap:0;width:max-content;animation:tape 46s linear infinite}
 .tape:hover .tape-track{animation-play-state:paused}
@@ -771,6 +782,13 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 </head>
 <body>
 
+<!-- ======================= TESTNET NOTICE ======================= -->
+<div class="testnet-bar" id="testnetBar">
+  <span class="tn-dot"></span>
+  <span class="tn-txt"><b>TESTNET</b> — Robinfun runs on Robinhood Chain Testnet. Tokens &amp; ETH here have <b>no real value</b>; the contracts are <b>unaudited</b>. Don't send real funds.</span>
+  <button class="tn-x" onclick="dismissTestnet()" aria-label="Dismiss">✕</button>
+</div>
+
 <!-- ======================= TOP BAR ======================= -->
 <header class="topbar">
   <div class="topbar-in">
@@ -872,8 +890,8 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
         <div class="stat-block hl"><div class="sb-v gold" id="st-paid">—</div><div class="sb-k">Paid to creators · all-time</div></div>
       </div>
       <p class="hero-desc">
-        Fair-launch bonding curves. Start at a <b>$4k cap</b>, graduate at <b>~$44k</b> into a Uniswap pool with
-        <b>100% of the LP burned</b> — no presale, no team. The twist: set a <span class="lv">creator fee up to 10%</span>,
+        Fair-launch bonding curves. Every token starts on the curve and graduates into a Uniswap pool once
+        <b>~2.6 ETH</b> is raised, with <b>100% of the LP burned</b> — no presale, no team. The twist: set a <span class="lv">creator fee up to 10%</span>,
         and every buy &amp; sell routes fees to your wallet — on the curve, and long after graduation.
       </p>
     </section>
@@ -1138,10 +1156,10 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <div class="panel-title">Bonding curve</div>
           <div class="curve">
             <div class="curve-bar" style="height:8px"><div class="curve-fill" id="tk-fill" style="width:0%"></div></div>
-            <div class="curve-lbl"><span id="tk-curvelbl">$0 raised</span><span id="tk-gradlbl">graduates at $44k</span></div>
+            <div class="curve-lbl"><span id="tk-curvelbl">0 ETH raised</span><span id="tk-gradlbl">graduates at ~2.6 ETH</span></div>
           </div>
           <p style="font-size:12px;color:var(--cream-dim);margin-top:8px" id="tk-curvedesc">
-            When the cap reaches ~$44k, liquidity deploys to Uniswap and <b style="color:var(--cream)">100% of the LP is burned</b>. The fee keeps working after graduation — it lives in the token contract.
+            Once ~2.6 ETH is raised, liquidity deploys to Uniswap and <b style="color:var(--cream)">100% of the LP is burned</b>. The fee keeps working after graduation — it lives in the token contract.
           </p>
         </div>
 
@@ -1319,9 +1337,9 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <p data-i18n="docs.p">Pump-style fair launches, plus one thing nobody else gives creators: a revenue stream written into the token itself.</p>
     </div>
     <div class="docs-grid" style="padding-top:20px">
-      <div class="panel doc-card"><div class="n">i.</div><h4>Launch on the curve</h4><p>Every token starts at a <b>$4,000 market cap</b> with 1B supply, all on a bonding curve. No presale, no team bags. Price moves deterministically with buys and sells; a flat <b>1% curve fee</b> funds the platform.</p></div>
+      <div class="panel doc-card"><div class="n">i.</div><h4>Launch on the curve</h4><p>Every token launches with <b>1B supply</b>, all on a bonding curve — no presale, no team bags. Price moves deterministically with buys and sells; a flat <b>1% curve fee</b> funds the platform.</p></div>
       <div class="panel doc-card"><div class="n">ii.</div><h4>Set your fee</h4><p>Choose a buy and sell fee from <b>0–10%</b> at deploy. Every trade routes that share to your dev wallet, auto-harvested to ETH. Rates can be lowered or renounced — <b>never raised</b>. The rate is stamped on the token card for everyone to see.</p></div>
-      <div class="panel doc-card"><div class="n">iii.</div><h4>Graduate & keep earning</h4><p>At <b>~$44,000</b> the curve closes and liquidity moves to Uniswap with <b>100% of the LP burned</b>. Platform creator fees end there on other launchpads — your fee doesn't, because it lives in the contract, not the platform.</p></div>
+      <div class="panel doc-card"><div class="n">iii.</div><h4>Graduate & keep earning</h4><p>Once <b>~2.6 ETH</b> is raised the curve closes and liquidity moves to Uniswap with <b>100% of the LP burned</b>. Platform creator fees end there on other launchpads — your fee doesn't, because it lives in the contract, not the platform.</p></div>
     </div>
     <div class="rules panel panel-pad">
       <div class="panel-title">The fine print, in plain terms</div>
@@ -1793,6 +1811,9 @@ const PATH_TO_PAGE = {'':'home', 'create':'create', 'staking':'stake', 'whitepap
 let pendingTokenId = null;   // deep-linked /token/<id> awaiting the async server load
 let PROFILE_ADDR = null;     // address shown on the profile page (null → own wallet)
 function tokenById(id){ return TOKENS.find(t=>t.id===id); }
+/* Testnet notice — dismissible, remembered per browser. */
+function dismissTestnet(){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); try{ localStorage.setItem('rf_testnet_dismissed','1'); }catch(e){} }
+(function(){ try{ if(localStorage.getItem('rf_testnet_dismissed')==='1'){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); } }catch(e){} })();
 function setRoute(path, title){
   if(title) document.title = title;
   if(location.protocol === 'file:') return;   // local file preview — History API unavailable
@@ -2123,6 +2144,7 @@ function renderToken(fresh){
   fill.style.width = (t.graduated?100:prog)+'%';
   fill.className = 'curve-fill'+(t.graduated?' grad':'');
   document.getElementById('tk-curvelbl').textContent = t.graduated? 'curve complete' : fmtUsd(t.mcap)+' · '+prog.toFixed(0)+'%';
+  const gl0 = document.getElementById('tk-gradlbl'); if(gl0) gl0.textContent = t.graduated? 'graduated' : 'graduates at ~'+fmtUsd(GRAD_CAP);
   /* fee record */
   document.getElementById('li-buy').textContent = t.buyTax+'%';
   document.getElementById('li-sell').textContent = t.sellTax+'%';

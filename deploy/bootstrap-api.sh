@@ -64,6 +64,15 @@ log "Preparing data + upload directories"
 mkdir -p "$DATA_DIR" "$UPLOAD_DIR"
 chown -R www-data:www-data "$DATA_DIR" "$UPLOAD_DIR"
 
+# Admin secret for moderation (DELETE /api/tokens/:id). Generate once, persist,
+# reuse on every re-run so existing tokens stay deletable with the same secret.
+SECRET_FILE="${DATA_DIR}/admin.secret"
+if [ ! -s "$SECRET_FILE" ]; then
+    (umask 077; head -c 24 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$SECRET_FILE")
+    chown www-data:www-data "$SECRET_FILE" 2>/dev/null || true
+fi
+ADMIN_SECRET="$(cat "$SECRET_FILE")"
+
 log "Installing the systemd service"
 cat > /etc/systemd/system/robinfun-api.service <<UNIT
 [Unit]
@@ -80,6 +89,7 @@ Environment=HOST=127.0.0.1
 Environment=DATA_DIR=${DATA_DIR}
 Environment=UPLOAD_DIR=${UPLOAD_DIR}
 Environment=UPLOAD_BASE=/uploads
+Environment=ADMIN_SECRET=${ADMIN_SECRET}
 ExecStart=$(command -v node) ${SRC_DIR}/server/index.js
 Restart=always
 RestartSec=2
@@ -165,3 +175,8 @@ echo "  API health : https://${DOMAIN}/api/health"
 echo "  Tokens     : https://${DOMAIN}/api/tokens"
 echo "  Logos      : ${UPLOAD_DIR}  →  https://${DOMAIN}/uploads/..."
 echo "  Service    : systemctl status robinfun-api   ·   journalctl -u robinfun-api -f"
+echo
+echo "  Admin secret (moderation) is stored at ${SECRET_FILE}."
+echo "  Delete a token by ticker, e.g. remove a stale \$TEST launch:"
+echo "     curl -X DELETE \"https://${DOMAIN}/api/tokens/TEST?by=ticker\" -H \"x-admin-secret: \$(cat ${SECRET_FILE})\""
+echo "  (or ?by=ca with the contract address, or the record id with no ?by=)"

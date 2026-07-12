@@ -25,7 +25,7 @@ footer on every frame — so posted in order they read as one connected thread.
 
 **4 · Fair by design**
 > No presale. No team bags.
-> Start at a $4k cap · 1B supply all on the curve · graduate at ~$44k to Uniswap with the LP 100% burned.
+> 1B supply all on the curve · graduates to Uniswap once ~2.6 ETH is raised · LP 100% burned.
 > Deterministic price, flat 1% curve fee — no snipers' edge.
 
 **5 · Safety**
@@ -37,6 +37,12 @@ footer on every frame — so posted in order they read as one connected thread.
 > Fair curves. A fee that pays you forever.
 > Launch on Robinfun → robinfun.io
 > X @robinfunio · TG t.me/robinfunio
+
+## Testnet disclaimer (pin under the thread / put in bio)
+
+> ⚠️ Robinfun is live on **Robinhood Chain Testnet** right now. Tokens and ETH
+> here have no real value and the contracts are unaudited — it's for testing the
+> product, not for real trades. Mainnet comes after a third-party audit.
 
 ## How they were generated
 

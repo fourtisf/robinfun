@@ -138,6 +138,32 @@ app.post('/api/tokens', rateLimit, (req, res) => {
   }
 });
 
+// Moderation: delete a token (e.g. a stale/duplicate testnet launch).
+// Guarded by a shared admin secret so only the operator can call it. If
+// ADMIN_SECRET is unset the endpoint stays disabled (503) — safe by default.
+// Match by record id, by ticker (?by=ticker), or by contract address (?by=ca).
+app.delete('/api/tokens/:id', (req, res) => {
+  const secret = process.env.ADMIN_SECRET || '';
+  if (!secret) return res.status(503).json({ error: 'deletion disabled (set ADMIN_SECRET)' });
+  const given = req.get('x-admin-secret') || '';
+  if (given.length !== secret.length ||
+      !crypto.timingSafeEqual(Buffer.from(given), Buffer.from(secret))) {
+    return res.status(403).json({ error: 'forbidden' });
+  }
+  const key = String(req.params.id).trim();
+  const by = String(req.query.by || 'id').toLowerCase();
+  const match = (t) =>
+    by === 'ticker' ? String(t.ticker).toUpperCase() === key.toUpperCase() :
+    by === 'ca'     ? String(t.ca || '').toLowerCase() === key.toLowerCase() :
+                      t.id === key;
+  const before = db.tokens.length;
+  const removed = db.tokens.filter(match);
+  db.tokens = db.tokens.filter((t) => !match(t));
+  if (db.tokens.length === before) return res.status(404).json({ error: 'not found' });
+  save(db);
+  res.json({ ok: true, removed: removed.length, remaining: db.tokens.length });
+});
+
 // Dev convenience: serve the static site + uploads same-origin so the frontend
 // can be tested end-to-end locally. In production nginx serves these instead.
 if (SITE_DIR) {
