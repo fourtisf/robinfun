@@ -380,6 +380,8 @@ body.light .stake-orbit text{fill:#3C9A1B}
 .devbuy-badge{font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--ink);
   background:var(--gilt);padding:3px 8px;border-radius:6px;box-shadow:var(--glow)}
 .devbuy-title{font-size:13.5px;font-weight:600;color:var(--cream)}
+.devbuy-req{margin-left:auto;font-family:var(--font-mono);font-size:9.5px;font-weight:700;letter-spacing:.1em;
+  color:var(--seal);border:1px solid var(--seal);border-radius:5px;padding:2px 7px}
 .devbuy-label{display:block;font-size:12px;font-weight:600;color:var(--cream-dim);margin-bottom:7px;letter-spacing:.02em}
 .devbuy-label span{color:var(--cream-mute);font-weight:400}
 .devbuy-input{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}
@@ -944,10 +946,11 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <div class="devbuy-head">
             <span class="devbuy-badge">🚀 DEV BUY</span>
             <span class="devbuy-title">Snipe your own launch first</span>
+            <span class="devbuy-req">REQUIRED</span>
           </div>
-          <label for="c-buyin" class="devbuy-label">Amount to buy in the deploy tx <span>(optional, ETH)</span></label>
+          <label for="c-buyin" class="devbuy-label">Amount to buy in the deploy tx <span>(required — min <span id="devMinLbl">0.01</span> ETH)</span></label>
           <div class="devbuy-input">
-            <input type="number" id="c-buyin" min="0" step="0.01" placeholder="0.00" oninput="syncCost()">
+            <input type="number" id="c-buyin" min="0.01" step="0.01" value="0.05" placeholder="0.05" oninput="syncCost()">
             <div class="devbuy-chips">
               <button type="button" class="devchip" onclick="setDevBuy(0.05)">0.05</button>
               <button type="button" class="devchip" onclick="setDevBuy(0.1)">0.1</button>
@@ -955,7 +958,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
               <button type="button" class="devchip" onclick="setDevBuy(0.5)">0.5</button>
             </div>
           </div>
-          <div class="hint">Bundled into the <b>same transaction</b> as the deploy, so your buy lands before anyone else can trade. Shown publicly as the creator's position — a credible signal you're not dumping on your own holders.</div>
+          <div class="hint">Every creator must take a launch position — it lands in the <b>same transaction</b> as the deploy, before anyone else can trade, and is shown publicly. No zero-buy launches: skin in the game is mandatory, so you can't dump on your own holders from an empty bag.</div>
         </div>
       </div>
 
@@ -1409,6 +1412,7 @@ const CHAIN = {
 const FACTORY_ADDR = '0x1B57C272F120c7A907324751A544661f1b6Fbf59';
 let DEPLOY_FEE_WEI = 500000000000000n;     // 0.0005 ETH — refreshed from the chain
 let deployFeeEth = 0.0005;
+const MIN_DEV_BUY = 0.01;                  // dev buy is mandatory — creator must hold a launch position
 const EXPLORER = 'https://explorer.testnet.chain.robinhood.com';
 const FACTORY_ABI = [
   'function createToken((string name,string symbol,string metadataURI,uint16 buyLevyBps,uint16 sellLevyBps,bool decayAtGraduation,bool renounceRateControl,uint256 devBuyMinTokensOut,bytes32 vanitySalt)) payable returns (address token, address curve)',
@@ -2778,6 +2782,13 @@ async function deploy(){
   const name = document.getElementById('c-name').value.trim();
   const ticker = document.getElementById('c-ticker').value.trim();
   if(!name || !ticker){ toast('Name and ticker are required','seal'); return; }
+  const devBuy = parseFloat(document.getElementById('c-buyin').value)||0;
+  if(devBuy < MIN_DEV_BUY){
+    const inp=document.getElementById('c-buyin');
+    toast('Dev buy is required — minimum <b>'+MIN_DEV_BUY+' ETH</b>. Every creator takes a launch position.','seal');
+    if(inp){ inp.focus(); inp.select && inp.select(); }
+    return;
+  }
   if(!wallet){ toast('Connect your wallet first','seal'); connectWallet(); return; }
   const meta = {
     name, ticker,
@@ -2789,7 +2800,7 @@ async function deploy(){
     sellTax: parseFloat(document.getElementById('r-sell').value),
     decay: document.getElementById('c-decay').checked,
     renounced: document.getElementById('c-renounce').checked,
-    devBuy: parseFloat(document.getElementById('c-buyin').value)||0,
+    devBuy,
   };
   if(chainReady()) return realLaunch(meta);
   return simulateLaunch(meta);
