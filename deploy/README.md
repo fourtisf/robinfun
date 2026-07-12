@@ -14,9 +14,18 @@ the Hostinger VPS with nginx + free auto-renewing HTTPS.
 
 ## Deploy — pick ONE method
 
-### A. From the repo (cleanest, if you can clone on the VPS)
+### A. One command (recommended)
 
-In the VPS terminal (VS Code Remote-SSH terminal, logged in as `root`):
+Paste this into the VPS terminal (the VS Code Remote-SSH terminal, logged in as
+`root`). It downloads the script + page and does everything:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fourtisf/robinfun/claude/new-session-v8c9tt/deploy/bootstrap.sh -o /root/bootstrap.sh && chmod +x /root/bootstrap.sh && SITE_URL=https://raw.githubusercontent.com/fourtisf/robinfun/claude/new-session-v8c9tt/deploy/site/index.html /root/bootstrap.sh
+```
+
+That's it — nginx, the page, the firewall, and HTTPS are all set up.
+
+### B. From a full clone
 
 ```bash
 cd /root
@@ -26,10 +35,7 @@ chmod +x bootstrap.sh
 ./bootstrap.sh
 ```
 
-(If the repo is private, `git` will ask for a GitHub username + a Personal
-Access Token, or use method B.)
-
-### B. Upload the page by hand (no git needed)
+### C. Upload the page by hand (no internet fetch)
 
 1. In VS Code (connected to the VPS), create the folder and file:
    ```bash
@@ -41,7 +47,7 @@ Access Token, or use method B.)
    `index.html`.)
 3. Save `bootstrap.sh` to the VPS (drag it in too), then:
    ```bash
-   cd /root && chmod +x bootstrap.sh && ./bootstrap.sh
+   cd /root && chmod +x bootstrap.sh && WEBROOT=/var/www/robinfun ./bootstrap.sh
    ```
    The script sees the existing `index.html` and configures nginx + HTTPS around it.
 
