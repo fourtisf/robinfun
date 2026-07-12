@@ -25,6 +25,15 @@ die(){ printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
 : "${PRIVATE_KEY:?Set PRIVATE_KEY to a FUNDED testnet deployer key (fresh throwaway wallet, not your main one)}"
 
+# Validate the key EARLY (before the long build) — reject leftover placeholders
+# and wrong formats with a clear message.
+case "$PRIVATE_KEY" in
+  *KUNCI_WALLET*|*WALLET_BARU*|*YOUR_*|*your-*|*ISI_*)
+    die "PRIVATE_KEY is still a placeholder. Paste the REAL private key of your fresh, faucet-funded testnet wallet (MetaMask → Account details → Show private key)." ;;
+esac
+printf '%s' "$PRIVATE_KEY" | grep -Eq '^0x[0-9a-fA-F]{64}$' \
+  || die "PRIVATE_KEY must be 0x followed by 64 hex characters (a wallet private key), e.g. 0xabc123...  Export it from MetaMask → Account details → Show private key."
+
 export DEBIAN_FRONTEND=noninteractive
 command -v git >/dev/null 2>&1 || apt-get -o DPkg::Lock::Timeout=300 install -y git
 command -v node >/dev/null 2>&1 || apt-get -o DPkg::Lock::Timeout=300 install -y nodejs npm
