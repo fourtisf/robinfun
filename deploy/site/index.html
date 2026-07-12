@@ -370,8 +370,12 @@ body.light .stake-orbit text{fill:#3C9A1B}
 .upload p{font-size:12.5px;color:var(--cream-mute)}
 .upload.drag{border-color:var(--gilt);background:var(--gilt-dim)}
 .upload .big img.upl-img{width:60px;height:60px;object-fit:cover;border-radius:12px;display:block;margin:0 auto}
+.upl-ico{width:34px;height:34px;color:var(--cream-mute);display:block;margin:0 auto}
 .tlogo,.lead-logo,#tk-logo{overflow:hidden}
 .tlogo img.logo-img,.lead-logo img.logo-img,#tk-logo img.logo-img{width:100%;height:100%;object-fit:cover;display:block}
+.mono-logo{display:flex;align-items:center;justify-content:center;width:100%;height:100%;
+  font-family:var(--font-display);font-weight:700;letter-spacing:.02em;color:#0A1204;
+  background:linear-gradient(140deg,var(--gilt-bright),var(--gilt));text-transform:uppercase}
 .upl-remove{color:var(--gilt);text-decoration:underline;cursor:pointer;background:none;border:none;font:inherit;padding:0}
 .emoji-pick{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;justify-content:center}
 .emoji-pick button{font-size:19px;padding:5px 7px;border-radius:8px;border:1px solid transparent;transition:all .12s}
@@ -830,12 +834,11 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <textarea id="c-desc" maxlength="240" placeholder="What's the story? One or two lines."></textarea>
         </div>
         <div class="field">
-          <label>Image <span>— upload a logo, or pick an emoji</span></label>
+          <label>Image <span>— upload a logo</span></label>
           <div class="upload" id="dropzone">
-            <div class="big" id="upl-emoji">🪶</div>
-            <p id="upl-hint">Drop a logo here or click to upload · or pick an emoji below</p>
+            <div class="big" id="upl-emoji"><svg class="upl-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.7"/><path d="M21 15l-5-5L5 21"/></svg></div>
+            <p id="upl-hint">Drop a logo here, or click to upload</p>
             <input type="file" id="logoInput" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" hidden>
-            <div class="emoji-pick" id="emojiRow"></div>
           </div>
         </div>
         <div class="field-row">
@@ -1856,28 +1859,16 @@ function doTrade(){
    CREATE PAGE
    ================================================================ */
 const EMOJIS = ['🪶','🏹','🎩','🐀','💰','🏰','🍺','💘','🎯','😭','🫳','📜','🌲','🪙','🔥','🦅'];
-let chosenEmoji = '🪶';
-let chosenLogo = null;   // data-URL of an uploaded logo, or null → use the emoji
-function buildEmojiRow(){
-  document.getElementById('emojiRow').innerHTML = EMOJIS.map(e=>
-    `<button type="button" class="${e===chosenEmoji?'sel':''}" onclick="event.stopPropagation();pickEmoji('${e}',this)">${e}</button>`).join('');
-}
-function pickEmoji(e,btn){
-  chosenEmoji = e;
-  chosenLogo = null;                          // picking an emoji clears the upload
-  const box = document.getElementById('upl-emoji'); if(box) box.textContent = e;
-  const hint = document.getElementById('upl-hint');
-  if(hint) hint.textContent = 'Drop a logo here or click to upload · or pick an emoji below';
-  document.querySelectorAll('#emojiRow button').forEach(b=>b.classList.remove('sel'));
-  btn.classList.add('sel');
-}
+let chosenLogo = null;   // data-URL of an uploaded logo, or null → monogram fallback
+const UPL_ICON = '<svg class="upl-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.7"/><path d="M21 15l-5-5L5 21"/></svg>';
+const UPL_HINT = 'Drop a logo here, or click to upload';
 
 /* ---- logo upload (client-side; stored on the token as a data URL) ---- */
 function initLogoUpload(){
   const dz = document.getElementById('dropzone');
   const input = document.getElementById('logoInput');
   if(!dz || !input) return;
-  dz.addEventListener('click', (e)=>{ if(e.target.closest('#emojiRow')||e.target.closest('.upl-remove')) return; input.click(); });
+  dz.addEventListener('click', (e)=>{ if(e.target.closest('.upl-remove')) return; input.click(); });
   input.addEventListener('change', ()=>{ if(input.files && input.files[0]) handleLogo(input.files[0]); });
   ['dragover','dragenter'].forEach(ev=> dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.add('drag'); }));
   ['dragleave','dragend'].forEach(ev=> dz.addEventListener(ev, e=>{ e.preventDefault(); dz.classList.remove('drag'); }));
@@ -1898,12 +1889,17 @@ function handleLogo(file){
 function clearLogo(e){
   if(e) e.stopPropagation();
   chosenLogo = null;
-  const box = document.getElementById('upl-emoji'); if(box) box.textContent = chosenEmoji;
-  const hint = document.getElementById('upl-hint'); if(hint) hint.textContent = 'Drop a logo here or click to upload · or pick an emoji below';
+  const box = document.getElementById('upl-emoji'); if(box) box.innerHTML = UPL_ICON;
+  const hint = document.getElementById('upl-hint'); if(hint) hint.textContent = UPL_HINT;
   const input = document.getElementById('logoInput'); if(input) input.value = '';
 }
-/* Token logo: uploaded image if present, otherwise the emoji stand-in. */
-function tLogo(t){ return t && t.logo ? '<img class="logo-img" src="'+t.logo+'" alt="">' : (t? t.emoji : ''); }
+/* Token icon: uploaded logo → the emoji (legacy/demo tokens) → a ticker monogram. */
+function tLogo(t){
+  if(!t) return '';
+  if(t.logo) return '<img class="logo-img" src="'+t.logo+'" alt="">';
+  if(t.emoji) return t.emoji;
+  return '<span class="mono-logo">'+((t.ticker||'?').slice(0,2))+'</span>';
+}
 function syncPreview(){
   const tk = document.getElementById('c-ticker');
   tk.value = tk.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
@@ -1969,7 +1965,7 @@ function deploy(){
   const s = parseFloat(document.getElementById('r-sell').value);
   const devBuy = parseFloat(document.getElementById('c-buyin').value)||0;
   const t = mkTok({
-    name, ticker, emoji:chosenEmoji, logo:chosenLogo,
+    name, ticker, emoji:null, logo:chosenLogo,
     desc: document.getElementById('c-desc').value.trim() || 'Freshly launched on Robinfun.',
     buyTax:b, sellTax:s,
     decay: document.getElementById('c-decay').checked,
@@ -2139,7 +2135,6 @@ function toast(html, kind){
 
 /* ---------------- init ---------------- */
 function init(){
-  buildEmojiRow();
   initLogoUpload();
   onSlider(true);
   projector();
