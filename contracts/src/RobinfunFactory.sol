@@ -181,7 +181,7 @@ contract RobinfunFactory is Ownable2Step {
                 renounceAtCreation: p.renounceRateControl
             })
         );
-        BondingCurve(curve).initialize(token, feeRouter, dexFactory, weth, curveParams);
+        BondingCurve(payable(curve)).initialize(token, feeRouter, dexFactory, weth, curveParams);
 
         // Register before any value-bearing external call.
         allTokens.push(token);
@@ -209,7 +209,7 @@ contract RobinfunFactory is Ownable2Step {
         if (devBuy != 0) {
             // Tokens go to the creator; a capped final buy refunds surplus ETH
             // to the factory, which forwards it back to the creator below.
-            BondingCurve(curve).buyFor{value: devBuy}(msg.sender, p.devBuyMinTokensOut, block.timestamp);
+            BondingCurve(payable(curve)).buyFor{value: devBuy}(msg.sender, p.devBuyMinTokensOut, block.timestamp);
             uint256 refund = address(this).balance;
             if (refund != 0) {
                 (bool ok,) = msg.sender.call{value: refund}("");

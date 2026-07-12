@@ -105,7 +105,7 @@ abstract contract BaseSetup is Test {
                 devBuyMinTokensOut: 0
             })
         );
-        return (RobinfunToken(t), BondingCurve(c));
+        return (RobinfunToken(t), BondingCurve(payable(c)));
     }
 
     /// @dev Buys with enough gross ETH to graduate the curve in one trade.

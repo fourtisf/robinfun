@@ -57,6 +57,12 @@ contract Deploy is Script {
         feeRouter.setDexRouter(dexRouter);
         feeRouter.setTreasury(multisig);
 
+        // Optional keeper gate on levy harvests. Mainnet should set a keeper
+        // (quotes off-chain, submits via a private relay) to avoid sandwiching
+        // — a robust on-chain floor needs the §10.4 oracle. Unset = permissionless.
+        address harvester = vm.envOr("HARVESTER", address(0));
+        if (harvester != address(0)) feeRouter.setHarvester(harvester);
+
         if (vm.envOr("DEPLOY_ROBIN", false)) {
             uint256 robinSupply = vm.envOr("ROBIN_SUPPLY", uint256(1_000_000_000e18));
             ROBIN robinToken = new ROBIN(multisig, robinSupply);

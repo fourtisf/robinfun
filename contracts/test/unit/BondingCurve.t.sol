@@ -268,6 +268,115 @@ contract BondingCurveTest is BaseSetup {
         assertEq(t2.sellLevyBps(), 300);
     }
 
+    /// @dev Regression: an attacker who mints REAL LP into the pair before
+    ///      graduation (skewed cheap-token price) must not capture any of the
+    ///      curve's fair-launch liquidity, and the curve's LP is still 100%
+    ///      burned to the dead address.
+    function test_graduation_preMintedLpCannotStealLiquidity() public {
+        address attacker = makeAddr("attacker");
+        vm.deal(attacker, 100 ether);
+
+        // Attacker buys a slice of tokens on the curve (untaxed pre-grad).
+        vm.prank(attacker);
+        curve.buy{value: 0.5 ether}(0, block.timestamp);
+        uint256 attackerTokens = token.balanceOf(attacker);
+
+        // Attacker pre-creates the pair and mints skewed LP (lots of tokens,
+        // little WETH → token looks very cheap), holding all the LP.
+        address pair = dexFactory.createPair(address(token), address(weth));
+        vm.startPrank(attacker);
+        token.transfer(pair, attackerTokens);
+        weth.deposit{value: 0.01 ether}();
+        weth.transfer(pair, 0.01 ether);
+        uint256 attackerLp = MockUniswapV2Pair(pair).mint(attacker);
+        vm.stopPrank();
+        assertGt(attackerLp, 0, "attacker seeded real LP");
+
+        uint256 protocolBefore = feeRouter.protocolPending();
+
+        // Graduate.
+        vm.prank(alice);
+        curve.buy{value: 5 ether}(0, block.timestamp);
+        assertTrue(curve.graduated());
+        assertEq(token.ammPair(), pair, "attacker pair became canonical");
+
+        MockUniswapV2Pair p = MockUniswapV2Pair(pair);
+
+        // The curve's LP contribution is 100% burned: DEAD holds the entire
+        // supply except the attacker's own pre-existing seed LP.
+        assertEq(p.balanceOf(DEAD), p.totalSupply() - attackerLp, "curve LP 100% burned");
+
+        // No curve ETH leaked to the attacker. Their entire LP position redeems
+        // to far less WETH than the fair-launch liquidity (2.6 ETH): the
+        // unpairable ETH was diverted to the protocol, never socialized to them.
+        (uint112 r0, uint112 r1,) = p.getReserves();
+        uint256 wethReserve = address(token) < address(weth) ? uint256(r1) : uint256(r0);
+        uint256 attackerRedeemableWeth = (wethReserve * attackerLp) / p.totalSupply();
+        assertLt(attackerRedeemableWeth, 0.1 ether, "attacker cannot pull the curve's ETH");
+
+        // The bulk of graduation ETH went to the protocol (not the attacker),
+        // and the curve is fully drained.
+        assertGt(feeRouter.protocolPending() - protocolBefore, 2 ether, "unpairable ETH to protocol");
+        assertEq(address(curve).balance, 0, "no stranded ETH");
+        assertEq(token.balanceOf(address(curve)), 0, "no stranded tokens");
+    }
+
+    /// @dev Regression: an attacker seeding an EXTREME-ratio pool (so the
+    ///      ratio-matched deposit would mint zero LP) must not be able to brick
+    ///      graduation. The curve falls back to routing the ETH to the protocol
+    ///      and burning the tokens — the token still graduates.
+    function test_graduation_degenerateSeedCannotBrick() public {
+        address attacker = makeAddr("attacker");
+        vm.deal(attacker, 100 ether);
+
+        // Attacker grabs a sliver of tokens, then seeds a pool priced absurdly
+        // high — 1 wei of token against 40 ETH — so the ratio-matched
+        // `tokensToLp` rounds to zero and the deposit would mint no LP.
+        vm.prank(attacker);
+        curve.buy{value: 0.2 ether}(0, block.timestamp);
+
+        address pair = dexFactory.createPair(address(token), address(weth));
+        vm.startPrank(attacker);
+        token.transfer(pair, 1); // one wei of token
+        weth.deposit{value: 40 ether}();
+        weth.transfer(pair, 40 ether);
+        MockUniswapV2Pair(pair).mint(attacker);
+        vm.stopPrank();
+
+        uint256 protocolBefore = feeRouter.protocolPending();
+
+        // Graduation must still succeed.
+        vm.prank(alice);
+        curve.buy{value: 5 ether}(0, block.timestamp);
+        assertTrue(curve.graduated(), "token graduates despite the griefing seed");
+
+        // The curve is fully drained and all graduation ETH went to the
+        // protocol (plus the final buy's own 1% curve fee), never the attacker.
+        assertEq(address(curve).balance, 0, "no stranded ETH");
+        assertEq(token.balanceOf(address(curve)), 0, "no stranded tokens");
+        uint256 protocolGain = feeRouter.protocolPending() - protocolBefore;
+        assertGe(protocolGain, GRADUATION_ETH, "all graduation ETH to protocol");
+        assertLt(protocolGain, GRADUATION_ETH + 0.1 ether, "only grad ETH + trade fees");
+    }
+
+    /// @dev Regression: a buy sized one wei below the exact gross needed to
+    ///      graduate must not underflow the refund and revert.
+    function test_graduation_boundaryBuyDoesNotRevert() public {
+        // Walk almost to the target so a precise final buy triggers the cap.
+        vm.prank(alice);
+        curve.buy{value: 2 ether}(0, block.timestamp);
+        (uint256 collected, uint256 target) = curve.graduationProgress();
+        uint256 room = target - collected;
+
+        uint256 cutBps = uint256(CURVE_FEE_BPS) + BUY_LEVY;
+        uint256 grossCapped = (room * BPS + (BPS - cutBps) - 1) / (BPS - cutBps);
+
+        // Exactly the boundary that used to underflow: grossCapped - 1.
+        vm.prank(bob);
+        curve.buy{value: grossCapped - 1}(0, block.timestamp);
+        assertTrue(curve.graduated(), "boundary buy graduates instead of reverting");
+    }
+
     // ---------------------------------------------------------------- fuzz
 
     /// @dev Any single buy: exact ETH conservation and correct routing.
@@ -333,6 +442,14 @@ contract BondingCurveTest is BaseSetup {
                 curve.sell(amt, 0, block.timestamp);
             }
             vm.stopPrank();
+
+            // A buy can graduate the curve mid-loop; once it has, the curve is
+            // drained and the pre-graduation reserve identities no longer apply.
+            if (curve.graduated()) {
+                assertEq(token.balanceOf(address(curve)), 0, "graduated: no stranded tokens");
+                assertEq(address(curve).balance, 0, "graduated: no stranded ETH");
+                break;
+            }
 
             assertGe(curve.virtualEthReserve() * curve.virtualTokenReserve(), k0, "k never decreases");
             assertEq(address(curve).balance, curve.reserveEth(), "balance == tracked reserve");

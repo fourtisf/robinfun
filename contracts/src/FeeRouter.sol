@@ -60,6 +60,18 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
     /// @notice Protocol treasury multisig (brief §10.5 — placeholder until decided).
     address public treasury;
 
+    /// @notice Optional keeper gate on `harvest`. When set, only this address
+    ///         may harvest; when unset (default), harvest is permissionless.
+    /// @dev `harvest` market-sells the whole levy inventory in one swap with a
+    ///      caller-chosen slippage floor, so a permissionless caller could set
+    ///      `minEthOut = 0` and sandwich their own harvest to skim the swap
+    ///      output. On-chain reserves are themselves manipulable, so a robust
+    ///      floor needs the price oracle that is still an open question
+    ///      (brief §10.4). Until then, mainnet should set a keeper here that
+    ///      quotes off-chain and submits via a private relay. Testnet can leave
+    ///      it unset for permissionless harvests.
+    address public harvester;
+
     // ---------------------------------------------------------------- accounting
 
     /// @notice Unclaimed creator ETH per token.
@@ -83,6 +95,7 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
     event DexRouterSet(address indexed router, address indexed weth);
     event StakingVaultSet(address indexed vault);
     event TreasurySet(address indexed treasury);
+    event HarvesterSet(address indexed harvester);
     event CurveFeeCollected(address indexed token, uint256 amount);
     event DeployFeeCollected(address indexed token, uint256 amount);
     event LevyCollected(address indexed token, uint256 amount, uint256 creatorShare, uint256 protocolShare);
@@ -101,6 +114,7 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
     error NoSink();
     error EthTransferFailed();
     error CannotRescueRobinfunToken();
+    error NotHarvester();
 
     constructor(address owner_) Ownable(owner_) {}
 
@@ -139,6 +153,12 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
         emit TreasurySet(treasury_);
     }
 
+    /// @notice Sets (or clears, with address(0)) the harvest keeper gate.
+    function setHarvester(address harvester_) external onlyOwner {
+        harvester = harvester_;
+        emit HarvesterSet(harvester_);
+    }
+
     // ---------------------------------------------------------------- collection (curves + factory)
 
     /// @notice Receives the 1% curve fee. 100% protocol revenue.
@@ -175,6 +195,7 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
     /// @param minEthOut Slippage floor for the swap.
     /// @param deadline  Swap deadline.
     function harvest(address token, uint256 minEthOut, uint256 deadline) external nonReentrant {
+        if (harvester != address(0) && msg.sender != harvester) revert NotHarvester();
         _requireKnown(token);
         if (address(dexRouter) == address(0)) revert NoSink();
 

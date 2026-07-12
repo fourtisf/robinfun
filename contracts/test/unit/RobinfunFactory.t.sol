@@ -47,7 +47,7 @@ contract RobinfunFactoryTest is BaseSetup {
         assertEq(token.totalSupply(), token.TOTAL_SUPPLY());
 
         // Curve initialized from the factory's current config.
-        BondingCurve curve = BondingCurve(c);
+        BondingCurve curve = BondingCurve(payable(c));
         assertEq(address(curve.token()), t);
         assertEq(address(curve.feeRouter()), address(feeRouter));
         assertEq(address(curve.dexFactory()), address(dexFactory));
@@ -277,7 +277,7 @@ contract RobinfunFactoryTest is BaseSetup {
         vm.prank(creator);
         (address t, address c) = factory.createToken{value: DEPLOY_FEE + 10 ether}(_params("Hood Rat", "HOODRAT"));
 
-        assertTrue(BondingCurve(c).graduated(), "instant graduation");
+        assertTrue(BondingCurve(payable(c)).graduated(), "instant graduation");
         assertGt(RobinfunToken(t).balanceOf(creator), 0, "creator holds the dev buy");
 
         // Creator paid deployFee + exactly (graduation target + fees on the
@@ -424,7 +424,7 @@ contract RobinfunFactoryTest is BaseSetup {
             renounceAtCreation: false
         });
         RobinfunToken tokenImpl = RobinfunToken(factory.tokenImplementation());
-        BondingCurve curveImpl = BondingCurve(factory.curveImplementation());
+        BondingCurve curveImpl = BondingCurve(payable(factory.curveImplementation()));
 
         vm.expectRevert(Initializable.InvalidInitialization.selector);
         tokenImpl.initialize(init);

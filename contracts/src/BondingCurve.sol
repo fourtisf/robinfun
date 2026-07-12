@@ -118,6 +118,7 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
     // ---------------------------------------------------------------- errors
 
     error AlreadyGraduatedErr();
+    error UnexpectedEth();
     error DeadlineExpired();
     error ZeroAmount();
     error ZeroAddress();
@@ -126,6 +127,13 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
 
     constructor() {
         _disableInitializers();
+    }
+
+    /// @dev Accepts native ETH only from WETH (the graduation-fallback unwrap).
+    ///      Everything else must go through `buy`/`buyFor`, so `reserveEth`
+    ///      always equals the curve's real balance and cannot be poisoned.
+    receive() external payable {
+        if (msg.sender != address(weth)) revert UnexpectedEth();
     }
 
     // ---------------------------------------------------------------- init
@@ -324,23 +332,51 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
         net = gross - fee - levy;
 
         if (net > room) {
-            gross = Math.ceilDiv(room * BPS, BPS - cutBps);
-            fee = (gross * CURVE_FEE_BPS) / BPS;
-            levy = (gross * levyBps) / BPS;
-            net = gross - fee - levy;
-            refund = amount - gross;
-            if (net > room) {
-                // ceil rounding overshoot is at most a few wei — refund it.
-                refund += net - room;
-                net = room;
+            uint256 cappedGross = Math.ceilDiv(room * BPS, BPS - cutBps);
+            // ceilDiv can round `cappedGross` up to `amount` or beyond when the
+            // buyer sent almost exactly the gross needed (fee and levy floor
+            // independently, so net overshoots room by only 1–2 wei). Capping
+            // there would make `amount - cappedGross` underflow and revert a
+            // legitimately-sized graduating buy. Only cap when there is real
+            // surplus to refund; otherwise let the ≤2-wei overshoot ride — a
+            // trivially larger reserveEth still graduates cleanly.
+            if (cappedGross < amount) {
+                gross = cappedGross;
+                fee = (gross * CURVE_FEE_BPS) / BPS;
+                levy = (gross * levyBps) / BPS;
+                net = gross - fee - levy;
+                refund = amount - gross;
+                if (net > room) {
+                    // ceil rounding overshoot is at most a few wei — refund it.
+                    refund += net - room;
+                    net = room;
+                }
             }
         }
     }
 
     /// @dev One-way graduation. Runs inside the buy that hits the target:
     ///      registers the pair on the token, deposits all collected ETH plus
-    ///      price-matched tokens as liquidity, mints the LP directly to the
-    ///      dead address (100% burn) and burns leftover curve inventory.
+    ///      matched tokens as liquidity, mints the LP directly to the dead
+    ///      address (100% burn) and burns leftover curve inventory.
+    ///
+    /// The token/WETH pair is a permissionless Uniswap-v2 pair: anyone can
+    /// create it AND mint real LP into it before graduation. Two cases:
+    ///
+    ///   - CLEAN pool (no LP minted): any donated balances are skimmed away
+    ///     and the curve opens the pool exactly at the graduation price.
+    ///
+    ///   - PRE-SEEDED pool (an attacker already minted LP to skew the price):
+    ///     depositing at the graduation price would let Uniswap's `min()` LP
+    ///     formula socialize the over-supplied side of the curve's deposit to
+    ///     the attacker's LP position — theft of the fair-launch liquidity.
+    ///     Instead the curve deposits at the pool's PREVAILING ratio so 100%
+    ///     of its contribution is captured as LP and burned to `0xdead`;
+    ///     nothing is donated to the pre-existing holder. Any ETH that cannot
+    ///     be paired against the curve's inventory is routed to the protocol
+    ///     (never to the attacker). The attacker keeps only their own seed
+    ///     liquidity at their own skewed price, which arbitrage corrects at
+    ///     their expense. The curve's burned LP still can never be pulled.
     function _graduate() private {
         graduated = true;
 
@@ -350,33 +386,87 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
         address pair = dexFactory.getPair(tokenAddr, wethAddr);
         if (pair == address(0)) pair = dexFactory.createPair(tokenAddr, wethAddr);
 
-        // Neutralize donation griefing: with zero LP supply, skim clears any
-        // pre-seeded balances so the pool opens exactly at graduation price.
-        if (IUniswapV2Pair(pair).totalSupply() == 0) IUniswapV2Pair(pair).skim(DEAD);
+        // Clear any un-synced donated balances while the pair is still
+        // levy-inert (ammPair == 0), so this skim itself is never taxed.
+        IUniswapV2Pair(pair).skim(DEAD);
 
-        // Tell the token first so the decay flag applies from the first DEX
+        (uint256 tokenReserve, uint256 wethReserve) = _pairReserves(pair, tokenAddr, wethAddr);
+        bool preSeeded = IUniswapV2Pair(pair).totalSupply() != 0 && tokenReserve != 0 && wethReserve != 0;
+
+        // Tell the token now so the decay flag applies from the first DEX
         // trade. The curve stays levy-exempt, so funding the pair is untaxed.
         token.onGraduation(pair);
 
         uint256 ethToLp = reserveEth;
-        // Price-matched token amount: tokens = eth / spot = eth * y / x.
-        uint256 tokensToLp = (ethToLp * virtualTokenReserve) / virtualEthReserve;
         uint256 inventory = token.balanceOf(address(this));
-        // Factory-validated params guarantee tokensToLp <= inventory; assert
-        // defensively rather than deploying a mispriced pool.
-        assert(tokensToLp <= inventory);
-
         reserveEth = 0;
 
-        weth.deposit{value: ethToLp}();
-        IERC20(address(weth)).safeTransfer(pair, ethToLp);
-        IERC20(address(token)).safeTransfer(pair, tokensToLp);
-        IUniswapV2Pair(pair).mint(DEAD);
+        uint256 tokensToLp;
+        uint256 ethDeposited; // graduation ETH actually locked as burned LP
+        if (!preSeeded) {
+            // Clean pool: open at the graduation price (tokens = eth * y / x).
+            // Factory-validated params guarantee the deposit fits the supply
+            // and mints non-zero LP, so this path cannot revert.
+            tokensToLp = (ethToLp * virtualTokenReserve) / virtualEthReserve;
+            assert(tokensToLp <= inventory);
+            weth.deposit{value: ethToLp}();
+            IERC20(wethAddr).safeTransfer(pair, ethToLp);
+            IERC20(tokenAddr).safeTransfer(pair, tokensToLp);
+            IUniswapV2Pair(pair).mint(DEAD);
+            ethDeposited = ethToLp;
+        } else {
+            // Attacker pre-seeded real LP. Deposit at the prevailing pool ratio
+            // so 100% of the curve's contribution is captured as burned LP and
+            // nothing is socialized to the attacker. If the ratio is so extreme
+            // that the deposit would mint zero LP (a griefing DoS), reclaim it
+            // and fall through — the ETH below is routed to the protocol, not
+            // the attacker, and the token still graduates.
+            tokensToLp = (ethToLp * tokenReserve) / wethReserve;
+            uint256 ethIn = ethToLp;
+            if (tokensToLp > inventory) {
+                // Token-limited: deposit all inventory, match the ETH side.
+                tokensToLp = inventory;
+                ethIn = (inventory * wethReserve) / tokenReserve;
+            }
+            if (tokensToLp != 0 && ethIn != 0) {
+                weth.deposit{value: ethIn}();
+                IERC20(wethAddr).safeTransfer(pair, ethIn);
+                IERC20(tokenAddr).safeTransfer(pair, tokensToLp);
+                try IUniswapV2Pair(pair).mint(DEAD) {
+                    ethDeposited = ethIn;
+                } catch {
+                    // Reclaim the deposit; unwrap the WETH back to native ETH.
+                    IUniswapV2Pair(pair).skim(address(this));
+                    weth.withdraw(ethIn);
+                    tokensToLp = 0;
+                }
+            } else {
+                tokensToLp = 0;
+            }
+        }
 
-        uint256 leftover = inventory - tokensToLp;
-        if (leftover != 0) IERC20(address(token)).safeTransfer(DEAD, leftover);
+        // Burn every token not locked as LP (leftover inventory + any reclaimed).
+        uint256 leftover = token.balanceOf(address(this));
+        if (leftover != 0) IERC20(tokenAddr).safeTransfer(DEAD, leftover);
 
-        emit Graduated(tokenAddr, pair, ethToLp, tokensToLp, leftover);
+        // Any graduation ETH not paired into burned LP (the token-limited
+        // remainder, or a fully-reclaimed degenerate deposit) becomes protocol
+        // revenue — never left with the attacker. Computed from tracked amounts,
+        // not `balance`, so a buyer's pending refund is untouched.
+        uint256 ethLeft = ethToLp - ethDeposited;
+        if (ethLeft != 0) feeRouter.collectCurveFee{value: ethLeft}(tokenAddr);
+
+        emit Graduated(tokenAddr, pair, ethDeposited, tokensToLp, leftover);
+    }
+
+    /// @dev Reads a pair's reserves in (token, weth) order.
+    function _pairReserves(address pair, address tokenAddr, address wethAddr)
+        private
+        view
+        returns (uint256 tokenReserve, uint256 wethReserve)
+    {
+        (uint112 r0, uint112 r1,) = IUniswapV2Pair(pair).getReserves();
+        return tokenAddr < wethAddr ? (uint256(r0), uint256(r1)) : (uint256(r1), uint256(r0));
     }
 }
 

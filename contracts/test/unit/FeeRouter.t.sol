@@ -192,6 +192,38 @@ contract FeeRouterTest is BaseSetup {
         feeRouter.harvest(makeAddr("unknown"), 0, block.timestamp);
     }
 
+    /// @dev With a keeper gate set, only the keeper may harvest; unsetting it
+    ///      restores permissionless behavior.
+    function test_harvest_keeperGate() public {
+        (RobinfunToken token, BondingCurve curve) = createToken(BUY_LEVY, SELL_LEVY);
+        graduate(token, curve);
+        address[] memory path = new address[](2);
+        path[0] = address(weth);
+        path[1] = address(token);
+        vm.prank(bob);
+        dexRouter.swapExactETHForTokensSupportingFeeOnTransferTokens{value: 0.5 ether}(0, path, bob, block.timestamp);
+
+        address keeper = makeAddr("keeper");
+        vm.prank(protocolMultisig);
+        feeRouter.setHarvester(keeper);
+
+        // A random caller is now rejected.
+        vm.prank(alice);
+        vm.expectRevert(FeeRouter.NotHarvester.selector);
+        feeRouter.harvest(address(token), 0, block.timestamp);
+
+        // The keeper can harvest.
+        vm.prank(keeper);
+        feeRouter.harvest(address(token), 0, block.timestamp);
+        assertEq(token.balanceOf(address(feeRouter)), 0, "keeper harvested");
+    }
+
+    function test_setHarvester_onlyOwner() public {
+        vm.prank(alice);
+        vm.expectRevert(abi.encodeWithSignature("OwnableUnauthorizedAccount(address)", alice));
+        feeRouter.setHarvester(alice);
+    }
+
     // ---------------------------------------------------------------- flushProtocol
 
     function test_flushProtocol_toTreasuryWhenNoVault() public {
@@ -232,7 +264,11 @@ contract FeeRouterTest is BaseSetup {
         assertEq(address(staking).balance - balBefore, pending);
         assertEq(feeRouter.protocolPending(), 0);
         assertEq(staking.totalRewardsNotified(), pending);
-        assertGt(staking.earned(protocolMultisig), 0);
+
+        // The vault streams rewards over time; after the window the sole
+        // staker has earned (approximately) the whole flushed amount.
+        vm.warp(block.timestamp + staking.rewardsDuration());
+        assertApproxEqRel(staking.earned(protocolMultisig), pending, 1e12);
     }
 
     function test_flushProtocol_zeroPendingReverts() public {

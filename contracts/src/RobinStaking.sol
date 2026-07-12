@@ -12,30 +12,37 @@ import {IRobinStaking} from "./interfaces/IRobinfun.sol";
 ///
 /// @notice Protocol revenue (the 1% curve fee on every trade plus 10% of every
 /// creator levy, platform-wide) arrives here in ETH from the FeeRouter and is
-/// distributed pro-rata to stakers using a `rewardPerTokenStored` accumulator
-/// (Synthetix/MasterChef-style). The protocol keeps nothing extra.
+/// distributed pro-rata to stakers using a Synthetix-style `StakingRewards`
+/// accumulator. The protocol keeps nothing extra.
 ///
 ///   - INSTANT unstake, no cooldown, no lockup.
 ///   - Rewards are claimable at any time, in ETH.
-///   - Accounting is checkpointed on every stake / unstake / claim, so newly
-///     staked tokens can never earn revenue that accrued before they arrived
-///     (no retroactive/flash-stake theft). Revenue in a given `notifyReward`
-///     goes to whoever is staked at that moment — the FeeRouter's
-///     permissionless `flushProtocol()` keeps those moments frequent and
-///     unpredictable.
 ///
-/// @dev Reward math: `rewardPerTokenStored` accumulates
-///      `amount * ACC_PRECISION / totalStaked` per notification. Claims can
-///      never exceed notified revenue (floor rounding leaves dust in the
-///      contract, bounded by a few wei per notification).
+/// @dev Each `notifyReward` does NOT dump its amount into stakers instantly.
+/// It is STREAMED linearly over `rewardsDuration` (default 7 days). This is
+/// what defends against just-in-time / flash-stake capture: because the reward
+/// source `FeeRouter.flushProtocol()` is permissionless, an attacker can pick
+/// the exact block a distribution fires — but streaming means a one-block
+/// stake earns only ~(1 block / rewardsDuration) of it, which is negligible.
+/// A staker who stays for the whole window earns their full pro-rata share.
+/// Reward accounting is checkpointed on every stake/withdraw/claim/notify, so
+/// there is no retroactive capture either.
+///
+/// Reward math cannot pay out more ETH than was notified: `notifyReward`
+/// asserts `rewardRate * rewardsDuration <= address(this).balance`, so the
+/// stream is always fully funded and claims are conserved (floor rounding
+/// leaves bounded dust in the contract).
 contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
     using SafeERC20 for IERC20;
 
     // ---------------------------------------------------------------- constants
 
-    /// @dev 1e27 accumulator precision: with 1B * 1e18 max stake, per-wei
-    ///      rewards still resolve without overflow (amounts << 2^128).
+    /// @dev Fixed-point scale for the reward accumulator (1e27).
     uint256 private constant ACC_PRECISION = 1e27;
+
+    /// @dev Bounds on the reward-streaming window.
+    uint256 public constant MIN_DURATION = 1 hours;
+    uint256 public constant MAX_DURATION = 30 days;
 
     // ---------------------------------------------------------------- state
 
@@ -45,11 +52,25 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
     /// @notice Only address allowed to push rewards (the FeeRouter).
     address public rewardDistributor;
 
+    /// @notice Length of the linear reward stream for each notification.
+    uint256 public rewardsDuration = 7 days;
+
     /// @notice Total $ROBIN staked.
     uint256 public totalStaked;
 
     /// @notice Staked balance per account.
     mapping(address => uint256) public stakedBalance;
+
+    // Synthetix StakingRewards accounting -------------------------------------
+
+    /// @notice Timestamp the current reward stream ends.
+    uint256 public periodFinish;
+
+    /// @notice Current reward emission rate, in ETH-wei per second.
+    uint256 public rewardRate;
+
+    /// @notice Last time the global accumulator was updated.
+    uint256 public lastUpdateTime;
 
     /// @notice Global reward accumulator (ETH-wei * ACC_PRECISION per token).
     uint256 public rewardPerTokenStored;
@@ -64,7 +85,7 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
     ///         notification instead of being lost.
     uint256 public pendingUndistributed;
 
-    /// @notice Lifetime ETH notified (for the stats/APR endpoints).
+    /// @notice Lifetime ETH notified into streams (for the stats/APR endpoints).
     uint256 public totalRewardsNotified;
 
     /// @notice Lifetime ETH claimed.
@@ -73,10 +94,11 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
     // ---------------------------------------------------------------- events
 
     event RewardDistributorSet(address indexed distributor);
+    event RewardsDurationSet(uint256 duration);
     event Staked(address indexed account, uint256 amount);
     event Withdrawn(address indexed account, uint256 amount);
     event RewardPaid(address indexed account, uint256 amount);
-    event RewardNotified(uint256 amount, uint256 distributed, uint256 rewardPerTokenStored);
+    event RewardNotified(uint256 amount, uint256 rewardRate, uint256 periodFinish);
 
     // ---------------------------------------------------------------- errors
 
@@ -85,10 +107,25 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
     error NotDistributor();
     error InsufficientStake();
     error EthTransferFailed();
+    error BadDuration();
+    error InsufficientRewardBalance();
 
     constructor(address robin_, address owner_) Ownable(owner_) {
         if (robin_ == address(0)) revert ZeroAddress();
         robin = IERC20(robin_);
+    }
+
+    // ---------------------------------------------------------------- modifier
+
+    /// @dev Checkpoints the global accumulator and, if given, one account.
+    modifier updateReward(address account) {
+        rewardPerTokenStored = rewardPerToken();
+        lastUpdateTime = lastTimeRewardApplicable();
+        if (account != address(0)) {
+            rewards[account] = earned(account);
+            userRewardPerTokenPaid[account] = rewardPerTokenStored;
+        }
+        _;
     }
 
     // ---------------------------------------------------------------- config
@@ -100,12 +137,21 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
         emit RewardDistributorSet(distributor);
     }
 
+    /// @notice Sets the reward-streaming window. Only between streams (never
+    ///         mid-stream, so an in-flight distribution's rate cannot be
+    ///         retimed under stakers).
+    function setRewardsDuration(uint256 duration) external onlyOwner {
+        if (duration < MIN_DURATION || duration > MAX_DURATION) revert BadDuration();
+        if (block.timestamp <= periodFinish) revert BadDuration();
+        rewardsDuration = duration;
+        emit RewardsDurationSet(duration);
+    }
+
     // ---------------------------------------------------------------- staking
 
     /// @notice Stakes `amount` $ROBIN. Earning starts from this checkpoint.
-    function stake(uint256 amount) external nonReentrant {
+    function stake(uint256 amount) external nonReentrant updateReward(msg.sender) {
         if (amount == 0) revert ZeroAmount();
-        _checkpoint(msg.sender);
         totalStaked += amount;
         stakedBalance[msg.sender] += amount;
         robin.safeTransferFrom(msg.sender, address(this), amount);
@@ -114,10 +160,9 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
 
     /// @notice Unstakes `amount` $ROBIN — instant, no cooldown. Accrued
     ///         rewards stay claimable.
-    function withdraw(uint256 amount) public nonReentrant {
+    function withdraw(uint256 amount) public nonReentrant updateReward(msg.sender) {
         if (amount == 0) revert ZeroAmount();
         if (stakedBalance[msg.sender] < amount) revert InsufficientStake();
-        _checkpoint(msg.sender);
         totalStaked -= amount;
         stakedBalance[msg.sender] -= amount;
         robin.safeTransfer(msg.sender, amount);
@@ -125,8 +170,7 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
     }
 
     /// @notice Claims all accrued ETH rewards.
-    function claim() public nonReentrant {
-        _checkpoint(msg.sender);
+    function claim() public nonReentrant updateReward(msg.sender) {
         uint256 reward = rewards[msg.sender];
         if (reward != 0) {
             rewards[msg.sender] = 0;
@@ -146,38 +190,63 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
     // ---------------------------------------------------------------- rewards in
 
     /// @inheritdoc IRobinStaking
-    /// @dev Distributes `msg.value` (plus anything received while the vault
-    ///      was empty) to current stakers instantly.
-    function notifyReward() external payable {
+    /// @dev Starts (or tops up) a linear reward stream over `rewardsDuration`.
+    ///      Anything received while the vault is empty is parked and folded in
+    ///      on the next notification with stakers present.
+    function notifyReward() external payable updateReward(address(0)) {
         if (msg.sender != rewardDistributor) revert NotDistributor();
+
         uint256 amount = msg.value + pendingUndistributed;
         if (amount == 0) revert ZeroAmount();
 
-        uint256 staked = totalStaked;
-        if (staked == 0) {
+        // With no stakers the stream would emit into the void; park instead.
+        if (totalStaked == 0) {
             pendingUndistributed = amount;
-            emit RewardNotified(msg.value, 0, rewardPerTokenStored);
+            emit RewardNotified(0, rewardRate, periodFinish);
             return;
         }
-
         pendingUndistributed = 0;
-        rewardPerTokenStored += (amount * ACC_PRECISION) / staked;
+
+        if (block.timestamp >= periodFinish) {
+            rewardRate = amount / rewardsDuration;
+        } else {
+            uint256 leftover = (periodFinish - block.timestamp) * rewardRate;
+            rewardRate = (amount + leftover) / rewardsDuration;
+        }
+
+        // Solvency: the stream must be fully funded by ETH actually held (net
+        // of parked funds, which are reserved for a future stream, and of the
+        // undistributed portion of any prior stream already counted in ETH).
+        if (rewardRate * rewardsDuration > address(this).balance) revert InsufficientRewardBalance();
+
+        lastUpdateTime = block.timestamp;
+        periodFinish = block.timestamp + rewardsDuration;
         totalRewardsNotified += amount;
-        emit RewardNotified(msg.value, amount, rewardPerTokenStored);
+        emit RewardNotified(amount, rewardRate, periodFinish);
     }
 
     // ---------------------------------------------------------------- views
 
+    /// @notice Last timestamp rewards are being distributed for.
+    function lastTimeRewardApplicable() public view returns (uint256) {
+        return block.timestamp < periodFinish ? block.timestamp : periodFinish;
+    }
+
+    /// @notice Current value of the global reward accumulator.
+    function rewardPerToken() public view returns (uint256) {
+        if (totalStaked == 0) return rewardPerTokenStored;
+        return rewardPerTokenStored
+            + ((lastTimeRewardApplicable() - lastUpdateTime) * rewardRate * ACC_PRECISION) / totalStaked;
+    }
+
     /// @notice ETH claimable by `account` right now.
     function earned(address account) public view returns (uint256) {
         return rewards[account]
-            + (stakedBalance[account] * (rewardPerTokenStored - userRewardPerTokenPaid[account])) / ACC_PRECISION;
+            + (stakedBalance[account] * (rewardPerToken() - userRewardPerTokenPaid[account])) / ACC_PRECISION;
     }
 
-    // ---------------------------------------------------------------- internals
-
-    function _checkpoint(address account) private {
-        rewards[account] = earned(account);
-        userRewardPerTokenPaid[account] = rewardPerTokenStored;
+    /// @notice Reward emitted per second at the current rate (for APR display).
+    function rewardRatePerSecond() external view returns (uint256) {
+        return block.timestamp < periodFinish ? rewardRate : 0;
     }
 }

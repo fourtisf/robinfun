@@ -56,9 +56,22 @@ forge script script/Deploy.s.sol --rpc-url $RPC_URL --broadcast
 
 - Reentrancy guards + checks-effects-interactions on every ETH-moving path; pull-over-push for creator earnings.
 - Tracked (not `balance`-derived) reserve accounting — force-sent ETH cannot poison the curve.
-- Donation-griefing at graduation neutralized (`skim` before the LP mint).
 - Fuzz + invariant coverage: curve monotonicity & solvency, x·y ≥ k, levy-split conservation, no-honeypot full-exit probe, staking reward conservation, graduation atomicity + LP burn.
 - **No mainnet deploy without a third-party audit** (brief §11). Suggested extra pre-audit step: bug bounty.
+
+### Internal adversarial review — findings addressed
+
+An 8-lens adversarial review (each finding cross-checked by a 3-verifier panel) surfaced and drove fixes for:
+
+- **Graduation front-running (critical).** An attacker could pre-create the token/WETH pair and mint real LP into it before graduation, skipping the old `totalSupply()==0` skim guard so Uniswap's `mint()` socialized the curve's liquidity to them. `_graduate` now deposits at the pool's prevailing ratio when it is pre-seeded, so 100% of the curve's contribution is captured as LP and burned to `0xdead` and nothing is donated to the attacker; unpairable ETH is routed to the protocol. The attacker keeps only their own seed, which arbitrage corrects at their expense.
+- **JIT / flash-stake capture of staking rewards (medium).** `flushProtocol` is permissionless, so an attacker could time a distribution and seize it with a one-block stake. `RobinStaking` now streams each reward linearly over `rewardsDuration` (Synthetix `StakingRewards`), so a one-block stake earns a negligible slice while honest long-term stakers keep their full share. "Instant unstake, claimable anytime" is preserved.
+- **Graduation-boundary buy revert (low).** A buy sized one wei below the exact gross needed to graduate underflowed the refund and reverted; `_splitBuy` now only caps when there is real surplus and lets the ≤2-wei rounding overshoot ride.
+- **Harvest sandwich (low/medium).** `harvest` market-sells the whole levy inventory with a caller-set slippage floor. Added an optional `harvester` keeper gate: mainnet sets a keeper that quotes off-chain and submits privately; a robust on-chain floor needs the price oracle that is still open question **§10.4**. Testnet can leave it permissionless.
+
+### Known residual limitations (for audit / ALFA)
+
+- **Levy scope is one canonical pool.** The fee-on-transfer levy taxes trades against the single `ammPair` set at graduation. Volume routed through a *different* pool (a second V2 pair, a V3 pool, another DEX) is untaxed, so a determined actor can migrate liquidity to dodge the levy. Taxing arbitrary pools would need an owner/creator-controlled taxable-address registry, which is itself a honeypot / transfer-gate risk that would violate the "a holder can always sell" guarantee — intentionally omitted pending a decision on **§10.6**.
+- **Staking dead-time.** If every staker unstakes mid-stream, rewards for the empty window are stranded in the vault (standard Synthetix behavior) — not lost to anyone, but not auto-redistributed.
 
 ## Repository layout
 

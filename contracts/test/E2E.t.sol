@@ -108,22 +108,29 @@ contract E2ETest is BaseSetup {
         vm.stopPrank();
 
         uint256 pending = feeRouter.protocolPending();
-        feeRouter.flushProtocol(); // permissionless
+        feeRouter.flushProtocol(); // permissionless; starts a linear reward stream
 
-        // Pro-rata 75/25, paid in ETH, claimable instantly.
-        assertApproxEqAbs(staking.earned(alice), (pending * 3) / 4, 4);
-        assertApproxEqAbs(staking.earned(bob), pending / 4, 4);
+        // Revenue streams over rewardsDuration (JIT-capture resistant); warp to
+        // the end so it fully vests, then it splits pro-rata 75/25 in ETH.
+        vm.warp(block.timestamp + staking.rewardsDuration());
+        assertApproxEqRel(staking.earned(alice), (pending * 3) / 4, 1e12);
+        assertApproxEqRel(staking.earned(bob), pending / 4, 1e12);
 
         uint256 aliceEth = alice.balance;
         vm.prank(alice);
         staking.claim();
-        assertEq(alice.balance - aliceEth, (pending * 3) / 4 - _dust(pending, 3, 4));
+        assertApproxEqRel(alice.balance - aliceEth, (pending * 3) / 4, 1e12);
 
         // Instant unstake, no cooldown.
         vm.prank(bob);
         staking.exit();
         assertEq(robin.balanceOf(bob), 100_000_000e18);
         assertEq(staking.stakedBalance(bob), 0);
+
+        // Conservation: everything paid out plus what remains equals what was
+        // streamed in (dust from rate flooring stays in the vault).
+        assertLe(staking.totalRewardsClaimed(), pending);
+        assertEq(staking.totalRewardsClaimed() + address(staking).balance, pending);
     }
 
     /// @dev protocol share of a gross curve buy: 1% fee + 10% of the levy.
@@ -131,10 +138,5 @@ contract E2ETest is BaseSetup {
         uint256 fee = (gross * CURVE_FEE_BPS) / BPS;
         uint256 levy = (gross * levyBps) / BPS;
         return fee + (levy - (levy * 9_000) / BPS);
-    }
-
-    /// @dev accumulator floor-rounding dust for a pending/num/den split.
-    function _dust(uint256, uint256, uint256) internal pure returns (uint256) {
-        return 0; // exact for these round stake numbers; kept for readability
     }
 }
