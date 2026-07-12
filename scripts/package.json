@@ -1,0 +1,9 @@
+{
+  "name": "robinfun-vanity-miner",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Off-chain CREATE2 salt miner for Robinfun vanity token addresses (…feed)",
+  "bin": { "mine-vanity": "mine-vanity.mjs" },
+  "dependencies": { "js-sha3": "^0.9.3" }
+}

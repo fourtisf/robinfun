@@ -20,3 +20,4 @@ server/package-lock.json
 .DS_Store
 .idea/
 .vscode/
+scripts/node_modules/

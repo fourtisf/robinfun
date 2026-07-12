@@ -454,8 +454,83 @@ contract RobinfunFactoryTest is BaseSetup {
             sellLevyBps: SELL_LEVY,
             decayAtGraduation: false,
             renounceRateControl: false,
-            devBuyMinTokensOut: 0
+            devBuyMinTokensOut: 0,
+            vanitySalt: bytes32(0)
         });
+    }
+
+    // ---------------------------------------------------------------- vanity address (…feed)
+
+    function test_vanity_predictMatchesDeployed() public {
+        bytes32 salt = keccak256("some-mined-salt");
+        RobinfunFactory.CreateParams memory p = _params("Feed Me", "FEED");
+        p.vanitySalt = salt;
+
+        address predicted = factory.predictTokenAddress(creator, salt);
+        vm.prank(creator);
+        (address token,) = factory.createToken{value: DEPLOY_FEE}(p);
+        assertEq(token, predicted, "deployed token address must equal the predicted one");
+    }
+
+    /// @dev Locks the exact CREATE2 inputs the off-chain JS miner replicates:
+    ///      the EIP-1167 minimal-proxy init code around the token impl, the
+    ///      salt = keccak256(abi.encode(creator, vanitySalt)), and the standard
+    ///      0xff CREATE2 address formula. If this passes, the JS miner using the
+    ///      same bytes computes identical addresses.
+    function test_vanity_formulaMatchesRawCreate2() public view {
+        bytes32 vanitySalt = keccak256("mine");
+        address impl = factory.tokenImplementation();
+
+        bytes memory initCode =
+            abi.encodePacked(hex"3d602d80600a3d3981f3363d3d373d3d3d363d73", impl, hex"5af43d82803e903d91602b57fd5bf3");
+        bytes32 initCodeHash = keccak256(initCode);
+        bytes32 salt = keccak256(abi.encode(creator, vanitySalt));
+        address raw = address(
+            uint160(uint256(keccak256(abi.encodePacked(bytes1(0xff), address(factory), salt, initCodeHash))))
+        );
+
+        assertEq(raw, factory.predictTokenAddress(creator, vanitySalt), "raw CREATE2 formula must match predict()");
+    }
+
+    function test_vanity_saltBoundToCreator() public {
+        bytes32 salt = keccak256("shared-salt");
+        // Same salt, different creators → different predicted addresses, so a
+        // mined salt cannot be front-run into another wallet's address.
+        assertTrue(factory.predictTokenAddress(alice, salt) != factory.predictTokenAddress(bob, salt));
+    }
+
+    function test_vanity_reusedSaltReverts() public {
+        bytes32 salt = keccak256("once");
+        RobinfunFactory.CreateParams memory p = _params("One", "ONE");
+        p.vanitySalt = salt;
+        vm.prank(creator);
+        factory.createToken{value: DEPLOY_FEE}(p);
+        // Same creator + same salt → same address → CREATE2 collision reverts.
+        vm.prank(creator);
+        vm.expectRevert();
+        factory.createToken{value: DEPLOY_FEE}(p);
+    }
+
+    /// @dev Proves the end-to-end vanity flow: mine a salt off-chain (here in
+    ///      the test) until the predicted address ends in a target hex nibble,
+    ///      then deploy and confirm the real address carries the suffix. A
+    ///      single nibble keeps the test fast; production mines 4 nibbles (feed).
+    function test_vanity_minedSuffixLandsOnChain() public {
+        bytes32 salt;
+        address predicted;
+        for (uint256 i = 0; i < 4096; ++i) {
+            salt = keccak256(abi.encode("mine", i));
+            predicted = factory.predictTokenAddress(creator, salt);
+            if (uint160(predicted) & 0xf == 0xd) break; // last nibble == 'd' (…feeD)
+        }
+        assertEq(uint160(predicted) & 0xf, 0xd, "miner should find a matching salt");
+
+        RobinfunFactory.CreateParams memory p = _params("Feed", "FEED");
+        p.vanitySalt = salt;
+        vm.prank(creator);
+        (address token,) = factory.createToken{value: DEPLOY_FEE}(p);
+        assertEq(token, predicted);
+        assertEq(uint160(token) & 0xf, 0xd, "deployed token address ends in the mined nibble");
     }
 
     receive() external payable {}

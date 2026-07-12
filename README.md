@@ -19,7 +19,7 @@ This repo currently contains **M1: the smart-contract core + full Foundry test s
 
 ### What's wired
 
-- `RobinfunFactory` — one-tx launches via EIP-1167 clones, 10%/0.5%-step levy caps enforced, deploy fee, atomic dev buy, rich `TokenCreated` events.
+- `RobinfunFactory` — one-tx launches via EIP-1167 clones, 10%/0.5%-step levy caps enforced, deploy fee, atomic dev buy, rich `TokenCreated` events. Optional **vanity address**: tokens deploy via CREATE2 with a creator-bound salt, so an off-chain miner (`scripts/mine-vanity.mjs`) can grind every token address to end in Robinfun's signature suffix **`…feed`**.
 - `RobinfunToken` — fixed 1B supply, fee-on-transfer levy on canonical-pair trades only (wallet↔wallet never taxed), lower-only rates, `renounceRateControl`, optional halve-at-graduation decay, frozen exemption set, **no mint/pause/blacklist/max-wallet — honeypots structurally impossible**.
 - `BondingCurve` — pump.fun-style virtual-reserve constant product (~$4k start → ~$44k graduation at ETH=$3850), 1% curve fee + ETH-denominated levy per trade, capped final buy w/ refund, atomic graduation: pool seeded at graduation price, **LP minted directly to `0xdead` (100% burned)**, leftover inventory burned, curve closed forever.
 - `FeeRouter` — 90/10 levy split (creator/protocol), permissionless `harvest()` (token levies → ETH via DEX), pull-based creator claims (`claim`/`claimMany` = Treasury page), permissionless `flushProtocol()` streaming to stakers.

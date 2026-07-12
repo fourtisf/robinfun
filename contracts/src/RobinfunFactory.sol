@@ -89,6 +89,13 @@ contract RobinfunFactory is Ownable2Step {
         bool renounceRateControl;
         /// @dev Slippage floor for the optional dev buy.
         uint256 devBuyMinTokensOut;
+        /// @dev Vanity salt: the token is deployed with CREATE2 at a
+        ///      deterministic address, so an off-chain miner can grind this
+        ///      value until the resulting token address ends in a chosen hex
+        ///      suffix (Robinfun's signature is `…feed`). Bound to the caller
+        ///      (see `_tokenSalt`) so a mined salt cannot be front-run. Pass 0
+        ///      to skip vanity — the address is still deterministic and unique.
+        bytes32 vanitySalt;
     }
 
     // ---------------------------------------------------------------- events
@@ -165,7 +172,13 @@ contract RobinfunFactory is Ownable2Step {
         if (bytes(p.name).length == 0 || bytes(p.name).length > 64) revert BadName();
         if (bytes(p.symbol).length == 0 || bytes(p.symbol).length > 16) revert BadName();
 
-        token = Clones.clone(tokenImplementation);
+        // With a vanity salt, deploy the token at a deterministic CREATE2
+        // address (so it can carry the `…feed` suffix a miner ground for);
+        // otherwise a plain clone, which is always unique. The curve is always
+        // a plain clone — its address is not user-facing.
+        token = p.vanitySalt == bytes32(0)
+            ? Clones.clone(tokenImplementation)
+            : Clones.cloneDeterministic(tokenImplementation, _tokenSalt(msg.sender, p.vanitySalt));
         curve = Clones.clone(curveImplementation);
 
         RobinfunToken(token).initialize(
@@ -223,6 +236,20 @@ contract RobinfunFactory is Ownable2Step {
     /// @notice Number of tokens ever launched.
     function allTokensLength() external view returns (uint256) {
         return allTokens.length;
+    }
+
+    /// @notice The address a token WILL have if `creator` launches with
+    ///         `vanitySalt`. An off-chain miner grinds `vanitySalt` until this
+    ///         ends in the desired hex suffix (e.g. `…feed`), then passes that
+    ///         salt to `createToken`.
+    function predictTokenAddress(address creator, bytes32 vanitySalt) public view returns (address) {
+        return Clones.predictDeterministicAddress(tokenImplementation, _tokenSalt(creator, vanitySalt), address(this));
+    }
+
+    /// @dev Binds the user's vanity salt to the creator so a salt observed in
+    ///      the mempool cannot be front-run into someone else's address.
+    function _tokenSalt(address creator, bytes32 vanitySalt) internal pure returns (bytes32) {
+        return keccak256(abi.encode(creator, vanitySalt));
     }
 
     // ---------------------------------------------------------------- config (owner, future launches only)
