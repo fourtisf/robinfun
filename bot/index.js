@@ -288,5 +288,17 @@ bot.api.setMyCommands([
   { command: 'cancel', description: 'Cancel the current listing' },
 ]).catch((e) => console.error('setMyCommands failed (non-fatal):', e?.message || e));
 
+// Profile texts (About + the pre-Start description). Best-effort.
+bot.api.setMyShortDescription(
+  'Pay-to-list your token on Robinfun. Auto-posted to ' + LISTING_CHANNEL + ' the moment your ETH fee confirms on-chain. 🪶'
+).catch((e) => console.error('setMyShortDescription failed (non-fatal):', e?.message || e));
+bot.api.setMyDescription(
+  '🪶 Robinfun listings — get your token in front of the community.\n\n' +
+  '1) /list and answer a few quick questions\n' +
+  '2) Pay the listing fee in ETH on Robinhood Chain\n' +
+  '3) Paste the transaction hash\n\n' +
+  'The moment it confirms, your token is auto-posted to ' + LISTING_CHANNEL + ' and the Robinfun board. Tap /list to begin.'
+).catch((e) => console.error('setMyDescription failed (non-fatal):', e?.message || e));
+
 console.log(`@robinlistbot up · fee ${weiToEth(FEE_WEI)} ETH · channel ${LISTING_CHANNEL} · chain ${CHAIN_ID}`);
 bot.start();
