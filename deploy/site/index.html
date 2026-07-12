@@ -568,6 +568,20 @@ input[type=range]::-moz-range-thumb{
 .modal .m-sub{color:var(--cream-dim);font-size:13.5px;margin-bottom:18px}
 .modal-close{position:absolute;top:14px;right:14px;color:var(--cream-mute);font-size:18px;padding:4px 8px}
 .modal-close:hover{color:var(--cream)}
+/* wallet picker */
+.wm-modal{width:min(400px,100%)}
+.wm-list{display:flex;flex-direction:column;gap:8px;margin-top:2px}
+.wm-row{display:flex;align-items:center;gap:12px;width:100%;padding:12px 14px;border:1px solid var(--rule-2);
+  border-radius:var(--r-md);background:var(--ledger-2);text-align:left;cursor:pointer;
+  transition:border-color .15s,background .15s,transform .1s}
+.wm-row:hover{border-color:var(--gilt);background:var(--gilt-dim)}
+.wm-row:active{transform:translateY(1px)}
+.wm-ico{width:30px;height:30px;border-radius:8px;flex-shrink:0;object-fit:cover;display:block}
+.wm-ico-ph{background:linear-gradient(140deg,var(--gilt-bright),var(--gilt))}
+.wm-nm{font-weight:600;font-size:14.5px;flex:1;color:var(--cream)}
+.wm-go{color:var(--cream-mute);font-family:var(--font-mono);font-size:14px}
+.wm-empty{color:var(--cream-dim);font-size:13px;margin-bottom:6px}
+.wm-foot{color:var(--cream-mute);font-size:11px;margin-top:15px;text-align:center}
 .levied{
   position:absolute;top:18px;right:52px;font-family:var(--font-display);font-weight:700;font-size:20px;
   letter-spacing:.1em;color:var(--gilt-bright);border:2.5px solid var(--gilt);border-radius:8px;padding:2px 12px;
@@ -1189,6 +1203,17 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   </div>
 </div>
 
+<!-- ======================= WALLET PICKER ======================= -->
+<div class="modal-back" id="walletModal" onclick="if(event.target===this)closeWalletModal()">
+  <div class="modal wm-modal">
+    <button class="modal-close" onclick="closeWalletModal()" aria-label="Close">✕</button>
+    <h3>Connect a wallet</h3>
+    <p class="m-sub">Pick your wallet to continue on Robinhood Chain.</p>
+    <div class="wm-list" id="wm-list"></div>
+    <p class="wm-foot">Robinfun never moves funds without your approval in the wallet.</p>
+  </div>
+</div>
+
 <div class="toasts" id="toasts"></div>
 
 <!-- ======================= FOOTER ======================= -->
@@ -1247,32 +1272,82 @@ const CHAIN = null; /* e.g.
     nativeCurrency:{name:'Ether',symbol:'ETH',decimals:18},
     rpcUrls:['https://rpc...'], blockExplorerUrls:['https://explorer...'] }; */
 
+/* ---- Multi-wallet discovery (EIP-6963) ----
+   Every installed injected wallet (MetaMask, Rabby, Coinbase, Brave, OKX, …)
+   announces itself; we list them all in the picker instead of guessing one. */
+const discoveredWallets = new Map();   // uuid -> {info, provider}
+let activeProvider = null;
+let wmList = [];
+window.addEventListener('eip6963:announceProvider', (e)=>{
+  const d = e.detail; if(d && d.info && d.provider) discoveredWallets.set(d.info.uuid, d);
+});
+window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+function walletOptions(){
+  const list = [...discoveredWallets.values()];
+  // Legacy fallback: a single injected provider that didn't announce via 6963.
+  if(!list.length && window.ethereum){
+    list.push({ info:{ uuid:'legacy', name: window.ethereum.isMetaMask?'MetaMask':'Browser Wallet', icon:'' }, provider: window.ethereum });
+  }
+  return list;
+}
+
 async function connectWallet(){
   // Already connected → the address button opens the Treasury.
   if(wallet){ go('treasury'); return; }
-  const eth = window.ethereum;
-  if(!eth){
-    toast('No EVM wallet found — install <b>MetaMask</b> or Rabby','seal');
-    window.open('https://metamask.io/download/','_blank');
-    return;
+  window.dispatchEvent(new Event('eip6963:requestProvider'));   // re-scan
+  setTimeout(openWalletModal, 60);                              // let wallets announce
+}
+
+function openWalletModal(){
+  wmList = walletOptions();
+  const box = document.getElementById('wm-list');
+  if(!wmList.length){
+    box.innerHTML =
+      '<p class="wm-empty">No EVM wallet detected. Install one, then reload:</p>'+
+      '<a class="wm-row" href="https://metamask.io/download/" target="_blank" rel="noopener noreferrer"><span class="wm-ico wm-ico-ph"></span><span class="wm-nm">Get MetaMask</span><span class="wm-go">↗</span></a>'+
+      '<a class="wm-row" href="https://rabby.io/" target="_blank" rel="noopener noreferrer"><span class="wm-ico wm-ico-ph"></span><span class="wm-nm">Get Rabby</span><span class="wm-go">↗</span></a>';
+  }else{
+    box.innerHTML = wmList.map((w,i)=>
+      '<button type="button" class="wm-row" onclick="connectWith('+i+')">'+
+        (w.info.icon?'<img class="wm-ico" src="'+w.info.icon+'" alt="">':'<span class="wm-ico wm-ico-ph"></span>')+
+        '<span class="wm-nm">'+esc(w.info.name)+'</span><span class="wm-go">→</span>'+
+      '</button>').join('');
   }
+  document.getElementById('walletModal').classList.add('open');
+}
+function closeWalletModal(){ document.getElementById('walletModal').classList.remove('open'); }
+
+async function connectWith(i){
+  const entry = wmList[i]; if(!entry) return;
+  const provider = entry.provider;
   try{
-    const accounts = await eth.request({method:'eth_requestAccounts'});
+    const accounts = await provider.request({method:'eth_requestAccounts'});
     if(!accounts || !accounts.length){ toast('Wallet connection cancelled','seal'); return; }
-    await ensureChain(eth);
+    activeProvider = provider;
+    attachProviderEvents(provider);
+    await ensureChain(provider);
     onWalletConnected(accounts[0]);
+    closeWalletModal();
   }catch(err){
-    toast('Wallet connection failed'+(err && err.code===4001?' — you rejected the request':''),'seal');
+    toast('Connection failed'+(err && err.code===4001?' — you rejected the request':''),'seal');
   }
 }
 
-async function ensureChain(eth){
+function attachProviderEvents(provider){
+  if(!provider || !provider.on || provider.__rf) return;
+  provider.__rf = true;   // attach once per provider
+  provider.on('accountsChanged', (accs)=>{ if(!accs || !accs.length) disconnectWallet(); else onWalletConnected(accs[0]); });
+  provider.on('chainChanged', ()=>{ /* network changed */ });
+}
+
+async function ensureChain(provider){
   if(!CHAIN) return;
   try{
-    await eth.request({method:'wallet_switchEthereumChain', params:[{chainId:CHAIN.chainId}]});
+    await provider.request({method:'wallet_switchEthereumChain', params:[{chainId:CHAIN.chainId}]});
   }catch(e){
     if(e && e.code===4902){
-      try{ await eth.request({method:'wallet_addEthereumChain', params:[CHAIN]}); }catch(_){}
+      try{ await provider.request({method:'wallet_addEthereumChain', params:[CHAIN]}); }catch(_){}
     }
   }
 }
@@ -1293,15 +1368,6 @@ function disconnectWallet(){
   MY_ADDR = '0x7A3f19bC…C41d';
   document.getElementById('walletBtn').textContent = 'Connect wallet';
   const w = document.getElementById('c-wallet'); if(w) w.value = '';
-}
-
-/* React to the user switching accounts / disconnecting in their wallet. */
-if(window.ethereum && window.ethereum.on){
-  window.ethereum.on('accountsChanged', (accs)=>{
-    if(!accs || !accs.length) disconnectWallet();
-    else onWalletConnected(accs[0]);
-  });
-  window.ethereum.on('chainChanged', ()=>{ /* network changed — nothing to re-render yet */ });
 }
 function seedMyTokens(){
   // Real product: your tokens are the ones you launched (persisted in the
