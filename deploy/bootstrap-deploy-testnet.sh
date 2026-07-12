@@ -53,8 +53,16 @@ cd "$SRC_DIR/contracts"
 log "Installing contract dependencies (OpenZeppelin + solc)"
 npm install --no-audit --no-fund
 
-log "Building contracts"
-forge build
+# On the VPS we use NATIVE solc (svm downloads the real 0.8.26), NOT the WASM
+# shim that foundry.toml pins for the sandbox — the WASM build crashes here with
+# "memory access out of bounds" on this many files + via_ir. `--use 0.8.26`
+# overrides the pinned `solc = "tools/solc"`. We keep evm_version = cancun (from
+# foundry.toml): OpenZeppelin 5.x emits the `mcopy` opcode, so the contracts do
+# not compile for older EVMs, and Robinhood Chain (Arbitrum Orbit) supports it.
+SOLC_FLAGS="--use 0.8.26"
+
+log "Building contracts with native solc 0.8.26"
+forge build $SOLC_FLAGS
 
 # Default the treasury to the deployer's own address if not given.
 if [ -z "${TREASURY:-}" ]; then
@@ -70,7 +78,7 @@ log "Deployer ${DEPLOYER} balance: ${BAL} wei"
 [ "$BAL" != "0" ] || die "Deployer has 0 ETH. Fund ${DEPLOYER} at faucet.testnet.chain.robinhood.com, then re-run."
 
 log "Deploying to Robinhood Chain testnet (${RPC})"
-forge script script/DeployTestnet.s.sol --rpc-url "$RPC" --broadcast -vvv 2>&1 | tee /tmp/robinfun-deploy.log
+forge script script/DeployTestnet.s.sol $SOLC_FLAGS --rpc-url "$RPC" --broadcast -vvv 2>&1 | tee /tmp/robinfun-deploy.log
 
 log "Done. Copy the addresses below (also in broadcast/DeployTestnet.s.sol/46630/run-latest.json):"
 grep -E "WETH|DEX (factory|router)|FeeRouter|Factory|tokenImpl|treasury|deployFee" /tmp/robinfun-deploy.log || true
