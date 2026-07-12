@@ -86,6 +86,35 @@ logos. Re-run any time to pick up new code.
 > trusts `POST /api/tokens` (brief §7). Once on-chain, gate creation on the
 > `TokenCreated` event / a creator signature.
 
+## Deploy the contracts to Robinhood Chain TESTNET
+
+> **Testnet only.** The contracts are not audited — do not point this at mainnet.
+> This makes `Launch`, trading, graduation and the `…feed` vanity address real
+> on Robinhood Chain testnet, with fake (faucet) ETH so mistakes cost nothing.
+
+**1. Make a fresh deployer wallet** (a NEW MetaMask account — never your main
+one). Copy its **private key** and **address**.
+
+**2. Add the network** to MetaMask:
+- Name: `Robinhood Chain Testnet` · RPC: `https://rpc.testnet.chain.robinhood.com`
+- Chain ID: `46630` · Symbol: `ETH` · Explorer: `https://explorer.testnet.chain.robinhood.com`
+
+**3. Fund the deployer** at `https://faucet.testnet.chain.robinhood.com` (paste the deployer address).
+
+**4. Deploy** — on the VPS (as `root`):
+```bash
+curl -fsSL https://raw.githubusercontent.com/fourtisf/robinfun/claude/new-session-v8c9tt/deploy/bootstrap-deploy-testnet.sh -o /root/deploy-testnet.sh && chmod +x /root/deploy-testnet.sh
+PRIVATE_KEY=0xYOUR_FRESH_TESTNET_KEY TREASURY=0xYOUR_MAIN_WALLET /root/deploy-testnet.sh
+```
+It installs Foundry, builds, and deploys the protocol + a testnet DEX. It prints
+all addresses (also in `contracts/broadcast/DeployTestnet.s.sol/46630/run-latest.json`).
+
+**5.** Send the printed **Factory** address back so the frontend can be wired to
+the live contracts (chainId 46630).
+
+For mainnet later, use `contracts/script/Deploy.s.sol` with the real audited
+Uniswap v2 addresses — only after a third-party audit.
+
 ## Updating the site later
 
 Replace the file and reload isn't even needed (static files):
