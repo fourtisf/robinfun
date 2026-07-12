@@ -1,0 +1,18 @@
+# Foundry
+contracts/out/
+contracts/cache/
+contracts/broadcast/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Env / secrets — never commit keys
+.env
+.env.*
+!.env.example
+
+# Editor
+.DS_Store
+.idea/
+.vscode/

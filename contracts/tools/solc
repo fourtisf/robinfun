@@ -1,0 +1,41 @@
+#!/usr/bin/env node
+/**
+ * Native-solc CLI shim backed by the npm `solc` package (soljson / WASM).
+ *
+ * The sandboxed build environment cannot reach binaries.soliditylang.org, so
+ * forge cannot download a native compiler. Forge only ever needs two calls:
+ *
+ *   solc --version           → version banner (parsed by foundry-compilers)
+ *   solc [flags] --standard-json  → standard JSON in on stdin, out on stdout
+ *
+ * Forge inlines every source file into the standard-JSON input, so no import
+ * callback / filesystem access is required. Point foundry.toml at this file:
+ *
+ *   solc = "tools/solc"
+ *
+ * Compilation is byte-for-byte the same solc 0.8.26 release, just ~2-3x
+ * slower (WASM). CI with network access can drop this and use native solc.
+ */
+'use strict';
+const path = require('path');
+// Resolve the `solc` package relative to this file, not the caller's cwd.
+const solc = require(require.resolve('solc', {paths: [path.join(__dirname, '..')]}));
+
+const args = process.argv.slice(2);
+
+if (args.includes('--version')) {
+  process.stdout.write(
+    'solc, the solidity compiler commandline interface\n' +
+    `Version: ${solc.version()}\n`
+  );
+  process.exit(0);
+}
+
+if (!args.includes('--standard-json')) {
+  process.stderr.write('solc-shim: only --version and --standard-json are supported\n');
+  process.exit(1);
+}
+
+const fs = require('fs');
+const input = fs.readFileSync(0, 'utf8');
+process.stdout.write(solc.compile(input));

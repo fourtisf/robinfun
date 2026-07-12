@@ -1,0 +1,38 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+test = "test"
+script = "script"
+# Sandboxed builds cannot reach binaries.soliditylang.org; tools/solc is a
+# CLI shim around the npm soljson 0.8.26 compiler (same release, WASM build).
+# With network access you can replace this with: solc_version = "0.8.26"
+solc = "tools/solc"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 800
+via_ir = true
+bytecode_hash = "none"
+fs_permissions = [{ access = "read", path = "./" }]
+remappings = [
+    "forge-std/=lib/forge-std/",
+    "@openzeppelin/contracts/=node_modules/@openzeppelin/contracts/",
+    "@openzeppelin/contracts-upgradeable/=node_modules/@openzeppelin/contracts-upgradeable/",
+]
+
+[fuzz]
+runs = 512
+
+[invariant]
+runs = 64
+depth = 64
+fail_on_revert = false
+
+[profile.ci]
+fuzz = { runs = 2048 }
+invariant = { runs = 256, depth = 128 }
+
+[fmt]
+line_length = 120
+tab_width = 4
+bracket_spacing = false
