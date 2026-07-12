@@ -1050,7 +1050,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <div class="panel-title">Bonding curve</div>
           <div class="curve">
             <div class="curve-bar" style="height:8px"><div class="curve-fill" id="tk-fill" style="width:0%"></div></div>
-            <div class="curve-lbl"><span id="tk-curvelbl">$0 raised</span><span>graduates at $44k</span></div>
+            <div class="curve-lbl"><span id="tk-curvelbl">$0 raised</span><span id="tk-gradlbl">graduates at $44k</span></div>
           </div>
           <p style="font-size:12px;color:var(--cream-dim);margin-top:8px" id="tk-curvedesc">
             When the cap reaches ~$44k, liquidity deploys to Uniswap and <b style="color:var(--cream)">100% of the LP is burned</b>. The fee keeps working after graduation — it lives in the token contract.
@@ -1311,9 +1311,32 @@ const FACTORY_ABI = [
   'function deployFee() view returns (uint256)',
   'function owner() view returns (address)',
   'function setDeployFee(uint256 fee)',
+  'function curveOf(address token) view returns (address)',
   'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
 ];
+const CURVE_ABI = [
+  'function buy(uint256 minTokensOut, uint256 deadline) payable returns (uint256)',
+  'function sell(uint256 tokensIn, uint256 minEthOut, uint256 deadline) returns (uint256)',
+  'function currentPrice() view returns (uint256)',
+  'function marketCapEth() view returns (uint256)',
+  'function graduationProgress() view returns (uint256 collected, uint256 target)',
+  'function virtualEthReserve() view returns (uint256)',
+  'function virtualTokenReserve() view returns (uint256)',
+  'function graduated() view returns (bool)',
+  'function quoteBuy(uint256 ethIn) view returns (uint256 fee, uint256 levy, uint256 net, uint256 tokensOut, uint256 refund)',
+  'function quoteSell(uint256 tokensIn) view returns (uint256 gross, uint256 fee, uint256 levy, uint256 net)',
+  'event Buy(address indexed trader, address indexed recipient, uint256 grossEth, uint256 curveFeeEth, uint256 levyEth, uint256 netEth, uint256 tokensOut, uint256 virtualEthReserve, uint256 virtualTokenReserve)',
+  'event Sell(address indexed trader, uint256 tokensIn, uint256 grossEth, uint256 curveFeeEth, uint256 levyEth, uint256 netEth, uint256 virtualEthReserve, uint256 virtualTokenReserve)',
+];
+const ERC20_ABI = [
+  'function balanceOf(address) view returns (uint256)',
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
+];
 const chainReady = () => !!(CHAIN && FACTORY_ADDR && typeof ethers !== 'undefined');
+const realToken = (t) => !!(chainReady() && t && t.ca && /^0x[0-9a-fA-F]{40}$/.test(t.ca));
+let _ro = null;
+const roProvider = () => (_ro ||= new ethers.JsonRpcProvider(CHAIN.rpcUrls[0]));
 
 /* ---- Multi-wallet discovery (EIP-6963) ----
    Every installed injected wallet (MetaMask, Rabby, Coinbase, Brave, OKX, …)
@@ -1665,7 +1688,7 @@ function go(page, push){
   document.getElementById('nav').classList.remove('open');
   if(page==='treasury') renderTreasury();
   if(page==='stake') renderStake();
-  if(page!=='token') currentTokenId = null;
+  if(page!=='token'){ currentTokenId = null; stopRealPoll(); }
   const r = ROUTES[page];
   if(r){ push ? setRoute(r.path, r.title) : (document.title = r.title); }
   window.scrollTo({top:0, behavior:'instant'});
@@ -1794,7 +1817,7 @@ function renderToken(fresh){
   document.getElementById('tk-name').textContent = t.name;
   document.getElementById('tk-ticker').textContent = '$'+t.ticker;
   document.getElementById('tk-stamp').innerHTML = stampHtml(t);
-  document.getElementById('tk-ca').innerHTML = '0x'+t.id.padEnd(4,'f')+'…4f2 <span style="opacity:.6">⧉</span>';
+  document.getElementById('tk-ca').innerHTML = (realToken(t)? t.ca.slice(0,6)+'…'+t.ca.slice(-4) : '0x'+t.id.padEnd(4,'f')+'…4f2')+' <span style="opacity:.6">⧉</span>';
   document.getElementById('tk-creator').textContent = t.mine? 'you' : t.creator;
   document.getElementById('tk-age').textContent = '· launched '+ago(t.created)+' ago';
   document.getElementById('tk-status').innerHTML = t.graduated
@@ -1826,19 +1849,27 @@ function renderToken(fresh){
     ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
     : (t.sellTax>0? t.sellTax+'% sell fee → creator' : 'no sell fee');
   if(fresh){
-    buildCandles(t);
-    renderTrades(t);
     renderHolders(t);
     renderThread(t);
     setSide('buy');
     document.getElementById('amt').value='';
     quote();
     setSubtab('trades');
+    if(realToken(t)){
+      document.getElementById('tradesBody').innerHTML = '<tr><td colspan="6" style="padding:16px;color:var(--cream-mute)">Loading on-chain trades…</td></tr>';
+    }else{
+      buildCandles(t); renderTrades(t);
+    }
   }
-  drawChart(t);
+  if(realToken(t)){ startRealPoll(t); refreshReal(t, fresh); }
+  else drawChart(t);
 }
 
-function copyCA(){ toast('Contract address copied','gold'); }
+function copyCA(){
+  const t = tok(), ca = realToken(t) ? t.ca : null;
+  if(ca && navigator.clipboard){ navigator.clipboard.writeText(ca).then(()=>toast('Contract address copied','gold')).catch(()=>{}); return; }
+  toast('Contract address copied','gold');
+}
 
 /* ---------------- candles ---------------- */
 function buildCandles(t){
@@ -1907,6 +1938,196 @@ function drawChart(t){
   });
 }
 
+/* ================================================================
+   REAL ON-CHAIN TRADING (M4) — active when a token has a real CA.
+   Reads price/reserves/trades from the BondingCurve; buy/sell are
+   signed by the user's wallet. Demo tokens keep the simulation.
+   ================================================================ */
+let realPoll = null;
+async function loadCurveState(t){
+  if(!realToken(t)) return false;
+  try{
+    const ro = roProvider();
+    if(!t.curveAddr){
+      const c = await new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro).curveOf(t.ca);
+      if(!c || c===ethers.ZeroAddress) return false;
+      t.curveAddr = c;
+    }
+    const curve = new ethers.Contract(t.curveAddr, CURVE_ABI, ro);
+    const [pWei, mWei, prog, grad, vE, vT] = await Promise.all([
+      curve.currentPrice(), curve.marketCapEth(), curve.graduationProgress(),
+      curve.graduated(), curve.virtualEthReserve(), curve.virtualTokenReserve()
+    ]);
+    t.priceEth = Number(ethers.formatEther(pWei));
+    t.price = t.priceEth * ETH_USD;
+    t.mcap = Number(ethers.formatEther(mWei)) * ETH_USD;
+    t.reserveEth = Number(ethers.formatEther(prog.collected));
+    t.gradTargetEth = Number(ethers.formatEther(prog.target));
+    t.graduated = grad;
+    t.vEth = Number(ethers.formatEther(vE));
+    t.vTok = Number(ethers.formatUnits(vT, 18));
+    return true;
+  }catch(e){ console.error('loadCurveState', e); return false; }
+}
+async function loadBalances(t){
+  try{
+    if(!realToken(t) || !wallet) return;
+    const ro = roProvider();
+    const [ethBal, tokBal] = await Promise.all([
+      ro.getBalance(wallet),
+      new ethers.Contract(t.ca, ERC20_ABI, ro).balanceOf(wallet)
+    ]);
+    t._ethBal = Number(ethers.formatEther(ethBal));
+    t._tokBal = Number(ethers.formatUnits(tokBal, 18));
+    if(currentTokenId===t.id){
+      const bal = document.getElementById('amt-bal');
+      if(bal) bal.textContent = side==='buy' ? t._ethBal.toFixed(4)+' ETH' : fmtNum(t._tokBal)+' $'+t.ticker;
+    }
+  }catch(e){ console.error('loadBalances', e); }
+}
+async function loadCurveTrades(t){
+  try{
+    const ro = roProvider();
+    const curve = new ethers.Contract(t.curveAddr, CURVE_ABI, ro);
+    const head = await ro.getBlockNumber();
+    const from = Math.max(0, head - 200000);
+    const [buys, sells] = await Promise.all([
+      curve.queryFilter(curve.filters.Buy(), from, head),
+      curve.queryFilter(curve.filters.Sell(), from, head),
+    ]);
+    const px = a => Number(ethers.formatEther(a.virtualEthReserve)) / Number(ethers.formatUnits(a.virtualTokenReserve, 18));
+    const evs = [];
+    for(const e of buys){ const a=e.args; evs.push({block:e.blockNumber, li:e.index, buy:true,
+      eth:Number(ethers.formatEther(a.grossEth)), tokens:Number(ethers.formatUnits(a.tokensOut,18)),
+      levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.recipient), priceEth:px(a)}); }
+    for(const e of sells){ const a=e.args; evs.push({block:e.blockNumber, li:e.index, buy:false,
+      eth:Number(ethers.formatEther(a.netEth)), tokens:Number(ethers.formatUnits(a.tokensIn,18)),
+      levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.trader), priceEth:px(a)}); }
+    evs.sort((x,y)=> x.block-y.block || x.li-y.li);
+    const uniq = [...new Set(evs.map(e=>e.block))].slice(-80);
+    const times = {};
+    await Promise.all(uniq.map(async b=>{ try{ const bl=await ro.getBlock(b); if(bl) times[b]=Number(bl.timestamp)*1000; }catch(_){} }));
+    evs.forEach(e=> e.ts = times[e.block] || Date.now());
+    t.trades = evs.slice().reverse().map(e=>({ts:e.ts, buy:e.buy, eth:e.eth, tokens:e.tokens, levyEth:e.levyEth, wallet:e.wallet}));
+    t.holders = Math.max(1, new Set(evs.map(e=>e.wallet)).size);
+    t._series = evs.map(e=> e.priceEth*ETH_USD);
+    t.vol24 = evs.filter(e=> Date.now()-e.ts < 864e5).reduce((s,e)=> s+e.eth, 0)*ETH_USD;
+  }catch(e){ console.error('loadCurveTrades', e); }
+}
+function buildCandlesFromTrades(t){
+  const pts = (t._series && t._series.length) ? t._series.slice() : [t.price||0];
+  const N = Math.min(60, Math.max(1, pts.length));
+  const per = Math.ceil(pts.length/N);
+  const out = [];
+  for(let i=0;i<pts.length;i+=per){
+    const sl = pts.slice(i, i+per);
+    out.push({o:sl[0], c:sl[sl.length-1], h:Math.max(...sl), l:Math.min(...sl), v:sl.length});
+  }
+  if(out.length && t.price) out[out.length-1].c = t.price;
+  t.candles = out.length ? out : [{o:t.price, h:t.price, l:t.price, c:t.price, v:0}];
+}
+async function refreshReal(t, withTrades){
+  const ok = await loadCurveState(t);
+  if(!ok || currentTokenId!==t.id) return;
+  document.getElementById('tk-price').textContent = fmtPrice(t.price);
+  document.getElementById('ts-mcap').textContent = fmtUsd(t.mcap);
+  document.getElementById('ts-vol').textContent = fmtUsd(t.vol24||0);
+  document.getElementById('ts-holders').textContent = (t.holders||1).toLocaleString();
+  document.getElementById('tk-status').innerHTML = t.graduated
+    ? '<span class="up">◆ graduated — trading on Uniswap, LP burned</span>'
+    : '<span class="gold">◈ on the bonding curve</span>';
+  const prog = t.gradTargetEth ? Math.min(100, t.reserveEth/t.gradTargetEth*100) : 0;
+  const fill = document.getElementById('tk-fill');
+  fill.style.width = (t.graduated?100:prog)+'%'; fill.className = 'curve-fill'+(t.graduated?' grad':'');
+  document.getElementById('tk-curvelbl').textContent = t.graduated
+    ? 'curve complete' : t.reserveEth.toFixed(4)+' ETH raised · '+prog.toFixed(0)+'%';
+  const gl = document.getElementById('tk-gradlbl'); if(gl) gl.textContent = 'graduates at '+t.gradTargetEth+' ETH';
+  if(withTrades){ await loadCurveTrades(t); if(currentTokenId!==t.id) return; renderTrades(t); }
+  buildCandlesFromTrades(t); drawChart(t);
+  loadBalances(t);
+}
+function startRealPoll(t){
+  stopRealPoll();
+  if(!realToken(t)) return;
+  realPoll = setInterval(()=>{ if(currentTokenId===t.id) refreshReal(t, true); else stopRealPoll(); }, 12000);
+}
+function stopRealPoll(){ if(realPoll){ clearInterval(realPoll); realPoll=null; } }
+
+async function doTradeReal(t){
+  const btn = document.getElementById('tradeBtn');
+  const buy = side==='buy';
+  try{
+    if(!activeProvider){ toast('Connect a wallet first','seal'); connectWallet(); return; }
+    await ensureChain(activeProvider);
+    if((await activeProvider.request({method:'eth_chainId'}))!==CHAIN.chainId){ toast('Switch to Robinhood Chain Testnet','seal'); return; }
+    const amt = parseFloat(document.getElementById('amt').value)||0;
+    if(!(amt>0)){ toast('Enter an amount','seal'); return; }
+    const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
+    const curveW = new ethers.Contract(t.curveAddr, CURVE_ABI, signer);
+    const curveR = new ethers.Contract(t.curveAddr, CURVE_ABI, roProvider());
+    const deadline = Math.floor(Date.now()/1000) + 600;
+    const SLIP = 920n;   // keep ≥92% (8% slippage tolerance) — fine on testnet
+    btn.disabled = true;
+    if(buy){
+      const val = ethers.parseEther(String(amt));
+      const q = await curveR.quoteBuy(val);
+      const minOut = q.tokensOut * SLIP / 1000n;
+      btn.textContent = 'Confirm in wallet…';
+      const tx = await curveW.buy(minOut, deadline, { value: val });
+      toast('Buy sent — waiting…','jade'); btn.textContent='Buying…';
+      await tx.wait(); toast('Bought $'+t.ticker+' ✓','jade');
+    }else{
+      const tokensIn = ethers.parseUnits(String(amt), 18);
+      const owner = await signer.getAddress();
+      const allow = await new ethers.Contract(t.ca, ERC20_ABI, roProvider()).allowance(owner, t.curveAddr);
+      if(allow < tokensIn){
+        btn.textContent = 'Approve in wallet…';
+        const atx = await new ethers.Contract(t.ca, ERC20_ABI, signer).approve(t.curveAddr, tokensIn);
+        toast('Approving $'+t.ticker+'…','jade'); await atx.wait();
+      }
+      const q = await curveR.quoteSell(tokensIn);
+      const minEth = q.net * SLIP / 1000n;
+      btn.textContent = 'Confirm in wallet…';
+      const tx = await curveW.sell(tokensIn, minEth, deadline);
+      toast('Sell sent — waiting…','seal'); btn.textContent='Selling…';
+      await tx.wait(); toast('Sold $'+t.ticker+' ✓','seal');
+    }
+    document.getElementById('amt').value = '';
+    await refreshReal(t, true);
+  }catch(err){
+    console.error(err);
+    const msg = (err && (err.shortMessage||err.reason||err.message)) || 'transaction failed';
+    if(err && (err.code===4001 || err.code==='ACTION_REJECTED' || /reject|denied/i.test(msg))) toast('Cancelled','seal');
+    else toast('Trade failed — '+esc(String(msg).slice(0,130)),'seal');
+  }finally{
+    if(btn) btn.disabled = false;
+    setSide(side);
+  }
+}
+function quoteReal(t){
+  const amt = parseFloat(document.getElementById('amt').value)||0;
+  const el = document.getElementById('feeLines');
+  if(!amt || !t.vEth){ el.innerHTML = '<div class="fl"><span>Enter an amount to preview.</span></div>'; return; }
+  const rate = side==='buy' ? t.buyTax : t.sellTax;
+  if(side==='buy'){
+    const fee=amt*0.01, levy=amt*rate/100, net=amt-fee-levy;
+    const tokens = t.vTok*net/(t.vEth+net);
+    el.innerHTML =
+      `<div class="fl"><span>Curve fee · 1%</span><b>${fee.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl levy-fl"><span>Creator fee · ${rate}% → dev wallet</span><b>${levy.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl"><span>To the curve</span><b>${net.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(tokens)} $${t.ticker}</b></div>`;
+  }else{
+    const gross = t.vEth*amt/(t.vTok+amt);
+    const fee=gross*0.01, levy=gross*rate/100, net=gross-fee-levy;
+    el.innerHTML =
+      `<div class="fl"><span>Gross proceeds</span><b>${gross.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl"><span>Curve fee · 1%</span><b>−${fee.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl levy-fl"><span>Creator fee · ${rate}% → dev wallet</span><b>−${levy.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl big"><span>You receive</span><b>≈ ${net.toFixed(5)} ETH</b></div>`;
+  }
+}
+
 /* ---------------- trades / holders / thread ---------------- */
 function tradeRow(t,tr,isNew){
   return `<tr class="${isNew?'new-row':''}">
@@ -1967,7 +2188,9 @@ function setSide(s){
   btn.className = 'btn btn-lg btn-block '+(s==='buy'?'btn-jade':'btn-seal');
   document.getElementById('amt-label').textContent = s==='buy'?'You pay':'You sell';
   document.getElementById('amt-unit').textContent = s==='buy'?'ETH':'$'+(t?t.ticker:'');
-  document.getElementById('amt-bal').textContent = s==='buy'? '2.4810 ETH' : (t? fmtNum(rnd(1e6,4e7))+' $'+t.ticker : '—');
+  document.getElementById('amt-bal').textContent = realToken(t)
+    ? (s==='buy'? ((t._ethBal||0).toFixed(4)+' ETH') : (fmtNum(t._tokBal||0)+' $'+t.ticker))
+    : (s==='buy'? '2.4810 ETH' : (t? fmtNum(rnd(1e6,4e7))+' $'+t.ticker : '—'));
   const qr = document.getElementById('quickRow');
   qr.innerHTML = (s==='buy'? ['0.05','0.1','0.5','1.0'].map(v=>`<button onclick="setAmt(${v})">${v} Ξ</button>`)
                            : ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`)).join('');
@@ -1977,9 +2200,18 @@ function setSide(s){
   quote();
 }
 function setAmt(v){ document.getElementById('amt').value=v; quote(); }
-function setAmtPct(p){ document.getElementById('amt').value = (parseFloat(p)/100*38_400_000).toFixed(0); quote(); }
+function setAmtPct(p){
+  const t = tok();
+  const bal = realToken(t) ? (t._tokBal||0) : 38_400_000;
+  const v = parseFloat(p)/100*bal;
+  document.getElementById('amt').value = realToken(t)
+    ? (v>0 ? v.toFixed(6).replace(/0+$/,'').replace(/\.$/,'') : '0')
+    : v.toFixed(0);
+  quote();
+}
 function quote(){
   const t = tok(); if(!t) return;
+  if(realToken(t)) return quoteReal(t);
   const amt = parseFloat(document.getElementById('amt').value)||0;
   const el = document.getElementById('feeLines');
   if(!amt){ el.innerHTML = '<div class="fl"><span>Enter an amount to preview the fee split.</span></div>'; return; }
@@ -2004,7 +2236,8 @@ function quote(){
 }
 function doTrade(){
   const t = tok(); if(!t) return;
-  if(!wallet){ toast('Connect a wallet first','seal'); return; }
+  if(!wallet){ toast('Connect a wallet first','seal'); connectWallet(); return; }
+  if(realToken(t)) return doTradeReal(t);
   const amt = parseFloat(document.getElementById('amt').value)||0;
   if(!amt){ toast('Enter an amount','seal'); return; }
   const buy = side==='buy';
