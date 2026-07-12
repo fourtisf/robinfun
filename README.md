@@ -43,6 +43,8 @@ FOUNDRY_PROFILE=ci forge test   # deeper fuzz/invariant runs
 ```
 
 > **Note on the compiler:** this repo pins `tools/solc`, a thin CLI shim around the npm `solc@0.8.26` (soljson) package, because the build sandbox cannot reach `binaries.soliditylang.org`. It is the byte-identical 0.8.26 release, just WASM. On a normal machine you can delete the `solc = "tools/solc"` line in `foundry.toml` and set `solc_version = "0.8.26"`.
+>
+> **EVM target & OpenZeppelin version:** solc's default **cancun** output uses the `mcopy` opcode (EIP-5656), which **Robinhood Chain testnet does not support yet** — a cancun deploy simulates locally but every on-chain tx reverts on the unknown opcode. So the testnet deploy compiles for the **paris** EVM (mcopy-free), and the repo pins **OpenZeppelin 5.0.2** because newer OZ hardcodes `mcopy` and won't compile for pre-cancun EVMs. `deploy/bootstrap-deploy-testnet.sh` passes `--evm-version paris`; override with `EVM_VERSION=...` once the chain supports a newer EVM.
 
 ### Deploy (testnet — §10.9 pending)
 

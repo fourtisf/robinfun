@@ -63,14 +63,19 @@ log "Installing contract dependencies (OpenZeppelin + solc)"
 npm install --no-audit --no-fund
 
 # On the VPS we use NATIVE solc (svm downloads the real 0.8.26), NOT the WASM
-# shim that foundry.toml pins for the sandbox — the WASM build crashes here with
-# "memory access out of bounds" on this many files + via_ir. `--use 0.8.26`
-# overrides the pinned `solc = "tools/solc"`. We keep evm_version = cancun (from
-# foundry.toml): OpenZeppelin 5.x emits the `mcopy` opcode, so the contracts do
-# not compile for older EVMs, and Robinhood Chain (Arbitrum Orbit) supports it.
-SOLC_FLAGS="--use 0.8.26"
+# shim that foundry.toml pins for the sandbox (that WASM build crashes here with
+# "memory access out of bounds"). `--use 0.8.26` overrides the pinned solc.
+#
+# We compile for the PARIS evm, not cancun: solc's cancun output contains the
+# `mcopy` opcode (EIP-5656), which Robinhood Chain testnet does not support yet
+# — the deploy simulates fine locally but every real tx reverts on an unknown
+# opcode. paris is mcopy-free. (This is why the repo pins OpenZeppelin 5.0.2:
+# newer OZ hardcodes mcopy and would not compile for paris.) Override with
+# EVM_VERSION=... if the target chain supports a newer EVM.
+EVM_VERSION="${EVM_VERSION:-paris}"
+SOLC_FLAGS="--use 0.8.26 --evm-version ${EVM_VERSION}"
 
-log "Building contracts with native solc 0.8.26"
+log "Building contracts with native solc 0.8.26 (evm: ${EVM_VERSION})"
 forge build $SOLC_FLAGS
 
 # Default the treasury to the deployer's own address if not given.
