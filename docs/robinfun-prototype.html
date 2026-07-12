@@ -5,6 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Robinfun — Fair-Launch Bonding Curves on Robinhood Chain</title>
 <meta name="description" content="Launch tokens with a built-in creator fee. Every trade pays you — on the curve and after graduation. Fair bonding curves, LP 100% burned.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%20fill%3D%22none%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22p%22%20x1%3D%2214%22%20y1%3D%2254%22%20x2%3D%2248%22%20y2%3D%2210%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23A6D62E%22%2F%3E%3Cstop%20offset%3D%22.55%22%20stop-color%3D%22%23C6F23C%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23E4FF7A%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%230B0F0A%22%2F%3E%3Cg%20transform%3D%22translate%2832%2032%29%20scale%28.78%29%20translate%28-32%20-32%29%22%3E%3Cpath%20fill%3D%22url%28%23p%29%22%20d%3D%22M50%208C33%209%2020%2018%2015%2034%2013.6%2038.5%2013.2%2043.2%2014%2048L25.2%2036.8C25.6%2032.2%2027.6%2027.9%2031%2024.5%2034.5%2021%2038.8%2019%2043.4%2018.6L32.5%2029.5C36.8%2029.2%2041%2027.6%2044.7%2024.6%2050.2%2020.2%2052.4%2013.7%2050%208Z%22%2F%3E%3Cpath%20fill%3D%22url%28%23p%29%22%20d%3D%22M21.6%2037.4L24%2039.3%2012%2053%2010.9%2051.1Z%22%2F%3E%3Cpath%20stroke%3D%22%230A0F0A%22%20stroke-width%3D%222.1%22%20stroke-linecap%3D%22round%22%20opacity%3D%22.85%22%20d%3D%22M44.4%2014.4%2018.7%2040.2%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -80,7 +81,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 }
 .topbar-in{max-width:var(--maxw);margin:0 auto;padding:0 24px;height:62px;display:flex;align-items:center;gap:26px}
 .brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
-.brand-seal{width:32px;height:32px;flex-shrink:0;filter:drop-shadow(0 0 6px rgba(198,242,60,.45))}
+.brand-seal{width:30px;height:30px;flex-shrink:0;color:var(--gilt);filter:drop-shadow(0 0 7px rgba(198,242,60,.5))}
 .brand-word{font-family:var(--font-display);font-weight:700;font-size:21px;letter-spacing:.04em;color:var(--cream)}
 .brand-word em{font-style:normal;color:var(--gilt)}
 .brand-sub{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;color:var(--cream-mute);text-transform:uppercase;margin-top:1px}
@@ -163,9 +164,7 @@ body.light .banner-tag em{color:#D8FB5C}
 body.light .banner-chip{color:#C3CBB4;border-color:rgba(255,255,255,.14)}
 body.light .banner-chip .dot{background:#C6F23C;box-shadow:0 0 8px #C6F23C}
 /* light surfaces → darken the lime line-art for contrast */
-body.light .brand-seal{filter:none}
-body.light .brand-seal circle,body.light .brand-seal ellipse{stroke:#3C9A1B}
-body.light .brand-seal text{fill:#3C9A1B}
+body.light .brand-seal{filter:none;color:#3C9A1B}
 body.light .stake-orbit{filter:none}
 body.light .stake-orbit circle,body.light .stake-orbit ellipse{stroke:#3C9A1B}
 body.light .stake-orbit text{fill:#3C9A1B}
@@ -702,16 +701,10 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 <header class="topbar">
   <div class="topbar-in">
     <a class="brand" href="#" onclick="go('home');return false">
-      <svg class="brand-seal" viewBox="0 0 40 40" fill="none" aria-hidden="true">
-        <circle cx="20" cy="20" r="18.5" stroke="#C6F23C" stroke-width="1.4"/>
-        <circle cx="20" cy="20" r="14.5" stroke="#C6F23C" stroke-width=".7" opacity=".55"/>
-        <g stroke="#C6F23C" stroke-width=".55" opacity=".8">
-          <ellipse cx="20" cy="20" rx="14" ry="5.5"/>
-          <ellipse cx="20" cy="20" rx="14" ry="5.5" transform="rotate(45 20 20)"/>
-          <ellipse cx="20" cy="20" rx="14" ry="5.5" transform="rotate(90 20 20)"/>
-          <ellipse cx="20" cy="20" rx="14" ry="5.5" transform="rotate(135 20 20)"/>
-        </g>
-        <text x="20" y="24.5" text-anchor="middle" font-family="Space Grotesk,sans-serif" font-size="13" font-weight="700" fill="#D8FB5C">R</text>
+      <svg class="brand-seal" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+        <path fill="currentColor" d="M50 8 C 33 9, 20 18, 15 34 C 13.6 38.5, 13.2 43.2, 14 48 L 25.2 36.8 C 25.6 32.2, 27.6 27.9, 31 24.5 C 34.5 21, 38.8 19, 43.4 18.6 L 32.5 29.5 C 36.8 29.2, 41 27.6, 44.7 24.6 C 50.2 20.2, 52.4 13.7, 50 8 Z"/>
+        <path fill="currentColor" d="M21.6 37.4 L24 39.3 L12 53 L10.9 51.1 Z"/>
+        <path stroke="#0A0F0A" stroke-width="2.1" stroke-linecap="round" opacity=".9" d="M44.4 14.4 L18.7 40.2"/>
       </svg>
       <span>
         <span class="brand-word">Robin<em>fun</em></span>
@@ -750,11 +743,13 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
         <div class="hero-banner">
           <div class="banner-content">
             <div class="banner-brand">
-              <svg class="banner-mark" viewBox="0 0 56 56" fill="none" aria-hidden="true">
-                <ellipse cx="28" cy="28" rx="26" ry="10.5" stroke="#C6F23C" stroke-width="2" transform="rotate(-28 28 28)" opacity=".75"/>
-                <ellipse cx="28" cy="28" rx="26" ry="10.5" stroke="#C6F23C" stroke-width="1.4" transform="rotate(32 28 28)" opacity=".4"/>
-                <circle cx="28" cy="28" r="15" fill="#0A0F0A" stroke="#C6F23C" stroke-width="2"/>
-                <path d="M28 21 L28 36 M28 21 L22.5 26.5 M28 21 L33.5 26.5" stroke="#D8FB5C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+              <svg class="banner-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true">
+                <defs><linearGradient id="bm-plume" x1="14" y1="54" x2="48" y2="10" gradientUnits="userSpaceOnUse">
+                  <stop offset="0" stop-color="#A6D62E"/><stop offset=".55" stop-color="#C6F23C"/><stop offset="1" stop-color="#E4FF7A"/>
+                </linearGradient></defs>
+                <path fill="url(#bm-plume)" d="M50 8 C 33 9, 20 18, 15 34 C 13.6 38.5, 13.2 43.2, 14 48 L 25.2 36.8 C 25.6 32.2, 27.6 27.9, 31 24.5 C 34.5 21, 38.8 19, 43.4 18.6 L 32.5 29.5 C 36.8 29.2, 41 27.6, 44.7 24.6 C 50.2 20.2, 52.4 13.7, 50 8 Z"/>
+                <path fill="url(#bm-plume)" d="M21.6 37.4 L24 39.3 L12 53 L10.9 51.1 Z"/>
+                <path stroke="#0A0F0A" stroke-width="2.1" stroke-linecap="round" opacity=".9" d="M44.4 14.4 L18.7 40.2"/>
               </svg>
               <span class="banner-word">Robin<em>fun</em></span>
             </div>
