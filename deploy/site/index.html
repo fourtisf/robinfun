@@ -1275,7 +1275,8 @@ const CHAIN = {
 };
 /* Deployed RobinfunFactory (testnet). Launch calls createToken() here. */
 const FACTORY_ADDR = '0x1B57C272F120c7A907324751A544661f1b6Fbf59';
-const DEPLOY_FEE_WEI = 500000000000000n;   // 0.0005 ETH
+let DEPLOY_FEE_WEI = 500000000000000n;     // 0.0005 ETH — refreshed from the chain
+let deployFeeEth = 0.0005;
 const EXPLORER = 'https://explorer.testnet.chain.robinhood.com';
 const FACTORY_ABI = [
   'function createToken((string name,string symbol,string metadataURI,uint16 buyLevyBps,uint16 sellLevyBps,bool decayAtGraduation,bool renounceRateControl,uint256 devBuyMinTokensOut,bytes32 vanitySalt)) payable returns (address token, address curve)',
@@ -2146,7 +2147,21 @@ function projector(){
 }
 function syncCost(){
   const b = parseFloat(document.getElementById('c-buyin').value)||0;
-  document.getElementById('deployCost').textContent = (0.002+b).toFixed(3)+' ETH + gas';
+  const total = deployFeeEth + b;
+  const txt = total ? total.toFixed(4).replace(/0+$/,'').replace(/\.$/,'') : '0';
+  const el = document.getElementById('deployCost');
+  if(el) el.textContent = txt+' ETH + gas';
+}
+/* Read the live on-chain deploy fee so the display + the launch value match. */
+async function refreshDeployFee(){
+  try{
+    if(chainReady()){
+      const ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0]);
+      const wei = await new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro).deployFee();
+      DEPLOY_FEE_WEI = wei; deployFeeEth = Number(wei)/1e18;
+    }
+  }catch(_){}
+  syncCost();
 }
 async function deploy(){
   const name = document.getElementById('c-name').value.trim();
@@ -2415,6 +2430,8 @@ function init(){
   renderTape();
   loadServerTokens();   // pull persisted launches from the backend (async)
   routeFromLocation();  // show the page that matches the current URL (deep links / refresh)
+  refreshDeployFee();   // show the real on-chain deploy fee (retry once ethers loads)
+  setTimeout(refreshDeployFee, 1500);
   setInterval(simTick, 1700);
   setInterval(()=>{ if(currentTokenId) drawChart(tok()); }, 4000);
   window.addEventListener('resize', ()=>{ if(currentTokenId) drawChart(tok()); });
