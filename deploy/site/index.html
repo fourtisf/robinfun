@@ -1230,33 +1230,11 @@ function mkTok(o){
   if(t.earnedEth===0 && (t.buyTax||t.sellTax)) t.earnedEth = (t.vol24*rnd(1.4,4)*((t.buyTax+t.sellTax)/200)*0.9)/ETH_USD;
   return t;
 }
-let TOKENS = [
-  mkTok({name:'Hood Rat', ticker:'HOODRAT', emoji:'🐀', desc:'The rat that robs the rich. Community fee funds weekly buyback raids.', buyTax:3, sellTax:3, mcap:31200, vol24:184000, chg24:212.4, holders:1841, replies:326, created:Date.now()-31*3600e3}),
-  mkTok({name:'Taxman', ticker:'TAXMAN', emoji:'🎩', desc:'He always collects. 5/5 fee, creator streams P&L live on X.', buyTax:5, sellTax:5, mcap:18900, vol24:96500, chg24:88.1, holders:922, replies:204}),
-  mkTok({name:'Feather', ticker:'FTHR', emoji:'🪶', desc:'Light as a fee. 1/1 tax, the gentleman\'s launch.', buyTax:1, sellTax:1, mcap:9400, vol24:41200, chg24:31.7, holders:512, replies:88}),
-  mkTok({name:'Gilded', ticker:'GILD', emoji:'🏆', desc:'First token to graduate on Robinfun. The OG. LP burned, fee still printing.', buyTax:2, sellTax:2, mcap:112000, vol24:238000, chg24:14.2, holders:3204, replies:641, graduated:true, created:Date.now()-9*86400e3}),
-  mkTok({name:'Sherwood', ticker:'WOOD', emoji:'🏹', desc:'Steal from the rich chain, give to the merry holders.', buyTax:3, sellTax:4, mcap:22100, vol24:74300, chg24:-12.6, holders:1104, replies:167}),
-  mkTok({name:'Nottingham', ticker:'NOTTS', emoji:'🏰', desc:'The sheriff\'s coin. 0/0 — no fee, pure fair launch, may the best degen win.', buyTax:0, sellTax:0, mcap:12800, vol24:52800, chg24:44.9, holders:734, replies:121}),
-  mkTok({name:'Loot', ticker:'LOOT', emoji:'💰', desc:'Graduated in 41 minutes. Creator earned 3.1 ETH before Uniswap.', buyTax:4, sellTax:4, mcap:87400, vol24:129000, chg24:-6.8, holders:2410, replies:388, graduated:true, created:Date.now()-4*86400e3}),
-  mkTok({name:'Merry Men', ticker:'MERRY', emoji:'🍻', desc:'A round for everyone. Fee halves at graduation — long game.', buyTax:4, sellTax:4, decay:true, mcap:15600, vol24:47800, chg24:22.3, holders:689, replies:95}),
-  mkTok({name:'Quiver', ticker:'QVR', emoji:'🎯', desc:'Straight shooter. Renounced fee at 2/2, locked forever.', buyTax:2, sellTax:2, renounced:true, mcap:7900, vol24:22100, chg24:9.4, holders:341, replies:44}),
-  mkTok({name:'Robbed', ticker:'ROBBED', emoji:'😭', desc:'We\'ve all been there. Therapy fee: 3/3, proceeds to the group chat.', buyTax:3, sellTax:3, mcap:5900, vol24:18400, chg24:-28.1, holders:287, replies:76}),
-  mkTok({name:'Friar Tuck', ticker:'TUCK', emoji:'🍺', desc:'Blessed be the bag. Sunday-only shill schedule.', buyTax:2.5, sellTax:2.5, mcap:6800, vol24:15900, chg24:12.8, holders:198, replies:31}),
-  mkTok({name:'Marian', ticker:'MARIAN', emoji:'💘', desc:'The chain\'s sweetheart. Soft fee, softer chart.', buyTax:1.5, sellTax:1.5, mcap:8700, vol24:26700, chg24:17.5, holders:404, replies:59}),
-  mkTok({name:'Yoink', ticker:'YOINK', emoji:'🫳', desc:'Grab it before it graduates. 38 minutes old.', buyTax:3, sellTax:3, mcap:4900, vol24:9200, chg24:96.3, holders:118, replies:22, created:Date.now()-38*60e3}),
-  mkTok({name:'Pleb Duty', ticker:'DUTY', emoji:'📜', desc:'Pay your dues, collect your due. Meta-fee token about fees.', buyTax:5, sellTax:3, mcap:11400, vol24:33600, chg24:-4.2, holders:526, replies:83}),
-  mkTok({name:'Arrowhead', ticker:'ARRW', emoji:'🗡️', desc:'Sharp entries only. Creator does daily TA threads.', buyTax:2, sellTax:2, mcap:26900, vol24:88700, chg24:57.9, holders:1355, replies:213}),
-  mkTok({name:'Greenwood', ticker:'GRNW', emoji:'🌲', desc:'Touch grass, hold wood. Eco-larp with a 1/1 fee.', buyTax:1, sellTax:1, mcap:5200, vol24:8800, chg24:6.1, holders:143, replies:18, created:Date.now()-2.4*3600e3}),
-];
-TOKENS.forEach(t=>{
-  const n = 4+Math.floor(rnd(0,20));
-  for(let i=0;i<n;i++) t.trades.push(genTrade(t, Date.now()-rnd(30,7200)*1e3));
-  t.trades.sort((a,b)=>b.ts-a.ts);
-});
+let TOKENS = [];   // real tokens: loaded from the backend + created by users
 
 /* platform-wide counters */
-let PAID_ALLTIME = 412_806;
-let LAUNCH_COUNT = 4212 + TOKENS.length;
+let PAID_ALLTIME = 0;
+let LAUNCH_COUNT = 0;
 
 /* ---------------- wallet ---------------- */
 let wallet = null;
@@ -1306,13 +1284,6 @@ function onWalletConnected(addr){
   const w = document.getElementById('c-wallet'); if(w) w.value = addr;
   toast('Wallet connected — <b>'+shortAddr(addr)+'</b>','jade');
   seedMyTokens();
-  /* seed a demo $ROBIN balance + stake so the staking page feels live */
-  if(LEVY_BAL===0 && myStake===0){
-    LEVY_BAL = 1_250_000;
-    myStake = 850_000;
-    myStakeReward = 0.0417;
-    STAKE_TOTAL += myStake;
-  }
   renderTreasury();
   if(document.getElementById('page-stake').classList.contains('active')) renderStake();
 }
@@ -1333,13 +1304,16 @@ if(window.ethereum && window.ethereum.on){
   window.ethereum.on('chainChanged', ()=>{ /* network changed — nothing to re-render yet */ });
 }
 function seedMyTokens(){
-  if(TOKENS.some(t=>t.mine)) return;
-  const mine = [
-    mkTok({name:'Bundle Rat', ticker:'BRAT', emoji:'🧾', desc:'Your earlier launch. Cruising the mid-curve.', buyTax:3, sellTax:3, mcap:16400, vol24:38800, chg24:12.2, holders:512, replies:64, mine:true, creator:MY_ADDR, earnedEth:1.284, created:Date.now()-3*86400e3}),
-    mkTok({name:'Warchest', ticker:'CHEST', emoji:'🪖', desc:'Graduated last week. Fee still streaming from Uniswap volume.', buyTax:4, sellTax:4, mcap:96200, vol24:61200, chg24:4.1, holders:1922, replies:301, mine:true, graduated:true, creator:MY_ADDR, earnedEth:6.917, created:Date.now()-11*86400e3}),
-  ];
-  mine.forEach(t=>{ t.claimable = t.ticker==='BRAT'?0.412:1.108; TOKENS.push(t); });
-  renderGrid();
+  // Real product: your tokens are the ones you launched (persisted in the
+  // backend, matched by creator). Mark any already-loaded tokens as yours.
+  if(!MY_ADDR) return;
+  let changed = false;
+  TOKENS.forEach(t=>{
+    if(!t.mine && t.creator && t.creator.toLowerCase && t.creator.toLowerCase()===MY_ADDR.toLowerCase()){
+      t.mine = true; changed = true;
+    }
+  });
+  if(changed) renderGrid();
 }
 
 /* ================================================================
@@ -1599,10 +1573,12 @@ function renderGrid(){
   const q = (document.getElementById('search').value||'').toLowerCase();
   let list = TOKENS.filter(t=> !q || t.name.toLowerCase().includes(q) || t.ticker.toLowerCase().includes(q));
   list = sortTokens(list);
+  const emptyMsg = filter==='watch'
+      ? 'Your watchlist is empty — tap the ★ on any token to track it here.'
+      : (q ? 'Nothing matches. Try another ticker — or launch it yourself.'
+           : 'No tokens yet — be the first to launch one. Hit <b style="color:var(--gilt)">+ Launch Token</b>.');
   document.getElementById('grid').innerHTML = list.map(cardHtml).join('') ||
-    (filter==='watch'
-      ? '<p style="color:var(--cream-mute);font-family:var(--font-mono);font-size:13px;padding:30px 4px">Your watchlist is empty — tap the ★ on any token to track it here.</p>'
-      : '<p style="color:var(--cream-mute);font-family:var(--font-mono);font-size:13px;padding:30px 4px">Nothing matches. Try another ticker — or launch it yourself.</p>');
+    ('<p style="color:var(--cream-mute);font-family:var(--font-mono);font-size:13px;padding:34px 4px;grid-column:1/-1">'+emptyMsg+'</p>');
 }
 function renderStats(){
   const vol = TOKENS.reduce((s,t)=>s+t.vol24,0);
@@ -1989,7 +1965,11 @@ async function loadServerTokens(){
       TOKENS.unshift(tokenFromRecord(rec));
       seen.add(rec.id); added++;
     }
-    if(added){ renderGrid(); renderStats(); renderTape(); }
+    if(added){
+      LAUNCH_COUNT = TOKENS.length;
+      if(wallet) seedMyTokens();   // mark my launches as mine for the Treasury
+      renderGrid(); renderStats(); renderTape();
+    }
   }catch(e){ /* backend unreachable — keep the local board */ }
 }
 function syncPreview(){
@@ -2212,7 +2192,9 @@ function applyTrade(t, tr, user){
   renderStats();
 }
 function simTick(){
+  if(!TOKENS.length) return;   // empty board — nothing to animate yet
   const live = TOKENS.filter(t=>!t.mine || Math.random()<0.35);
+  if(!live.length) return;
   const weights = live.map(t=> (t.vol24+6000) * (t.graduated?0.5:1) * (Date.now()-t.created<7200e3?2.2:1));
   const total = weights.reduce((a,b)=>a+b,0);
   let r = Math.random()*total, t = live[0];
