@@ -2422,19 +2422,28 @@ function toast(html, kind){
 }
 
 /* ---------------- init ---------------- */
-/* Live ETH price so all USD figures track reality (curve is ETH-denominated). */
+/* Live ETH price so all USD figures track reality (curve is ETH-denominated).
+   Primary source: CoinGecko (the company behind GeckoTerminal); Coinbase is a
+   fallback if CoinGecko is rate-limited or unreachable. */
 async function refreshEthPrice(){
-  try{
-    const r = await fetch('https://api.coinbase.com/v2/prices/ETH-USD/spot');
-    const p = parseFloat((await r.json())?.data?.amount);
-    if(p>0){
-      ETH_USD = p;
-      START_CAP = Math.round(START_ETH*ETH_USD);
-      GRAD_CAP = Math.round(GRAD_ETH*ETH_USD);
-      renderStats(); renderGrid(); syncCost();
-      if(currentTokenId) renderToken();
-    }
-  }catch(_){}
+  const sources = [
+    { url:'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd', pick:j=>j&&j.ethereum&&j.ethereum.usd },
+    { url:'https://api.coinbase.com/v2/prices/ETH-USD/spot', pick:j=>j&&j.data&&parseFloat(j.data.amount) },
+  ];
+  for(const s of sources){
+    try{
+      const r = await fetch(s.url); if(!r.ok) continue;
+      const p = parseFloat(s.pick(await r.json()));
+      if(p>0){
+        ETH_USD = p;
+        START_CAP = Math.round(START_ETH*ETH_USD);
+        GRAD_CAP = Math.round(GRAD_ETH*ETH_USD);
+        renderStats(); renderGrid(); syncCost();
+        if(currentTokenId) renderToken();
+        return;
+      }
+    }catch(_){}
+  }
 }
 function init(){
   initLogoUpload();
