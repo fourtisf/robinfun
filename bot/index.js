@@ -258,22 +258,29 @@ bot.on('message:text', async (ctx) => {
   }
 });
 
+const inFlight = new Set();   // tx hashes mid-processing (concurrency guard)
 async function handlePay(ctx, s, text) {
   if (!isTxHash(text)) return ctx.reply('Paste a valid transaction hash (0x + 64 hex), or /cancel.');
   const key = text.toLowerCase();
   if (usedTx.has(key)) return ctx.reply('That transaction was already used for a listing. Send a different payment.');
+  if (inFlight.has(key)) return ctx.reply('That payment is already being processed — one moment.');
 
   await ctx.reply('⏳ Verifying your payment on-chain…');
   const v = await verifyPayment(rpc, { hash: text, treasury: TREASURY, feeWei: FEE_WEI, minConf: MIN_CONFIRMATIONS });
   if (!v.ok) return ctx.reply('❌ ' + v.reason);
   if (usedTx.has(key)) return ctx.reply('That transaction was already used for a listing.');   // race guard
 
-  usedTx.add(key); persist();
+  inFlight.add(key);
   try {
-    await finalize(ctx, s, v.from);
+    await finalize(ctx, s, v.from);       // posts to the channel + saves the board
+    usedTx.add(key); persist();            // burn the tx ONLY after a successful post
   } catch (e) {
     console.error('finalize failed:', e);
-    await ctx.reply('⚠️ Payment verified, but publishing hit an error. An admin has been notified — your fee is safe.');
+    // Tx is NOT consumed — the user can retry once the problem (usually: the bot
+    // isn't an admin of the channel yet) is fixed.
+    await ctx.reply('⚠️ Payment verified, but posting failed — is the bot an admin of the listings channel? Your transaction was NOT used; fix it and resend the same hash, or contact an admin.');
+  } finally {
+    inFlight.delete(key);
   }
 }
 
