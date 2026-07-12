@@ -45,6 +45,18 @@ else
     git clone --depth 1 -b "$BRANCH" "$REPO" "$SRC_DIR"
 fi
 
+log "Publishing the latest site HTML to ${WEBROOT}"
+# bootstrap-api.sh clones the repo anyway, so publish the frontend here too —
+# otherwise re-running this only updates the backend and the page stays stale.
+mkdir -p "$WEBROOT"
+if [ -f "$SRC_DIR/deploy/site/index.html" ]; then
+    cp "$SRC_DIR/deploy/site/index.html" "$WEBROOT/index.html"
+    chown -R www-data:www-data "$WEBROOT"
+    chmod -R a+rX "$WEBROOT"
+else
+    log "WARN: $SRC_DIR/deploy/site/index.html not found — leaving existing page in place"
+fi
+
 log "Installing API dependencies"
 ( cd "$SRC_DIR/server" && npm install --omit=dev --no-audit --no-fund )
 
