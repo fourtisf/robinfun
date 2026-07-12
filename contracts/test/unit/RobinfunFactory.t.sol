@@ -268,10 +268,36 @@ contract RobinfunFactoryTest is BaseSetup {
     ///      EthTransferFailed. Intended behavior: spent = deployFee + gross
     ///      needed, surplus back to creator. Fix: add a receive() to the
     ///      factory (or refund directly to a passed-through recipient).
-    function test_devBuy_hugeBuyOvershootBricked_BUG() public {
+    /// @dev An overshooting dev buy graduates the token at creation; the
+    ///      curve refunds the surplus to the factory (via its curve-gated
+    ///      receive()), which forwards it to the creator.
+    function test_devBuy_hugeOvershootGraduatesAndRefundsCreator() public {
+        uint256 balBefore = creator.balance;
+
         vm.prank(creator);
-        vm.expectRevert(BondingCurve.EthTransferFailed.selector);
-        factory.createToken{value: DEPLOY_FEE + 10 ether}(_params("Hood Rat", "HOODRAT"));
+        (address t, address c) = factory.createToken{value: DEPLOY_FEE + 10 ether}(_params("Hood Rat", "HOODRAT"));
+
+        assertTrue(BondingCurve(c).graduated(), "instant graduation");
+        assertGt(RobinfunToken(t).balanceOf(creator), 0, "creator holds the dev buy");
+
+        // Creator paid deployFee + exactly (graduation target + fees on the
+        // capped gross); every other wei of the 10 ETH came back, including
+        // the ceil-division dust the curve refunds.
+        uint256 spent = balBefore - creator.balance;
+        uint256 gross = (uint256(GRADUATION_ETH) * BPS + (BPS - CURVE_FEE_BPS - BUY_LEVY) - 1)
+            / (BPS - CURVE_FEE_BPS - BUY_LEVY);
+        uint256 feesOnGross = (gross * CURVE_FEE_BPS) / BPS + (gross * BUY_LEVY) / BPS;
+        assertEq(spent, DEPLOY_FEE + GRADUATION_ETH + feesOnGross, "surplus fully refunded");
+
+        // Nothing stranded on the factory.
+        assertEq(address(factory).balance, 0, "factory holds no ETH");
+    }
+
+    /// @dev The factory's receive() only accepts ETH from its own curves.
+    function test_receive_rejectsStrayEth() public {
+        vm.prank(alice);
+        (bool ok,) = address(factory).call{value: 1 ether}("");
+        assertFalse(ok, "stray ETH rejected");
     }
 
     // ---------------------------------------------------------------- owner config

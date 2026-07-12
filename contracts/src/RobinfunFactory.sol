@@ -71,6 +71,9 @@ contract RobinfunFactory is Ownable2Step {
     /// @notice Token → its bonding curve. Nonzero iff the token is ours.
     mapping(address => address) public curveOf;
 
+    /// @notice True for every bonding curve this factory deployed.
+    mapping(address => bool) public isCurve;
+
     // ---------------------------------------------------------------- types
 
     struct CreateParams {
@@ -117,6 +120,15 @@ contract RobinfunFactory is Ownable2Step {
     error InsufficientDeployFee();
     error BadCurveParams();
     error EthTransferFailed();
+    error UnexpectedEth();
+
+    /// @dev Accepts ETH only from its own curves: a dev buy that overshoots
+    ///      the graduation target is capped by the curve, which refunds the
+    ///      surplus to its caller (this factory) — forwarded to the creator
+    ///      at the end of `createToken`.
+    receive() external payable {
+        if (!isCurve[msg.sender]) revert UnexpectedEth();
+    }
 
     // ---------------------------------------------------------------- constructor
 
@@ -174,6 +186,7 @@ contract RobinfunFactory is Ownable2Step {
         // Register before any value-bearing external call.
         allTokens.push(token);
         curveOf[token] = curve;
+        isCurve[curve] = true;
 
         emit TokenCreated(
             token,

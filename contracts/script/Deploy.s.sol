@@ -16,6 +16,7 @@ import {IBondingCurve} from "../src/interfaces/IRobinfun.sol";
 ///
 /// Required environment (see .env.example — ALL of these are §10 open
 /// questions; the script refuses to run without explicit values):
+///   PRIVATE_KEY         deployer key (testnet only)
 ///   PROTOCOL_MULTISIG   admin + treasury owner            (§10.5)
 ///   DEX_FACTORY         Uniswap-v2 style factory address  (§10.2)
 ///   DEX_ROUTER          Uniswap-v2 style router02 address (§10.2)
@@ -31,6 +32,8 @@ import {IBondingCurve} from "../src/interfaces/IRobinfun.sol";
 ///   ROBIN_SUPPLY       default 1e27 (1B) — placeholder, §10.1
 contract Deploy is Script {
     function run() external {
+        uint256 deployerKey = vm.envUint("PRIVATE_KEY");
+        address deployer = vm.addr(deployerKey);
         address multisig = vm.envAddress("PROTOCOL_MULTISIG");
         address dexFactory = vm.envAddress("DEX_FACTORY");
         address dexRouter = vm.envAddress("DEX_ROUTER");
@@ -43,10 +46,10 @@ contract Deploy is Script {
         });
         uint256 deployFee = vm.envOr("DEPLOY_FEE", uint256(0.002 ether));
 
-        vm.startBroadcast();
+        vm.startBroadcast(deployerKey);
 
         // Deployer owns the routers during wiring, then hands over.
-        FeeRouter feeRouter = new FeeRouter(msg.sender);
+        FeeRouter feeRouter = new FeeRouter(deployer);
         RobinfunFactory factory =
             new RobinfunFactory(multisig, address(feeRouter), dexFactory, weth, params, deployFee);
 
