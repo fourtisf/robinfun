@@ -369,8 +369,12 @@ body.light .stake-orbit text{fill:#3C9A1B}
 .upload .big{font-size:26px;margin-bottom:6px}
 .upload p{font-size:12.5px;color:var(--cream-mute)}
 .upload.drag{border-color:var(--gilt);background:var(--gilt-dim)}
-.upload .big img.upl-img{width:60px;height:60px;object-fit:cover;border-radius:12px;display:block;margin:0 auto}
-.upl-ico{width:34px;height:34px;color:var(--cream-mute);display:block;margin:0 auto}
+.upload .big img.upl-img{width:150px;height:150px;object-fit:cover;border-radius:16px;display:block;margin:2px auto 6px;
+  border:1px solid var(--rule-2);box-shadow:0 12px 36px -14px rgba(0,0,0,.72)}
+.upload.has-logo{padding:18px}
+.upl-ico{width:36px;height:36px;color:var(--cream-mute);display:block;margin:0 auto}
+.upl-name{font-family:var(--font-mono);font-size:12px;color:var(--cream-dim);word-break:break-all}
+.upl-sub{font-size:11px;color:var(--cream-mute);margin-top:4px}
 .tlogo,.lead-logo,#tk-logo{overflow:hidden}
 .tlogo img.logo-img,.lead-logo img.logo-img,#tk-logo img.logo-img{width:100%;height:100%;object-fit:cover;display:block}
 .mono-logo{display:flex;align-items:center;justify-content:center;width:100%;height:100%;
@@ -843,6 +847,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <div class="upload" id="dropzone">
             <div class="big" id="upl-emoji"><svg class="upl-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.7"/><path d="M21 15l-5-5L5 21"/></svg></div>
             <p id="upl-hint">Drop a logo here, or click to upload</p>
+            <p id="upl-sub" class="upl-sub">PNG · JPG · GIF · SVG — up to 2 MB · square looks best</p>
             <input type="file" id="logoInput" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" hidden>
           </div>
         </div>
@@ -1873,6 +1878,9 @@ const EMOJIS = ['🪶','🏹','🎩','🐀','💰','🏰','🍺','💘','🎯','
 let chosenLogo = null;   // data-URL of an uploaded logo, or null → monogram fallback
 const UPL_ICON = '<svg class="upl-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="3"/><circle cx="8.5" cy="8.5" r="1.7"/><path d="M21 15l-5-5L5 21"/></svg>';
 const UPL_HINT = 'Drop a logo here, or click to upload';
+const UPL_SUB  = 'PNG · JPG · GIF · SVG — up to 2 MB · square looks best';
+function esc(s){ return (s||'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function triggerReplace(e){ if(e) e.stopPropagation(); const i=document.getElementById('logoInput'); if(i) i.click(); }
 
 /* ---- logo upload (client-side; stored on the token as a data URL) ---- */
 function initLogoUpload(){
@@ -1891,8 +1899,12 @@ function handleLogo(file){
   const reader = new FileReader();
   reader.onload = ()=>{
     chosenLogo = reader.result;
+    const dz = document.getElementById('dropzone'); if(dz) dz.classList.add('has-logo');
     document.getElementById('upl-emoji').innerHTML = '<img src="'+chosenLogo+'" alt="logo" class="upl-img">';
-    document.getElementById('upl-hint').innerHTML = file.name+' · <button type="button" class="upl-remove" onclick="clearLogo(event)">remove</button>';
+    document.getElementById('upl-hint').innerHTML = '<span class="upl-name">'+esc(file.name)+'</span>';
+    document.getElementById('upl-sub').innerHTML =
+      '<button type="button" class="upl-remove" onclick="triggerReplace(event)">Replace</button> · '+
+      '<button type="button" class="upl-remove" onclick="clearLogo(event)">Remove</button>';
   };
   reader.onerror = ()=> toast('Could not read that image','seal');
   reader.readAsDataURL(file);
@@ -1900,8 +1912,10 @@ function handleLogo(file){
 function clearLogo(e){
   if(e) e.stopPropagation();
   chosenLogo = null;
+  const dz = document.getElementById('dropzone'); if(dz) dz.classList.remove('has-logo');
   const box = document.getElementById('upl-emoji'); if(box) box.innerHTML = UPL_ICON;
   const hint = document.getElementById('upl-hint'); if(hint) hint.textContent = UPL_HINT;
+  const sub = document.getElementById('upl-sub'); if(sub) sub.textContent = UPL_SUB;
   const input = document.getElementById('logoInput'); if(input) input.value = '';
 }
 /* Token icon: uploaded logo → the emoji (legacy/demo tokens) → a ticker monogram. */
