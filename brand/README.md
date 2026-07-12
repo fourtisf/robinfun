@@ -16,7 +16,29 @@ matching the product's design tokens.
 | `robinfun-lockup.svg` | Mark + `Robinfun` wordmark, horizontal | headers, docs, README banners |
 | `robinfun-mark.png` | 512px transparent render of the mark | quick previews / raster needs |
 | `robinfun-icon.png` | 512px render of the app icon | store listings, avatars |
+| `robinfun-x-pfp.png` | 800×800 avatar (feather + glow rings) | X / Twitter profile photo (crops to a circle) |
+| `robinfun-x-header.png` | 1500×500 banner (lockup + tagline + chart) | X / Twitter header |
+| `robinfun-x-*.html` | source pages for the two X assets | re-render if copy/size changes |
 | `brand-sheet.png` | This overview sheet | reference |
+
+### Social assets (X / Twitter)
+
+- **Profile photo** — upload `robinfun-x-pfp.png`. It is 800×800 (X crops to a
+  circle; the glow rings sit inside the circle so nothing important is clipped).
+- **Header** — upload `robinfun-x-header.png` (1500×500, X's native size). The
+  bottom-left is kept clear so the profile photo overlay never covers the
+  wordmark or tagline.
+
+Both are rendered from the HTML sources with headless Chromium at **device
+scale 1** and the canvas pinned with `position:absolute` + explicit pixel
+height (a headless-viewport quirk leaves a strip at the bottom otherwise):
+
+```bash
+chrome --headless=new --hide-scrollbars --window-size=800,800 \
+  --screenshot=robinfun-x-pfp.png robinfun-x-pfp.html
+chrome --headless=new --hide-scrollbars --window-size=1500,500 \
+  --screenshot=robinfun-x-header.png robinfun-x-header.html
+```
 
 The mark is also **inlined** into the site (`deploy/site/index.html` and
 `docs/robinfun-prototype.html`) — topbar, hero, and an SVG-data-URI favicon —

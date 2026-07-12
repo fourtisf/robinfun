@@ -1,0 +1,70 @@
+<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+  *{margin:0;box-sizing:border-box}
+  html,body{overflow:hidden;background:#080b0a;font-family:'Space Grotesk','Segoe UI',system-ui,Arial,sans-serif}
+  .banner{position:absolute;top:0;left:0;width:1500px;height:500px;overflow:hidden;
+    background:
+      radial-gradient(80% 120% at 88% 12%, rgba(198,242,60,.22), transparent 58%),
+      radial-gradient(60% 100% at 8% 92%, rgba(198,242,60,.10), transparent 60%),
+      linear-gradient(120deg,#101a0c 0%,#0b120a 46%,#080b0a 100%);}
+  /* subtle ledger grid */
+  .grid{position:absolute;inset:0;opacity:.06;
+    background-image:linear-gradient(#C6F23C 1px,transparent 1px),linear-gradient(90deg,#C6F23C 1px,transparent 1px);
+    background-size:52px 52px;-webkit-mask-image:linear-gradient(90deg,transparent,#000 40%,#000 100%)}
+  .content{position:absolute;left:96px;top:0;height:100%;display:flex;flex-direction:column;justify-content:center;gap:22px;z-index:3}
+  .lock{display:flex;align-items:center;gap:22px}
+  .lock svg{filter:drop-shadow(0 6px 22px rgba(198,242,60,.55))}
+  .word{font-size:96px;font-weight:700;letter-spacing:-.035em;line-height:.9;color:#EEF4E4}
+  .word em{font-style:normal;color:#C6F23C}
+  .tag{font-size:31px;color:#C7D0B7;font-weight:500;letter-spacing:-.01em}
+  .tag em{font-style:normal;color:#C6F23C;font-weight:700}
+  .chip{display:inline-flex;align-items:center;gap:11px;align-self:flex-start;
+    padding:11px 20px;border:1px solid rgba(198,242,60,.32);border-radius:999px;
+    background:rgba(198,242,60,.06);color:#DCE6CC;font-size:20px;font-weight:500;letter-spacing:.01em}
+  .dot{width:11px;height:11px;border-radius:50%;background:#C6F23C;box-shadow:0 0 10px #C6F23C}
+  .art{position:absolute;right:-30px;bottom:-20px;width:760px;height:500px;z-index:1;opacity:.92;
+    -webkit-mask-image:radial-gradient(120% 120% at 75% 60%,#000 55%,transparent 85%)}
+  .fade{position:absolute;inset:0;z-index:2;pointer-events:none;
+    background:linear-gradient(90deg,rgba(8,11,10,.86) 0%,rgba(8,11,10,.35) 34%,transparent 52%)}
+</style></head><body>
+  <div class="banner">
+    <div class="grid"></div>
+    <div class="art">
+      <svg viewBox="0 0 340 300" fill="none" width="760" height="500" preserveAspectRatio="xMidYMid meet">
+        <g stroke="#C6F23C" stroke-width="2">
+          <line x1="46" y1="196" x2="46" y2="252" opacity=".4"/>
+          <line x1="94" y1="150" x2="94" y2="228" opacity=".5"/>
+          <line x1="142" y1="168" x2="142" y2="236" opacity=".45"/>
+          <line x1="190" y1="108" x2="190" y2="210" opacity=".6"/>
+          <line x1="238" y1="78" x2="238" y2="188" opacity=".72"/>
+          <line x1="286" y1="42" x2="286" y2="166" opacity=".85"/>
+        </g>
+        <g fill="#C6F23C">
+          <rect x="36" y="206" width="20" height="40" rx="3" opacity=".4"/>
+          <rect x="84" y="162" width="20" height="52" rx="3" opacity=".5"/>
+          <rect x="132" y="180" width="20" height="44" rx="3" opacity=".45"/>
+          <rect x="180" y="122" width="20" height="70" rx="3" opacity=".6"/>
+          <rect x="228" y="92" width="20" height="82" rx="3" opacity=".72"/>
+          <rect x="276" y="56" width="20" height="96" rx="3" opacity=".92"/>
+        </g>
+        <path d="M40 224 L110 168 L156 190 L300 42" stroke="#D8FB5C" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M283 36 L305 40 L296 60" stroke="#D8FB5C" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+      </svg>
+    </div>
+    <div class="fade"></div>
+    <div class="content">
+      <div class="lock">
+        <svg width="86" height="86" viewBox="0 0 64 64" fill="none">
+          <defs><linearGradient id="p" x1="14" y1="54" x2="48" y2="10" gradientUnits="userSpaceOnUse">
+            <stop offset="0" stop-color="#A6D62E"/><stop offset=".55" stop-color="#C6F23C"/><stop offset="1" stop-color="#E4FF7A"/>
+          </linearGradient></defs>
+          <path fill="url(#p)" d="M50 8 C 33 9, 20 18, 15 34 C 13.6 38.5, 13.2 43.2, 14 48 L 25.2 36.8 C 25.6 32.2, 27.6 27.9, 31 24.5 C 34.5 21, 38.8 19, 43.4 18.6 L 32.5 29.5 C 36.8 29.2, 41 27.6, 44.7 24.6 C 50.2 20.2, 52.4 13.7, 50 8 Z"/>
+          <path fill="url(#p)" d="M21.6 37.4 L24 39.3 L12 53 L10.9 51.1 Z"/>
+          <path stroke="#0A0F0A" stroke-width="2.1" stroke-linecap="round" opacity=".9" d="M44.4 14.4 L18.7 40.2"/>
+        </svg>
+        <div class="word">Robin<em>fun</em></div>
+      </div>
+      <div class="tag">Launch a token. Collect the <em>fee</em> — forever.</div>
+      <div class="chip"><span class="dot"></span>Robinhood Chain · fair-launch bonding curves · LP 100% burned</div>
+    </div>
+  </div>
+</body></html>
