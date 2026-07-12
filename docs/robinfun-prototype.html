@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Robinfun — Fair-Launch Bonding Curves on Robinhood Chain</title>
-<meta name="description" content="Launch tokens with a built-in creator levy. Every trade pays you — on the curve and after graduation. Fair bonding curves, LP 100% burned.">
+<meta name="description" content="Launch tokens with a built-in creator fee. Every trade pays you — on the curve and after graduation. Fair bonding curves, LP 100% burned.">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -23,7 +23,7 @@
   --cream:#F2F5EA;          /* primary text                           */
   --cream-dim:#9AA18F;      /* secondary text                         */
   --cream-mute:#5F6653;     /* tertiary / labels                      */
-  --gilt:#C6F23C;           /* volt lime — brand + levy accent        */
+  --gilt:#C6F23C;           /* volt lime — brand + fee accent        */
   --gilt-bright:#D8FB5C;
   --gilt-dim:rgba(198,242,60,.13);
   --jade:#C6F23C;           /* buys / positive (same volt lime)       */
@@ -313,7 +313,7 @@ body.light .stake-orbit text{fill:#3C9A1B}
 .tmcap{font-family:var(--font-mono);font-size:13.5px;font-weight:600}
 .tmcap span{font-size:10.5px;color:var(--cream-mute);font-weight:400;letter-spacing:.06em;margin-right:5px}
 .tchg{font-family:var(--font-mono);font-size:12px;font-weight:600}
-/* levy badge — clean lime pill */
+/* fee badge — clean lime pill */
 .stamp{
   display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:10px;
   font-weight:600;letter-spacing:.04em;color:var(--gilt-bright);
@@ -373,10 +373,10 @@ body.light .stake-orbit text{fill:#3C9A1B}
 .emoji-pick button:hover{background:var(--ledger-2)}
 .emoji-pick button.sel{border-color:var(--gilt);background:var(--gilt-dim)}
 
-/* levy configurator */
+/* fee configurator */
 .levy-box{border:1px solid rgba(198,242,60,.28);position:relative}
 .levy-box::before{
-  content:"CREATOR LEVY";position:absolute;top:-9px;left:16px;background:var(--ledger);
+  content:"CREATOR FEE";position:absolute;top:-9px;left:16px;background:var(--ledger);
   padding:0 9px;font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;color:var(--gilt);
 }
 .preset-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:18px}
@@ -726,7 +726,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
               </svg>
               <span class="banner-word">Robin<em>fun</em></span>
             </div>
-            <p class="banner-tag" data-i18n-html="hero.tag">Launch a token. Collect the <em>levy</em> — forever.</p>
+            <p class="banner-tag" data-i18n-html="hero.tag">Launch a token. Collect the <em>fee</em> — forever.</p>
             <div class="banner-chip" data-i18n-html="hero.chip"><span class="dot"></span>Robinhood Chain · fair-launch bonding curves</div>
             <div class="hero-cta">
               <button class="btn btn-gold btn-lg" data-i18n="btn.launch" onclick="go('create')">+ Launch Token</button>
@@ -771,7 +771,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       </div>
       <p class="hero-desc">
         Fair-launch bonding curves. Start at a <b>$4k cap</b>, graduate at <b>~$44k</b> into a Uniswap pool with
-        <b>100% of the LP burned</b> — no presale, no team. The twist: set a <span class="lv">creator levy up to 10%</span>,
+        <b>100% of the LP burned</b> — no presale, no team. The twist: set a <span class="lv">creator fee up to 10%</span>,
         and every buy &amp; sell routes fees to your wallet — on the curve, and long after graduation.
       </p>
     </section>
@@ -804,7 +804,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   <div class="wrap">
     <div class="page-head">
       <h2 data-i18n="create.h">Create a token</h2>
-      <p data-i18n="create.p">Deploys in one transaction. No presale, no team allocation — 1B supply, all of it on the curve. The levy you set below is written into the token contract itself, so it keeps paying you after graduation.</p>
+      <p data-i18n="create.p">Deploys in one transaction. No presale, no team allocation — 1B supply, all of it on the curve. The fee you set below is written into the token contract itself, so it keeps paying you after graduation.</p>
     </div>
     <div class="create-grid">
       <!-- left: identity -->
@@ -849,32 +849,32 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
         </div>
       </div>
 
-      <!-- right: levy configurator -->
+      <!-- right: fee configurator -->
       <div>
         <div class="panel panel-pad levy-box">
           <div class="preset-row">
-            <button class="preset" data-p="0" onclick="setPreset(0,0,this)"><div class="p-n">0 / 0</div><div class="p-l">No levy</div></button>
+            <button class="preset" data-p="0" onclick="setPreset(0,0,this)"><div class="p-n">0 / 0</div><div class="p-l">No fee</div></button>
             <button class="preset sel" data-p="3" onclick="setPreset(3,3,this)"><div class="p-n">3 / 3</div><div class="p-l">Standard</div></button>
             <button class="preset" data-p="5" onclick="setPreset(5,5,this)"><div class="p-n">5 / 5</div><div class="p-l">Degen</div></button>
             <button class="preset" data-p="c" onclick="markCustom(this)"><div class="p-n">?/?</div><div class="p-l">Custom</div></button>
           </div>
           <div class="slider-row">
-            <div class="slider-head"><span class="sl">Buy levy</span><span class="sv" id="v-buy">3%</span></div>
+            <div class="slider-head"><span class="sl">Buy fee</span><span class="sv" id="v-buy">3%</span></div>
             <input type="range" id="r-buy" min="0" max="10" step="0.5" value="3" oninput="onSlider()">
           </div>
           <div class="slider-row">
-            <div class="slider-head"><span class="sl">Sell levy</span><span class="sv" id="v-sell">3%</span></div>
+            <div class="slider-head"><span class="sl">Sell fee</span><span class="sv" id="v-sell">3%</span></div>
             <input type="range" id="r-sell" min="0" max="10" step="0.5" value="3" oninput="onSlider()">
           </div>
-          <p class="tax-warn" id="taxWarn">High levies (&gt;5%) tend to suppress volume — you may earn more with a lower rate.</p>
+          <p class="tax-warn" id="taxWarn">High fees (&gt;5%) tend to suppress volume — you may earn more with a lower rate.</p>
           <div class="field">
-            <label for="c-wallet">Levy destination — your dev wallet</label>
+            <label for="c-wallet">Fee destination — your dev wallet</label>
             <input type="text" id="c-wallet" class="mono" placeholder="Connect wallet to autofill" spellcheck="false">
             <div class="hint">Fees are harvested to ETH automatically and stream here. Claim any time from the Treasury tab.</div>
           </div>
           <div class="switch-row">
             <div>
-              <div class="sw-t">Halve levy at graduation</div>
+              <div class="sw-t">Halve fee at graduation</div>
               <div class="sw-d">Signals long-term intent — rates drop 50% when the token graduates to Uniswap.</div>
             </div>
             <label class="switch"><input type="checkbox" id="c-decay" onchange="projector()"><span class="track"></span></label>
@@ -882,7 +882,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <div class="switch-row">
             <div>
               <div class="sw-t">Renounce rate control</div>
-              <div class="sw-d">Locks the levy permanently. Without this, you can lower rates later — but never raise them.</div>
+              <div class="sw-d">Locks the fee permanently. Without this, you can lower rates later — but never raise them.</div>
             </div>
             <label class="switch"><input type="checkbox" id="c-renounce"><span class="track"></span></label>
           </div>
@@ -904,7 +904,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
         <div class="panel panel-pad">
           <div class="panel-title">Written into the contract</div>
           <div class="assurance"><span class="tick">✓</span><span><b>Hard cap 10% / 10%.</b> The factory rejects anything higher — honeypots are structurally impossible.</span></div>
-          <div class="assurance"><span class="tick">✓</span><span><b>Rates can only go down.</b> No function exists to raise a levy after deploy.</span></div>
+          <div class="assurance"><span class="tick">✓</span><span><b>Rates can only go down.</b> No function exists to raise a fee after deploy.</span></div>
           <div class="assurance"><span class="tick">✓</span><span><b>No blacklist, no pause, no mint.</b> Transfers can never be blocked or diluted.</span></div>
           <div class="assurance"><span class="tick">✓</span><span><b>LP 100% burned at graduation.</b> The Uniswap pool can never be pulled.</span></div>
           <div class="deploy-cost"><span>Deploy cost</span><span id="deployCost">0.002 ETH + gas</span></div>
@@ -950,7 +950,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <div class="stat-cell"><div class="k">Market cap</div><div class="v" id="ts-mcap">—</div></div>
             <div class="stat-cell"><div class="k">24h volume</div><div class="v" id="ts-vol">—</div></div>
             <div class="stat-cell"><div class="k">Holders</div><div class="v" id="ts-holders">—</div></div>
-            <div class="stat-cell"><div class="k">Levy paid to creator</div><div class="v gold" id="ts-earned">—</div></div>
+            <div class="stat-cell"><div class="k">Fee paid to creator</div><div class="v gold" id="ts-earned">—</div></div>
           </div>
         </div>
 
@@ -964,7 +964,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           </div>
           <div id="subtab-trades">
             <table class="trades-table">
-              <thead><tr><th>Time</th><th>Side</th><th>ETH</th><th>Tokens</th><th class="levy-col" style="color:#C6F23C">Levy</th><th>Wallet</th></tr></thead>
+              <thead><tr><th>Time</th><th>Side</th><th>ETH</th><th>Tokens</th><th class="levy-col" style="color:#C6F23C">Fee</th><th>Wallet</th></tr></thead>
               <tbody id="tradesBody"></tbody>
             </table>
           </div>
@@ -991,7 +991,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <div class="fee-lines" id="feeLines"></div>
             <button class="btn btn-jade btn-lg btn-block" id="tradeBtn" onclick="doTrade()">Buy</button>
             <p style="font-family:var(--font-mono);font-size:10.5px;color:var(--cream-mute);margin-top:10px;text-align:center">
-              1% curve fee · slippage auto · <span id="fee-note">3% buy levy → creator</span>
+              1% curve fee · slippage auto · <span id="fee-note">3% buy fee → creator</span>
             </p>
           </div>
         </div>
@@ -1005,17 +1005,17 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <div class="curve-lbl"><span id="tk-curvelbl">$0 raised</span><span>graduates at $44k</span></div>
           </div>
           <p style="font-size:12px;color:var(--cream-dim);margin-top:8px" id="tk-curvedesc">
-            When the cap reaches ~$44k, liquidity deploys to Uniswap and <b style="color:var(--cream)">100% of the LP is burned</b>. The levy keeps working after graduation — it lives in the token contract.
+            When the cap reaches ~$44k, liquidity deploys to Uniswap and <b style="color:var(--cream)">100% of the LP is burned</b>. The fee keeps working after graduation — it lives in the token contract.
           </p>
         </div>
 
         <div style="height:14px"></div>
 
         <div class="panel panel-pad">
-          <div class="panel-title">Creator levy — public record</div>
+          <div class="panel-title">Creator fee — public record</div>
           <div class="info-rows">
-            <div class="ir"><span>Buy levy</span><b id="li-buy">—</b></div>
-            <div class="ir"><span>Sell levy</span><b id="li-sell">—</b></div>
+            <div class="ir"><span>Buy fee</span><b id="li-buy">—</b></div>
+            <div class="ir"><span>Sell fee</span><b id="li-sell">—</b></div>
             <div class="ir"><span>After graduation</span><b id="li-decay">—</b></div>
             <div class="ir"><span>Rate control</span><b id="li-ren">—</b></div>
             <div class="ir"><span>Destination</span><b class="gold" id="li-dest">—</b></div>
@@ -1032,7 +1032,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   <div class="wrap">
     <div class="page-head">
       <h2 data-i18n="treasury.h">Treasury</h2>
-      <p data-i18n="treasury.p">Levies from your tokens are harvested to ETH automatically and accrue here. Claim per token, or sweep everything at once.</p>
+      <p data-i18n="treasury.p">Fees from your tokens are harvested to ETH automatically and accrue here. Claim per token, or sweep everything at once.</p>
     </div>
     <div class="treasury-grid">
       <div class="panel t-stat"><div class="k">Claimable now</div><div class="v gold" id="tr-claimable">0 ETH</div><div class="s" id="tr-claimusd">≈ $0</div></div>
@@ -1051,7 +1051,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   <div class="wrap">
     <div class="page-head">
       <h2 data-i18n="stake.h">Stake $ROBIN</h2>
-      <p data-i18n-html="stake.p">The protocol keeps a 1% curve fee and 10% of every creator levy across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.</p>
+      <p data-i18n-html="stake.p">The protocol keeps a 1% curve fee and 10% of every creator fee across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.</p>
     </div>
     <div class="stake-grid">
       <div class="panel t-stat"><div class="k">Est. APR · 30d</div><div class="v gold" id="stk-apr">—%</div><div class="s">paid in ETH</div></div>
@@ -1109,7 +1109,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           </div>
           <div class="panel-title">Where the yield comes from</div>
           <div class="stake-src"><span class="n">1%</span><span><b>Curve trade fee.</b> Every buy and sell on every bonding curve pays a flat 1% to the protocol.</span></div>
-          <div class="stake-src"><span class="n">10%</span><span><b>Protocol levy cut.</b> Of every creator levy collected platform-wide, 90% goes to the creator, 10% to stakers.</span></div>
+          <div class="stake-src"><span class="n">10%</span><span><b>Protocol fee cut.</b> Of every creator fee collected platform-wide, 90% goes to the creator, 10% to stakers.</span></div>
           <div class="stake-src"><span class="n">100%</span><span><b>Streamed to stakers.</b> All of it is swapped to ETH and distributed pro-rata to staked $ROBIN. The protocol keeps nothing extra.</span></div>
         </div>
         <div class="panel panel-pad">
@@ -1135,14 +1135,14 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
     </div>
     <div class="docs-grid" style="padding-top:20px">
       <div class="panel doc-card"><div class="n">i.</div><h4>Launch on the curve</h4><p>Every token starts at a <b>$4,000 market cap</b> with 1B supply, all on a bonding curve. No presale, no team bags. Price moves deterministically with buys and sells; a flat <b>1% curve fee</b> funds the platform.</p></div>
-      <div class="panel doc-card"><div class="n">ii.</div><h4>Set your levy</h4><p>Choose a buy and sell levy from <b>0–10%</b> at deploy. Every trade routes that share to your dev wallet, auto-harvested to ETH. Rates can be lowered or renounced — <b>never raised</b>. The rate is stamped on the token card for everyone to see.</p></div>
-      <div class="panel doc-card"><div class="n">iii.</div><h4>Graduate & keep earning</h4><p>At <b>~$44,000</b> the curve closes and liquidity moves to Uniswap with <b>100% of the LP burned</b>. Platform creator fees end there on other launchpads — your levy doesn't, because it lives in the contract, not the platform.</p></div>
+      <div class="panel doc-card"><div class="n">ii.</div><h4>Set your fee</h4><p>Choose a buy and sell fee from <b>0–10%</b> at deploy. Every trade routes that share to your dev wallet, auto-harvested to ETH. Rates can be lowered or renounced — <b>never raised</b>. The rate is stamped on the token card for everyone to see.</p></div>
+      <div class="panel doc-card"><div class="n">iii.</div><h4>Graduate & keep earning</h4><p>At <b>~$44,000</b> the curve closes and liquidity moves to Uniswap with <b>100% of the LP burned</b>. Platform creator fees end there on other launchpads — your fee doesn't, because it lives in the contract, not the platform.</p></div>
     </div>
     <div class="rules panel panel-pad">
       <div class="panel-title">The fine print, in plain terms</div>
-      <div class="assurance"><span class="tick">✓</span><span><b>Creator levy split:</b> 90% to the creator wallet, 10% to Robinfun (streamed to $ROBIN stakers). Harvests run automatically every ~$500 of accrued fees.</span></div>
+      <div class="assurance"><span class="tick">✓</span><span><b>Creator fee split:</b> 90% to the creator wallet, 10% to Robinfun (streamed to $ROBIN stakers). Harvests run automatically every ~$500 of accrued fees.</span></div>
       <div class="assurance"><span class="tick">✓</span><span><b>Anti-honeypot by construction:</b> max 10%/10%, no blacklist, no pause, no mint, no transfer gates. If it deployed through Robinfun, you can always sell.</span></div>
-      <div class="assurance"><span class="tick">✓</span><span><b>Zero-levy launches welcome:</b> set 0/0 and Robinfun behaves like a classic fair launchpad — the stamp shows <b>0/0</b> so traders know.</span></div>
+      <div class="assurance"><span class="tick">✓</span><span><b>Zero-fee launches welcome:</b> set 0/0 and Robinfun behaves like a classic fair launchpad — the stamp shows <b>0/0</b> so traders know.</span></div>
       <div class="assurance"><span class="tick">✓</span><span><b>Chain:</b> Robinhood Chain (Arbitrum Orbit). Gas in ETH. Graduation pool on Uniswap v2.</span></div>
     </div>
   </div>
@@ -1170,7 +1170,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 <!-- ======================= FOOTER ======================= -->
 <footer>
   <div class="wrap foot-in">
-    <div class="foot-l">Robinfun · fair-launch bonding curves · creator levy 0–10% · LP 100% burned · Robinhood Chain</div>
+    <div class="foot-l">Robinfun · fair-launch bonding curves · creator fee 0–10% · LP 100% burned · Robinhood Chain</div>
     <div class="foot-links"><a href="#" onclick="go('docs');return false">Whitepaper</a><a href="#">X</a><a href="#">Telegram</a><a href="#">RobinBridge</a></div>
   </div>
 </footer>
@@ -1207,22 +1207,22 @@ function mkTok(o){
   return t;
 }
 let TOKENS = [
-  mkTok({name:'Hood Rat', ticker:'HOODRAT', emoji:'🐀', desc:'The rat that robs the rich. Community levy funds weekly buyback raids.', buyTax:3, sellTax:3, mcap:31200, vol24:184000, chg24:212.4, holders:1841, replies:326, created:Date.now()-31*3600e3}),
-  mkTok({name:'Taxman', ticker:'TAXMAN', emoji:'🎩', desc:'He always collects. 5/5 levy, creator streams P&L live on X.', buyTax:5, sellTax:5, mcap:18900, vol24:96500, chg24:88.1, holders:922, replies:204}),
-  mkTok({name:'Feather', ticker:'FTHR', emoji:'🪶', desc:'Light as a levy. 1/1 tax, the gentleman\'s launch.', buyTax:1, sellTax:1, mcap:9400, vol24:41200, chg24:31.7, holders:512, replies:88}),
-  mkTok({name:'Gilded', ticker:'GILD', emoji:'🏆', desc:'First token to graduate on Robinfun. The OG. LP burned, levy still printing.', buyTax:2, sellTax:2, mcap:112000, vol24:238000, chg24:14.2, holders:3204, replies:641, graduated:true, created:Date.now()-9*86400e3}),
+  mkTok({name:'Hood Rat', ticker:'HOODRAT', emoji:'🐀', desc:'The rat that robs the rich. Community fee funds weekly buyback raids.', buyTax:3, sellTax:3, mcap:31200, vol24:184000, chg24:212.4, holders:1841, replies:326, created:Date.now()-31*3600e3}),
+  mkTok({name:'Taxman', ticker:'TAXMAN', emoji:'🎩', desc:'He always collects. 5/5 fee, creator streams P&L live on X.', buyTax:5, sellTax:5, mcap:18900, vol24:96500, chg24:88.1, holders:922, replies:204}),
+  mkTok({name:'Feather', ticker:'FTHR', emoji:'🪶', desc:'Light as a fee. 1/1 tax, the gentleman\'s launch.', buyTax:1, sellTax:1, mcap:9400, vol24:41200, chg24:31.7, holders:512, replies:88}),
+  mkTok({name:'Gilded', ticker:'GILD', emoji:'🏆', desc:'First token to graduate on Robinfun. The OG. LP burned, fee still printing.', buyTax:2, sellTax:2, mcap:112000, vol24:238000, chg24:14.2, holders:3204, replies:641, graduated:true, created:Date.now()-9*86400e3}),
   mkTok({name:'Sherwood', ticker:'WOOD', emoji:'🏹', desc:'Steal from the rich chain, give to the merry holders.', buyTax:3, sellTax:4, mcap:22100, vol24:74300, chg24:-12.6, holders:1104, replies:167}),
-  mkTok({name:'Nottingham', ticker:'NOTTS', emoji:'🏰', desc:'The sheriff\'s coin. 0/0 — no levy, pure fair launch, may the best degen win.', buyTax:0, sellTax:0, mcap:12800, vol24:52800, chg24:44.9, holders:734, replies:121}),
+  mkTok({name:'Nottingham', ticker:'NOTTS', emoji:'🏰', desc:'The sheriff\'s coin. 0/0 — no fee, pure fair launch, may the best degen win.', buyTax:0, sellTax:0, mcap:12800, vol24:52800, chg24:44.9, holders:734, replies:121}),
   mkTok({name:'Loot', ticker:'LOOT', emoji:'💰', desc:'Graduated in 41 minutes. Creator earned 3.1 ETH before Uniswap.', buyTax:4, sellTax:4, mcap:87400, vol24:129000, chg24:-6.8, holders:2410, replies:388, graduated:true, created:Date.now()-4*86400e3}),
-  mkTok({name:'Merry Men', ticker:'MERRY', emoji:'🍻', desc:'A round for everyone. Levy halves at graduation — long game.', buyTax:4, sellTax:4, decay:true, mcap:15600, vol24:47800, chg24:22.3, holders:689, replies:95}),
-  mkTok({name:'Quiver', ticker:'QVR', emoji:'🎯', desc:'Straight shooter. Renounced levy at 2/2, locked forever.', buyTax:2, sellTax:2, renounced:true, mcap:7900, vol24:22100, chg24:9.4, holders:341, replies:44}),
-  mkTok({name:'Robbed', ticker:'ROBBED', emoji:'😭', desc:'We\'ve all been there. Therapy levy: 3/3, proceeds to the group chat.', buyTax:3, sellTax:3, mcap:5900, vol24:18400, chg24:-28.1, holders:287, replies:76}),
+  mkTok({name:'Merry Men', ticker:'MERRY', emoji:'🍻', desc:'A round for everyone. Fee halves at graduation — long game.', buyTax:4, sellTax:4, decay:true, mcap:15600, vol24:47800, chg24:22.3, holders:689, replies:95}),
+  mkTok({name:'Quiver', ticker:'QVR', emoji:'🎯', desc:'Straight shooter. Renounced fee at 2/2, locked forever.', buyTax:2, sellTax:2, renounced:true, mcap:7900, vol24:22100, chg24:9.4, holders:341, replies:44}),
+  mkTok({name:'Robbed', ticker:'ROBBED', emoji:'😭', desc:'We\'ve all been there. Therapy fee: 3/3, proceeds to the group chat.', buyTax:3, sellTax:3, mcap:5900, vol24:18400, chg24:-28.1, holders:287, replies:76}),
   mkTok({name:'Friar Tuck', ticker:'TUCK', emoji:'🍺', desc:'Blessed be the bag. Sunday-only shill schedule.', buyTax:2.5, sellTax:2.5, mcap:6800, vol24:15900, chg24:12.8, holders:198, replies:31}),
-  mkTok({name:'Marian', ticker:'MARIAN', emoji:'💘', desc:'The chain\'s sweetheart. Soft levy, softer chart.', buyTax:1.5, sellTax:1.5, mcap:8700, vol24:26700, chg24:17.5, holders:404, replies:59}),
+  mkTok({name:'Marian', ticker:'MARIAN', emoji:'💘', desc:'The chain\'s sweetheart. Soft fee, softer chart.', buyTax:1.5, sellTax:1.5, mcap:8700, vol24:26700, chg24:17.5, holders:404, replies:59}),
   mkTok({name:'Yoink', ticker:'YOINK', emoji:'🫳', desc:'Grab it before it graduates. 38 minutes old.', buyTax:3, sellTax:3, mcap:4900, vol24:9200, chg24:96.3, holders:118, replies:22, created:Date.now()-38*60e3}),
-  mkTok({name:'Pleb Duty', ticker:'DUTY', emoji:'📜', desc:'Pay your dues, collect your due. Meta-levy token about levies.', buyTax:5, sellTax:3, mcap:11400, vol24:33600, chg24:-4.2, holders:526, replies:83}),
+  mkTok({name:'Pleb Duty', ticker:'DUTY', emoji:'📜', desc:'Pay your dues, collect your due. Meta-fee token about fees.', buyTax:5, sellTax:3, mcap:11400, vol24:33600, chg24:-4.2, holders:526, replies:83}),
   mkTok({name:'Arrowhead', ticker:'ARRW', emoji:'🗡️', desc:'Sharp entries only. Creator does daily TA threads.', buyTax:2, sellTax:2, mcap:26900, vol24:88700, chg24:57.9, holders:1355, replies:213}),
-  mkTok({name:'Greenwood', ticker:'GRNW', emoji:'🌲', desc:'Touch grass, hold wood. Eco-larp with a 1/1 levy.', buyTax:1, sellTax:1, mcap:5200, vol24:8800, chg24:6.1, holders:143, replies:18, created:Date.now()-2.4*3600e3}),
+  mkTok({name:'Greenwood', ticker:'GRNW', emoji:'🌲', desc:'Touch grass, hold wood. Eco-larp with a 1/1 fee.', buyTax:1, sellTax:1, mcap:5200, vol24:8800, chg24:6.1, holders:143, replies:18, created:Date.now()-2.4*3600e3}),
 ];
 TOKENS.forEach(t=>{
   const n = 4+Math.floor(rnd(0,20));
@@ -1258,7 +1258,7 @@ function seedMyTokens(){
   if(TOKENS.some(t=>t.mine)) return;
   const mine = [
     mkTok({name:'Bundle Rat', ticker:'BRAT', emoji:'🧾', desc:'Your earlier launch. Cruising the mid-curve.', buyTax:3, sellTax:3, mcap:16400, vol24:38800, chg24:12.2, holders:512, replies:64, mine:true, creator:MY_ADDR, earnedEth:1.284, created:Date.now()-3*86400e3}),
-    mkTok({name:'Warchest', ticker:'CHEST', emoji:'🪖', desc:'Graduated last week. Levy still streaming from Uniswap volume.', buyTax:4, sellTax:4, mcap:96200, vol24:61200, chg24:4.1, holders:1922, replies:301, mine:true, graduated:true, creator:MY_ADDR, earnedEth:6.917, created:Date.now()-11*86400e3}),
+    mkTok({name:'Warchest', ticker:'CHEST', emoji:'🪖', desc:'Graduated last week. Fee still streaming from Uniswap volume.', buyTax:4, sellTax:4, mcap:96200, vol24:61200, chg24:4.1, holders:1922, replies:301, mine:true, graduated:true, creator:MY_ADDR, earnedEth:6.917, created:Date.now()-11*86400e3}),
   ];
   mine.forEach(t=>{ t.claimable = t.ticker==='BRAT'?0.412:1.108; TOKENS.push(t); });
   renderGrid();
@@ -1281,32 +1281,32 @@ const I18N = {
   en:{
     'nav.tokens':'Tokens','nav.create':'Create','nav.staking':'Staking','nav.whitepaper':'Whitepaper','nav.chain':'Robinhood Chain',
     'btn.launch':'+ Launch Token','btn.connect':'Connect wallet',
-    'hero.tag':'Launch a token. Collect the <em>levy</em> — forever.',
+    'hero.tag':'Launch a token. Collect the <em>fee</em> — forever.',
     'hero.chip':'<span class="dot"></span>Robinhood Chain · fair-launch bonding curves',
     'hero.explore':'Explore tokens','board.title':'The board',
     'board.note':'<span class="live-dot"></span>Live — cards flash and re-sort as trades land',
     'create.h':'Create a token',
-    'create.p':'Deploys in one transaction. No presale, no team allocation — 1B supply, all of it on the curve. The levy you set below is written into the token contract itself, so it keeps paying you after graduation.',
+    'create.p':'Deploys in one transaction. No presale, no team allocation — 1B supply, all of it on the curve. The fee you set below is written into the token contract itself, so it keeps paying you after graduation.',
     'treasury.h':'Treasury',
-    'treasury.p':'Levies from your tokens are harvested to ETH automatically and accrue here. Claim per token, or sweep everything at once.',
+    'treasury.p':'Fees from your tokens are harvested to ETH automatically and accrue here. Claim per token, or sweep everything at once.',
     'stake.h':'Stake $ROBIN',
-    'stake.p':'The protocol keeps a 1% curve fee and 10% of every creator levy across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.',
+    'stake.p':'The protocol keeps a 1% curve fee and 10% of every creator fee across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.',
     'docs.h':'How Robinfun works',
     'docs.p':'Pump-style fair launches, plus one thing nobody else gives creators: a revenue stream written into the token itself.'
   },
   zh:{
     'nav.tokens':'代币','nav.create':'创建','nav.staking':'质押','nav.whitepaper':'白皮书','nav.chain':'Robinhood 链',
     'btn.launch':'+ 发行代币','btn.connect':'连接钱包',
-    'hero.tag':'发行代币，永久收取你的 <em>levy</em>。',
+    'hero.tag':'发行代币，永久收取你的 <em>费用</em>。',
     'hero.chip':'<span class="dot"></span>Robinhood 链 · 公平发射联合曲线',
     'hero.explore':'浏览代币','board.title':'代币榜',
     'board.note':'<span class="live-dot"></span>实时 — 有成交时卡片闪烁并重新排序',
     'create.h':'创建代币',
-    'create.p':'一笔交易即可部署。无预售、无团队份额 — 总量 10 亿，全部进入联合曲线。你在下方设置的 levy 会写入代币合约本身，因此毕业后仍持续向你付款。',
+    'create.p':'一笔交易即可部署。无预售、无团队份额 — 总量 10 亿，全部进入联合曲线。你在下方设置的费用会写入代币合约本身，因此毕业后仍持续向你付款。',
     'treasury.h':'金库',
-    'treasury.p':'你代币产生的 levy 会自动兑换成 ETH 并在此累积。可按代币领取，或一键全部提取。',
+    'treasury.p':'你代币产生的费用会自动兑换成 ETH 并在此累积。可按代币领取，或一键全部提取。',
     'stake.h':'质押 $ROBIN',
-    'stake.p':'协议在全平台收取 1% 曲线手续费，以及每笔创作者 levy 的 10%。质押 $ROBIN，这些收入会以<b>真实 ETH</b> 返还给你 — 无通胀、无增发，只是把平台抽成分给持有者。',
+    'stake.p':'协议在全平台收取 1% 曲线手续费，以及每笔创作者费用的 10%。质押 $ROBIN，这些收入会以<b>真实 ETH</b> 返还给你 — 无通胀、无增发，只是把平台抽成分给持有者。',
     'docs.h':'Robinfun 如何运作',
     'docs.p':'Pump 式公平发射，外加别人不会给创作者的东西：写入代币本身的收入流。'
   }
@@ -1351,7 +1351,7 @@ let myStakeReward = 0;              // user's pending ETH rewards
 let LEVY_BAL = 0;                   // user's wallet $ROBIN (set on connect)
 let stakeSide = 'stake';
 const fmtLevy = n => fmtNum(n)+' $ROBIN';
-const stkVal = levy => levy*LEVY_PRICE;
+const stkVal = fee => fee*LEVY_PRICE;
 
 function setStakeSide(s){
   stakeSide = s;
@@ -1472,10 +1472,10 @@ function setFilter(f){
   renderGrid();
 }
 function stampHtml(t, small){
-  if(!t.buyTax && !t.sellTax) return '<span class="stamp zero">0/0 · NO LEVY</span>';
+  if(!t.buyTax && !t.sellTax) return '<span class="stamp zero">0/0 · NO FEE</span>';
   const hot = Math.max(t.buyTax,t.sellTax) > 5;
   const cls = hot ? 'stamp hot' : 'stamp';
-  return '<span class="'+cls+'" title="Buy '+t.buyTax+'% / Sell '+t.sellTax+'% — routed to the creator wallet">'+t.buyTax+'/'+t.sellTax+' LEVY</span>';
+  return '<span class="'+cls+'" title="Buy '+t.buyTax+'% / Sell '+t.sellTax+'% — routed to the creator wallet">'+t.buyTax+'/'+t.sellTax+' FEE</span>';
 }
 function cardHtml(t){
   const prog = Math.min(100, Math.max(0,(t.mcap-0)/(GRAD_CAP)*100));
@@ -1550,7 +1550,7 @@ function renderLead(){
 /* ---------------- ticker tape ---------------- */
 function tapeItem(t, tr){
   const side = tr.buy? '<b class="up">BUY</b>':'<b class="down">SELL</b>';
-  const levy = tr.levyEth>0? ' · <span class="gold">levy '+tr.levyEth.toFixed(4)+'Ξ→dev</span>':'';
+  const levy = tr.levyEth>0? ' · <span class="gold">fee '+tr.levyEth.toFixed(4)+'Ξ→dev</span>':'';
   return `<span class="tape-item">${side} <b>$${t.ticker}</b> ${tr.eth.toFixed(3)}Ξ${levy}</span>`;
 }
 function renderTape(){
@@ -1593,7 +1593,7 @@ function renderToken(fresh){
   fill.style.width = (t.graduated?100:prog)+'%';
   fill.className = 'curve-fill'+(t.graduated?' grad':'');
   document.getElementById('tk-curvelbl').textContent = t.graduated? 'curve complete' : fmtUsd(t.mcap)+' · '+prog.toFixed(0)+'%';
-  /* levy record */
+  /* fee record */
   document.getElementById('li-buy').textContent = t.buyTax+'%';
   document.getElementById('li-sell').textContent = t.sellTax+'%';
   document.getElementById('li-decay').textContent = t.decay? 'halves to '+(t.buyTax/2)+'/'+(t.sellTax/2) : 'unchanged';
@@ -1601,8 +1601,8 @@ function renderToken(fresh){
   document.getElementById('li-dest').textContent = t.mine? 'your wallet' : t.creator;
   document.getElementById('li-earned').textContent = t.earnedEth.toFixed(3)+' ETH';
   document.getElementById('fee-note').textContent = side==='buy'
-    ? (t.buyTax>0? t.buyTax+'% buy levy → creator' : 'no buy levy')
-    : (t.sellTax>0? t.sellTax+'% sell levy → creator' : 'no sell levy');
+    ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
+    : (t.sellTax>0? t.sellTax+'% sell fee → creator' : 'no sell fee');
   if(fresh){
     buildCandles(t);
     renderTrades(t);
@@ -1717,7 +1717,7 @@ function renderHolders(t){
       <span class="mono" style="font-size:12px;font-weight:600;width:56px;text-align:right">${r.pct.toFixed(2)}%</span>
     </div>`).join('');
 }
-const SHILL = ['first. levy me daddy','creator based, tax fair, sending it','sold my '+'HOODRAT'+' for this ngl','the 3/3 is honest work','dev doxxed on X, levy renounced, what more do you want','graduation speedrun when','bought the dip, dip kept dipping','this the one'];
+const SHILL = ['first. fee me daddy','creator based, tax fair, sending it','sold my '+'HOODRAT'+' for this ngl','the 3/3 is honest work','dev doxxed on X, fee renounced, what more do you want','graduation speedrun when','bought the dip, dip kept dipping','this the one'];
 function renderThread(t){
   const n = Math.min(6, 2+Math.floor(t.replies/40));
   let html='';
@@ -1750,8 +1750,8 @@ function setSide(s){
   qr.innerHTML = (s==='buy'? ['0.05','0.1','0.5','1.0'].map(v=>`<button onclick="setAmt(${v})">${v} Ξ</button>`)
                            : ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`)).join('');
   if(t) document.getElementById('fee-note').textContent = s==='buy'
-    ? (t.buyTax>0? t.buyTax+'% buy levy → creator' : 'no buy levy')
-    : (t.sellTax>0? t.sellTax+'% sell levy → creator' : 'no sell levy');
+    ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
+    : (t.sellTax>0? t.sellTax+'% sell fee → creator' : 'no sell fee');
   quote();
 }
 function setAmt(v){ document.getElementById('amt').value=v; quote(); }
@@ -1760,14 +1760,14 @@ function quote(){
   const t = tok(); if(!t) return;
   const amt = parseFloat(document.getElementById('amt').value)||0;
   const el = document.getElementById('feeLines');
-  if(!amt){ el.innerHTML = '<div class="fl"><span>Enter an amount to preview the levy split.</span></div>'; return; }
+  if(!amt){ el.innerHTML = '<div class="fl"><span>Enter an amount to preview the fee split.</span></div>'; return; }
   const rate = side==='buy'? t.buyTax : t.sellTax;
   if(side==='buy'){
     const fee = amt*0.01, levy = amt*rate/100, net = amt-fee-levy;
     const tokens = net*ETH_USD/t.price;
     el.innerHTML =
       `<div class="fl"><span>Curve fee · 1%</span><b>${fee.toFixed(5)} Ξ</b></div>`+
-      `<div class="fl levy-fl"><span>Creator levy · ${rate}% → dev wallet</span><b>${levy.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl levy-fl"><span>Creator fee · ${rate}% → dev wallet</span><b>${levy.toFixed(5)} Ξ</b></div>`+
       `<div class="fl"><span>To the curve</span><b>${net.toFixed(5)} Ξ</b></div>`+
       `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(tokens)} $${t.ticker}</b></div>`;
   }else{
@@ -1776,7 +1776,7 @@ function quote(){
     el.innerHTML =
       `<div class="fl"><span>Gross proceeds</span><b>${grossEth.toFixed(5)} Ξ</b></div>`+
       `<div class="fl"><span>Curve fee · 1%</span><b>−${fee.toFixed(5)} Ξ</b></div>`+
-      `<div class="fl levy-fl"><span>Creator levy · ${rate}% → dev wallet</span><b>−${levy.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl levy-fl"><span>Creator fee · ${rate}% → dev wallet</span><b>−${levy.toFixed(5)} Ξ</b></div>`+
       `<div class="fl big"><span>You receive</span><b>≈ ${net.toFixed(5)} ETH</b></div>`;
   }
 }
@@ -1788,7 +1788,7 @@ function doTrade(){
   const buy = side==='buy';
   const eth = buy? amt : amt*t.price/ETH_USD;
   applyTrade(t, {ts:Date.now(), buy, eth, tokens: buy? eth*ETH_USD/t.price : amt, levyEth: eth*(buy?t.buyTax:t.sellTax)/100, wallet: MY_ADDR}, true);
-  toast((buy?'Bought':'Sold')+' — <b>'+eth.toFixed(4)+' Ξ</b>'+((buy?t.buyTax:t.sellTax)>0?' · levy paid to creator':''), buy?'jade':'seal');
+  toast((buy?'Bought':'Sold')+' — <b>'+eth.toFixed(4)+' Ξ</b>'+((buy?t.buyTax:t.sellTax)>0?' · fee paid to creator':''), buy?'jade':'seal');
   document.getElementById('amt').value=''; quote();
 }
 
@@ -1852,8 +1852,8 @@ function projector(){
   const decay = document.getElementById('c-decay').checked;
   document.getElementById('receipt').innerHTML =
     `<div class="r-line"><span>Assumed volume / day</span><b>${fmtUsdFull(vol)}</b></div>`+
-    `<div class="r-line"><span>Avg levy (buy ${b}% · sell ${s}%)</span><b>${((b+s)/2).toFixed(2)}%</b></div>`+
-    `<div class="r-line"><span>Gross levy / day</span><b>${fmtUsdFull(gross)}</b></div>`+
+    `<div class="r-line"><span>Avg fee (buy ${b}% · sell ${s}%)</span><b>${((b+s)/2).toFixed(2)}%</b></div>`+
+    `<div class="r-line"><span>Gross fee / day</span><b>${fmtUsdFull(gross)}</b></div>`+
     `<div class="r-line"><span>Protocol share · 10%</span><b>−${fmtUsdFull(gross*0.1)}</b></div>`+
     `<div class="r-line total"><span>To your wallet / day</span><b>${fmtUsdFull(net)}</b></div>`+
     `<div class="r-line"><span>≈ per month</span><b>${fmtUsdFull(net*30)} · ${(net*30/ETH_USD).toFixed(2)} ETH</b></div>`+
@@ -1892,8 +1892,8 @@ function deploy(){
   document.getElementById('m-receipt').innerHTML =
     `<div class="r-line"><span>Token</span><b>${name} · $${ticker}</b></div>`+
     `<div class="r-line"><span>Supply</span><b>1,000,000,000 · all on curve</b></div>`+
-    `<div class="r-line"><span>Levy</span><b>${b}% buy / ${s}% sell${t.renounced?' · locked':''}</b></div>`+
-    `<div class="r-line"><span>Levy destination</span><b>${MY_ADDR}</b></div>`+
+    `<div class="r-line"><span>Fee</span><b>${b}% buy / ${s}% sell${t.renounced?' · locked':''}</b></div>`+
+    `<div class="r-line"><span>Fee destination</span><b>${MY_ADDR}</b></div>`+
     (devBuy>0? `<div class="r-line"><span>Dev buy</span><b>${devBuy.toFixed(3)} ETH</b></div>`:'')+
     `<div class="r-line total"><span>Starting cap</span><b>${fmtUsdFull(t.mcap)}</b></div>`;
   const back = document.getElementById('modalBack');
@@ -1920,7 +1920,7 @@ function renderTreasury(){
     document.getElementById('tr-best').textContent='—';
     rows.innerHTML = '<div style="padding:34px;text-align:center;color:var(--cream-mute);font-size:13.5px">'+
       (wallet? 'You haven\'t launched anything yet. <a href="#" onclick="go(\'create\');return false" style="color:var(--gilt-bright)">Deploy your first token →</a>'
-             : 'Connect your wallet to see accrued levies.')+'</div>';
+             : 'Connect your wallet to see accrued fees.')+'</div>';
     return;
   }
   const claimable = mine.reduce((s,t)=>s+(t.claimable||0),0);
@@ -1954,7 +1954,7 @@ function claimOne(id){
 function claimAll(){
   const mine = TOKENS.filter(t=>t.mine && t.claimable>0);
   if(!wallet){ toast('Connect a wallet first','seal'); return; }
-  if(!mine.length){ toast('Nothing to claim yet — levies accrue as your tokens trade','gold'); return; }
+  if(!mine.length){ toast('Nothing to claim yet — fees accrue as your tokens trade','gold'); return; }
   const total = mine.reduce((s,t)=>s+t.claimable,0);
   mine.forEach(t=>t.claimable=0);
   toast('Swept <b>'+total.toFixed(3)+' ETH</b> to '+MY_ADDR,'gold');
@@ -1980,7 +1980,7 @@ function applyTrade(t, tr, user){
     if(t.mine) t.claimable = (t.claimable||0)+net;
     PAID_ALLTIME += net*ETH_USD;
   }
-  /* protocol revenue → $ROBIN stakers: 1% curve fee + 10% of every levy */
+  /* protocol revenue → $ROBIN stakers: 1% curve fee + 10% of every fee */
   const protoTake = tr.eth*0.01 + (tr.levyEth||0)*0.10;
   PROTO_REV_ALL_ETH += protoTake;
   PROTO_REV_24H_ETH += protoTake;
@@ -1990,7 +1990,7 @@ function applyTrade(t, tr, user){
   if(!t.graduated && t.mcap>=GRAD_CAP){
     t.graduated = true;
     if(t.decay){ t.buyTax/=2; t.sellTax/=2; }
-    toast('◆ <b>$'+t.ticker+'</b> graduated — LP deployed to Uniswap and burned'+(t.decay?' · levy halved':''),'jade');
+    toast('◆ <b>$'+t.ticker+'</b> graduated — LP deployed to Uniswap and burned'+(t.decay?' · fee halved':''),'jade');
   }
   /* candle update */
   if(t.candles){
