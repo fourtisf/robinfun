@@ -1941,6 +1941,57 @@ function tokenLinks(t){
   return [linkChip(t.website,'Website',_ICONS.web), linkChip(t.x,'X',_ICONS.x), linkChip(t.tg,'Telegram',_ICONS.tg)]
     .filter(Boolean).join('');
 }
+
+/* ================================================================
+   BACKEND (M3): persist token metadata + logos so launches survive
+   reloads and are shared across everyone (not just this browser).
+   Same-origin: nginx proxies /api → the metadata service.
+   ================================================================ */
+const API = (typeof window!=='undefined' && window.ROBINFUN_API) || '';
+async function apiCreateToken(t){
+  const r = await fetch(API+'/api/tokens', {
+    method:'POST', headers:{'content-type':'application/json'},
+    body: JSON.stringify({
+      name:t.name, ticker:t.ticker, description:t.desc,
+      website:t.website, x:t.x, tg:t.tg,
+      buyFee:t.buyTax, sellFee:t.sellTax,
+      decay:!!t.decay, renounce:!!t.renounced,
+      creator:t.creator, logo:t.logo,   // data-URL; server stores it, returns a URL
+    })
+  });
+  if(!r.ok) throw new Error('api '+r.status);
+  return r.json();
+}
+function tokenFromRecord(rec){
+  const t = mkTok({
+    name:rec.name, ticker:rec.ticker, emoji:null, logo:rec.logo,
+    desc:rec.description || 'Launched on Robinfun.',
+    website:rec.website, x:rec.x, tg:rec.tg,
+    buyTax:Number(rec.buyFee)||0, sellTax:Number(rec.sellFee)||0,
+    decay:!!rec.decay, renounced:!!rec.renounce,
+    creator:rec.creator || '0x…',
+    mcap:START_CAP, vol24:0, chg24:0, holders:1, replies:0,
+    created:rec.createdAt||Date.now(), lastTrade:rec.createdAt||Date.now(),
+  });
+  t.srvId = rec.id;
+  return t;
+}
+async function loadServerTokens(){
+  try{
+    const r = await fetch(API+'/api/tokens', {headers:{accept:'application/json'}});
+    if(!r.ok) return;
+    const list = await r.json();
+    if(!Array.isArray(list) || !list.length) return;
+    const seen = new Set(TOKENS.map(t=>t.srvId).filter(Boolean));
+    let added = 0;
+    for(const rec of list.slice().reverse()){        // oldest first → newest ends on top
+      if(!rec || seen.has(rec.id)) continue;
+      TOKENS.unshift(tokenFromRecord(rec));
+      seen.add(rec.id); added++;
+    }
+    if(added){ renderGrid(); renderStats(); renderTape(); }
+  }catch(e){ /* backend unreachable — keep the local board */ }
+}
 function syncPreview(){
   const tk = document.getElementById('c-ticker');
   tk.value = tk.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
@@ -2039,6 +2090,13 @@ function deploy(){
   stamp.classList.remove('slam'); void stamp.offsetWidth; stamp.classList.add('slam');
   renderGrid(); renderStats();
   clearLogo();   // reset the uploader for the next launch
+
+  /* Persist to the backend (optimistic — the token already shows locally).
+     On success, swap the in-memory data-URL logo for the stored server URL. */
+  apiCreateToken(t).then(rec=>{
+    t.srvId = rec.id;
+    if(rec.logo){ t.logo = rec.logo; renderGrid(); if(currentTokenId===t.id) renderToken(); }
+  }).catch(()=>{ toast('Launched — but the server was unreachable, so it may not persist','seal'); });
 }
 let lastDeployedId = null;
 function viewDeployed(){ closeModal(); if(lastDeployedId) openToken(lastDeployedId); }
@@ -2185,6 +2243,7 @@ function init(){
   renderStats();
   renderGrid();
   renderTape();
+  loadServerTokens();   // pull persisted launches from the backend (async)
   setInterval(simTick, 1700);
   setInterval(()=>{ if(currentTokenId) drawChart(tok()); }, 4000);
   window.addEventListener('resize', ()=>{ if(currentTokenId) drawChart(tok()); });

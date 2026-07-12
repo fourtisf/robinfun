@@ -7,6 +7,10 @@ contracts/broadcast/
 node_modules/
 npm-debug.log*
 
+# Backend runtime data (never commit the DB or uploaded images)
+server/data/
+server/package-lock.json
+
 # Env / secrets — never commit keys
 .env
 .env.*

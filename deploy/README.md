@@ -61,6 +61,31 @@ chmod +x bootstrap.sh
 
 Idempotent — safe to re-run after editing the site or config.
 
+## Backend (M3) — persist launches server-side
+
+The static site alone keeps launched tokens only in each visitor's browser.
+The metadata backend (`server/`) stores token name/ticker/description/socials
+and the uploaded logo on the server, so launches survive reloads and are
+visible to everyone.
+
+Run once on the VPS (as `root`, after `bootstrap.sh`):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/fourtisf/robinfun/claude/new-session-v8c9tt/deploy/bootstrap-api.sh -o /root/bootstrap-api.sh && chmod +x /root/bootstrap-api.sh && /root/bootstrap-api.sh
+```
+
+It installs Node, runs the API as the `robinfun-api` systemd service on
+`127.0.0.1:3001`, and wires nginx: `/api/` → the service, `/uploads/` → stored
+logos. Re-run any time to pick up new code.
+
+- Health: `https://robinfun.io/api/health`
+- Data:  `/var/lib/robinfun/tokens.json` · logos in `/var/www/robinfun/uploads/`
+- Logs:  `journalctl -u robinfun-api -f`
+
+> Not yet verified against the chain: until the factory is deployed, the API
+> trusts `POST /api/tokens` (brief §7). Once on-chain, gate creation on the
+> `TokenCreated` event / a creator signature.
+
 ## Updating the site later
 
 Replace the file and reload isn't even needed (static files):
