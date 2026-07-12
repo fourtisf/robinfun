@@ -373,6 +373,58 @@ body.light .stake-orbit text{fill:#3C9A1B}
 .field input:focus,.field textarea:focus{border-color:var(--gilt);outline:none}
 .field .hint{font-size:11.5px;color:var(--cream-mute);margin-top:6px}
 .field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+/* dev-buy callout — the "snipe your own launch" box */
+.devbuy-box{margin-bottom:16px;padding:15px 16px 14px;border:1px solid rgba(198,242,60,.34);
+  border-radius:var(--r-md);background:linear-gradient(160deg,rgba(198,242,60,.07),rgba(198,242,60,.015));position:relative}
+.devbuy-head{display:flex;align-items:center;gap:9px;margin-bottom:12px}
+.devbuy-badge{font-family:var(--font-mono);font-size:10px;font-weight:700;letter-spacing:.1em;color:var(--ink);
+  background:var(--gilt);padding:3px 8px;border-radius:6px;box-shadow:var(--glow)}
+.devbuy-title{font-size:13.5px;font-weight:600;color:var(--cream)}
+.devbuy-label{display:block;font-size:12px;font-weight:600;color:var(--cream-dim);margin-bottom:7px;letter-spacing:.02em}
+.devbuy-label span{color:var(--cream-mute);font-weight:400}
+.devbuy-input{display:flex;gap:8px;align-items:stretch;flex-wrap:wrap}
+.devbuy-input input{flex:1;min-width:120px;background:var(--ink-2);border:1px solid var(--rule);border-radius:var(--r-sm);
+  padding:11px 13px;font-size:15px;font-family:var(--font-mono);color:var(--cream);transition:border-color .15s}
+.devbuy-input input:focus{border-color:var(--gilt);outline:none}
+.devbuy-chips{display:flex;gap:6px}
+.devchip{padding:0 12px;border:1px solid var(--rule-2);border-radius:var(--r-sm);background:var(--ink-2);
+  font-family:var(--font-mono);font-size:12.5px;color:var(--cream-dim);cursor:pointer;transition:all .13s}
+.devchip:hover{border-color:var(--gilt);color:var(--cream)}
+.devchip.on{background:var(--gilt);border-color:var(--gilt);color:var(--ink);font-weight:700}
+.devbuy-box .hint{font-size:11.5px;color:var(--cream-mute);margin-top:10px;line-height:1.5}
+/* ---------------- profile page ---------------- */
+.pf-connect{text-align:center;padding:70px 20px;color:var(--cream-dim)}
+.pf-connect .pf-c-ico{font-size:38px;margin-bottom:14px}
+.pf-head{display:flex;align-items:center;gap:18px;padding:26px 0 20px;flex-wrap:wrap}
+.pf-avatar{width:74px;height:74px;border-radius:50%;overflow:hidden;flex-shrink:0;border:1px solid var(--rule-2);box-shadow:var(--shadow-card)}
+.pf-avatar svg{display:block;width:100%;height:100%}
+.pf-id{min-width:0;flex:1}
+.pf-id h2{font-size:22px;font-family:var(--font-mono);letter-spacing:.01em;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.pf-you-pill{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;color:var(--ink);background:var(--gilt);
+  padding:2px 8px;border-radius:6px;font-weight:700}
+.pf-fulladdr{font-family:var(--font-mono);font-size:12px;color:var(--cream-mute);margin-top:5px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pf-copy,.pf-explore{cursor:pointer;color:var(--cream-dim);border:1px solid var(--rule);border-radius:6px;padding:2px 8px;font-size:11px;transition:border-color .15s;text-decoration:none}
+.pf-copy:hover,.pf-explore:hover{border-color:var(--gilt);color:var(--cream)}
+.pf-stats{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:24px}
+.pf-stat{padding:18px}
+.pf-stat .k{font-family:var(--font-mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;color:var(--cream-mute)}
+.pf-stat .v{font-family:var(--font-mono);font-size:22px;font-weight:600;margin-top:8px}
+.pf-stat .s{font-size:11.5px;color:var(--cream-dim);margin-top:3px}
+.pf-sec-head{display:flex;align-items:center;gap:10px;margin:6px 0 12px;font-size:13px;font-weight:600;letter-spacing:.02em}
+.pf-sec-head .cnt{font-family:var(--font-mono);font-size:11px;color:var(--cream-mute);background:var(--ledger-2);border-radius:99px;padding:2px 9px}
+.pf-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid var(--rule);cursor:pointer;transition:background .13s}
+.pf-row:last-child{border-bottom:none}
+.pf-row:hover{background:var(--ledger-2)}
+.pf-row .tlogo{width:38px;height:38px;font-size:19px;flex-shrink:0}
+.pf-row-mid{min-width:0;flex:1}
+.pf-row-nm{font-weight:600;font-size:14px;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.pf-row-nm .tk{font-family:var(--font-mono);font-size:11.5px;color:var(--cream-dim)}
+.pf-row-sub{font-family:var(--font-mono);font-size:11px;color:var(--cream-mute);margin-top:2px}
+.pf-row-right{text-align:right;font-family:var(--font-mono);flex-shrink:0}
+.pf-row-right .amt{font-size:13.5px;font-weight:600}
+.pf-row-right .val{font-size:11px;color:var(--cream-dim);margin-top:2px}
+.pf-empty{padding:26px 14px;text-align:center;color:var(--cream-mute);font-size:13px}
+@media(max-width:720px){.pf-stats{grid-template-columns:1fr 1fr}}
 .upload{
   border:1px dashed var(--rule-2);border-radius:var(--r-md);padding:22px;text-align:center;cursor:pointer;
   transition:border-color .15s;background:var(--ink-2);
@@ -888,10 +940,22 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <input type="text" id="c-tg" placeholder="https://t.me/…">
           </div>
         </div>
-        <div class="field">
-          <label for="c-buyin">Initial dev buy <span>(optional, ETH)</span></label>
-          <input type="number" id="c-buyin" min="0" step="0.01" placeholder="0.00" oninput="syncCost()">
-          <div class="hint">Buys into your own curve in the deploy transaction, before anyone else. Shown publicly as the creator's position.</div>
+        <div class="devbuy-box">
+          <div class="devbuy-head">
+            <span class="devbuy-badge">🚀 DEV BUY</span>
+            <span class="devbuy-title">Snipe your own launch first</span>
+          </div>
+          <label for="c-buyin" class="devbuy-label">Amount to buy in the deploy tx <span>(optional, ETH)</span></label>
+          <div class="devbuy-input">
+            <input type="number" id="c-buyin" min="0" step="0.01" placeholder="0.00" oninput="syncCost()">
+            <div class="devbuy-chips">
+              <button type="button" class="devchip" onclick="setDevBuy(0.05)">0.05</button>
+              <button type="button" class="devchip" onclick="setDevBuy(0.1)">0.1</button>
+              <button type="button" class="devchip" onclick="setDevBuy(0.25)">0.25</button>
+              <button type="button" class="devchip" onclick="setDevBuy(0.5)">0.5</button>
+            </div>
+          </div>
+          <div class="hint">Bundled into the <b>same transaction</b> as the deploy, so your buy lands before anyone else can trade. Shown publicly as the creator's position — a credible signal you're not dumping on your own holders.</div>
         </div>
       </div>
 
@@ -1103,6 +1167,45 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   </div>
 </div>
 
+<!-- ======================= PROFILE ======================= -->
+<div class="page" id="page-profile">
+  <div class="wrap">
+    <div id="pf-connect" class="pf-connect" style="display:none">
+      <div class="pf-c-ico">👤</div>
+      <h2 style="margin-bottom:8px">Your Robinfun profile</h2>
+      <p style="margin-bottom:18px">Connect a wallet to see your ETH balance, the coins you hold, and everything you've launched.</p>
+      <button class="btn btn-gold" onclick="connectWallet()">Connect wallet</button>
+    </div>
+    <div id="pf-body" style="display:none">
+      <div class="pf-head">
+        <div class="pf-avatar" id="pf-avatar"></div>
+        <div class="pf-id">
+          <h2><span id="pf-addr">0x…</span> <span class="pf-you-pill" id="pf-you" style="display:none">YOU</span></h2>
+          <div class="pf-fulladdr">
+            <span id="pf-addr-full">0x…</span>
+            <span class="pf-copy" onclick="copyProfileAddr()">copy ⧉</span>
+            <a class="pf-explore" id="pf-explore" target="_blank" rel="noopener noreferrer">explorer ↗</a>
+          </div>
+        </div>
+      </div>
+      <div class="pf-stats">
+        <div class="panel pf-stat"><div class="k">ETH balance</div><div class="v gold" id="pf-eth">—</div><div class="s" id="pf-ethusd">≈ $0</div></div>
+        <div class="panel pf-stat"><div class="k">Holdings value</div><div class="v" id="pf-holdval">—</div><div class="s">across your coins</div></div>
+        <div class="panel pf-stat"><div class="k">Coins held</div><div class="v" id="pf-held">—</div><div class="s">with a balance</div></div>
+        <div class="panel pf-stat"><div class="k">Coins created</div><div class="v" id="pf-created">—</div><div class="s">launched on Robinfun</div></div>
+      </div>
+
+      <div class="pf-sec-head">💼 Coins held <span class="cnt" id="pf-held-cnt">0</span></div>
+      <div class="panel" id="pf-held-list"><div class="pf-empty">Loading holdings…</div></div>
+
+      <div style="height:20px"></div>
+
+      <div class="pf-sec-head">🚀 Coins created <span class="cnt" id="pf-created-cnt">0</span></div>
+      <div class="panel" id="pf-created-list"><div class="pf-empty">Loading launches…</div></div>
+    </div>
+  </div>
+</div>
+
 <!-- ======================= STAKE ======================= -->
 <div class="page" id="page-stake">
   <div class="wrap">
@@ -1237,6 +1340,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 <!-- wallet dropdown (shown when connected) -->
 <div class="wallet-menu" id="walletMenu">
   <button class="wmenu-addr" onclick="copyWalletAddr()" title="Copy address"><span id="wmenu-addr-txt">0x…</span> <span style="opacity:.55">⧉</span></button>
+  <button class="wmenu-item" onclick="closeWalletMenu();viewProfile()">👤 Profile</button>
   <button class="wmenu-item" onclick="closeWalletMenu();go('treasury')">💼 Treasury</button>
   <button class="wmenu-item danger" onclick="disconnectWallet()">⏻ Disconnect</button>
 </div>
@@ -1442,6 +1546,7 @@ function onWalletConnected(addr){
   seedMyTokens();
   renderTreasury();
   if(document.getElementById('page-stake').classList.contains('active')) renderStake();
+  if(document.getElementById('page-profile').classList.contains('active')){ PROFILE_ADDR=null; renderProfile(); }
 }
 
 function disconnectWallet(){
@@ -1454,6 +1559,7 @@ function disconnectWallet(){
   const adm = document.getElementById('adminCard'); if(adm) adm.style.display = 'none';
   toast('Wallet disconnected','jade');
   if(document.getElementById('page-treasury').classList.contains('active')) renderTreasury();
+  if(document.getElementById('page-profile').classList.contains('active')){ PROFILE_ADDR=null; renderProfile(); }
 }
 function seedMyTokens(){
   // Real product: your tokens are the ones you launched (persisted in the
@@ -1656,9 +1762,11 @@ const ROUTES = {
   stake:    {path:'/staking',    title:'Staking · Robinfun'},
   docs:     {path:'/whitepaper', title:'Whitepaper · Robinfun'},
   treasury: {path:'/treasury',   title:'Treasury · Robinfun'},
+  profile:  {path:'/profile',    title:'Profile · Robinfun'},
 };
-const PATH_TO_PAGE = {'':'home', 'create':'create', 'staking':'stake', 'whitepaper':'docs', 'treasury':'treasury'};
+const PATH_TO_PAGE = {'':'home', 'create':'create', 'staking':'stake', 'whitepaper':'docs', 'treasury':'treasury', 'profile':'profile'};
 let pendingTokenId = null;   // deep-linked /token/<id> awaiting the async server load
+let PROFILE_ADDR = null;     // address shown on the profile page (null → own wallet)
 function tokenById(id){ return TOKENS.find(t=>t.id===id); }
 function setRoute(path, title){
   if(title) document.title = title;
@@ -1672,6 +1780,12 @@ function routeFromLocation(){
     const id = decodeURIComponent(segs[1]);
     if(tokenById(id)) openToken(id, false);
     else { pendingTokenId = id; go('home', false); }   // show board until tokens arrive
+    return;
+  }
+  if(first === 'profile'){
+    const a = segs[1] ? decodeURIComponent(segs[1]) : null;
+    PROFILE_ADDR = (a && /^0x[0-9a-fA-F]{40}$/.test(a)) ? a : null;
+    go('profile', false);
     return;
   }
   go(PATH_TO_PAGE[first] || 'home', false);
@@ -1688,6 +1802,7 @@ function go(page, push){
   document.getElementById('nav').classList.remove('open');
   if(page==='treasury') renderTreasury();
   if(page==='stake') renderStake();
+  if(page==='profile') renderProfile();
   if(page!=='token'){ currentTokenId = null; stopRealPoll(); }
   const r = ROUTES[page];
   if(r){ push ? setRoute(r.path, r.title) : (document.title = r.title); }
@@ -1806,6 +1921,151 @@ function renderTape(){
 }
 
 /* ================================================================
+   PROFILE PAGE — wallet ETH balance, holdings, and launches, pump.fun-style.
+   Reads are on-chain (read-only RPC): ETH balance from the node, "coins
+   created" from the factory's TokenCreated events filtered by creator, and
+   "coins held" from balanceOf across every real token we know about.
+   ================================================================ */
+function viewProfile(addr){
+  PROFILE_ADDR = (addr && /^0x[0-9a-fA-F]{40}$/.test(addr)) ? addr : null;
+  go('profile');
+}
+function profileAddr(){ return PROFILE_ADDR || wallet; }
+function copyProfileAddr(){
+  const a = profileAddr(); if(!a) return;
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(a).then(()=>toast('Address copied','jade')).catch(()=>legacyCopy(a,()=>toast('Address copied','jade')));
+  }else legacyCopy(a,()=>toast('Address copied','jade'));
+}
+/* deterministic gradient identicon from an address — no external deps */
+function identicon(addr){
+  const h = addr.toLowerCase().replace(/[^0-9a-f]/g,'');
+  const n = parseInt(h.slice(2,10),16) || 0;
+  const hue1 = n % 360, hue2 = (hue1 + 40 + (parseInt(h.slice(10,14),16)%120)) % 360;
+  const gid = 'g'+h.slice(0,6);
+  // a few blocks derived from the hash for a little texture
+  let cells='';
+  for(let i=0;i<25;i++){
+    const bit = parseInt(h[i%h.length]||'0',16);
+    if(bit>7){ const x=(i%5)*20, y=Math.floor(i/5)*20;
+      cells += '<rect x="'+x+'" y="'+y+'" width="20" height="20" fill="rgba(255,255,255,'+(0.05+(bit-8)/40).toFixed(2)+')"/>'; }
+  }
+  return '<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">'+
+    '<defs><linearGradient id="'+gid+'" x1="0" y1="0" x2="1" y2="1">'+
+    '<stop offset="0" stop-color="hsl('+hue1+',70%,45%)"/>'+
+    '<stop offset="1" stop-color="hsl('+hue2+',75%,35%)"/></linearGradient></defs>'+
+    '<rect width="100" height="100" fill="url(#'+gid+')"/>'+cells+'</svg>';
+}
+async function renderProfile(){
+  const addr = profileAddr();
+  const connect = document.getElementById('pf-connect'), body = document.getElementById('pf-body');
+  if(!addr){ connect.style.display='block'; body.style.display='none'; return; }
+  connect.style.display='none'; body.style.display='block';
+
+  const setT=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
+  document.getElementById('pf-avatar').innerHTML = identicon(addr);
+  setT('pf-addr', shortAddr(addr));
+  setT('pf-addr-full', addr);
+  const you = document.getElementById('pf-you');
+  you.style.display = (wallet && addr.toLowerCase()===wallet.toLowerCase()) ? 'inline-block' : 'none';
+  const ex = document.getElementById('pf-explore'); if(ex) ex.href = EXPLORER+'/address/'+addr;
+
+  // reset while loading
+  setT('pf-eth','…'); setT('pf-ethusd',''); setT('pf-holdval','…');
+  setT('pf-held','…'); setT('pf-created','…'); setT('pf-held-cnt','0'); setT('pf-created-cnt','0');
+
+  if(!chainReady()){
+    setT('pf-eth','—'); setT('pf-holdval','—'); setT('pf-held','0'); setT('pf-created','0');
+    document.getElementById('pf-held-list').innerHTML = '<div class="pf-empty">Connect to Robinhood Chain to load on-chain data.</div>';
+    document.getElementById('pf-created-list').innerHTML = '<div class="pf-empty">Connect to Robinhood Chain to load on-chain data.</div>';
+    return;
+  }
+  const ro = roProvider();
+  // ETH balance
+  ro.getBalance(addr).then(bal=>{
+    const eth = Number(ethers.formatEther(bal));
+    setT('pf-eth', (eth<1e-4 && eth>0 ? eth.toExponential(2) : eth.toFixed(4))+' Ξ');
+    setT('pf-ethusd', '≈ '+fmtUsdFull(eth*ETH_USD));
+  }).catch(()=>{ setT('pf-eth','—'); });
+
+  loadHoldings(addr);
+  loadCreatedCoins(addr);
+}
+async function loadHoldings(addr){
+  const wrap = document.getElementById('pf-held-list');
+  const setT=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
+  const real = TOKENS.filter(t=>realToken(t));
+  if(!real.length){ setT('pf-held','0'); setT('pf-held-cnt','0'); wrap.innerHTML='<div class="pf-empty">No on-chain coins to check yet.</div>'; return; }
+  const ro = roProvider();
+  const rows = await Promise.all(real.map(async t=>{
+    try{
+      const [balRaw, curveAddr] = await Promise.all([
+        new ethers.Contract(t.ca, ERC20_ABI, ro).balanceOf(addr),
+        (t.curveAddr ? Promise.resolve(t.curveAddr) : new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro).curveOf(t.ca)),
+      ]);
+      const amt = Number(ethers.formatEther(balRaw));
+      if(amt <= 1e-9) return null;
+      let priceUsd = t.price || 0;
+      try{ const p = await new ethers.Contract(curveAddr, CURVE_ABI, ro).currentPrice(); priceUsd = Number(ethers.formatEther(p))*ETH_USD; }catch(_){}
+      return { t, amt, val: amt*priceUsd };
+    }catch(_){ return null; }
+  }));
+  const held = rows.filter(Boolean).sort((a,b)=>b.val-a.val);
+  setT('pf-held', String(held.length));
+  setT('pf-held-cnt', String(held.length));
+  setT('pf-holdval', fmtUsdFull(held.reduce((s,r)=>s+r.val,0)));
+  if(!held.length){ wrap.innerHTML='<div class="pf-empty">No coin balances yet — buy something on the board.</div>'; return; }
+  wrap.innerHTML = held.map(r=>{
+    const pct = (r.amt/SUPPLY*100);
+    return '<div class="pf-row" onclick="openToken(\''+r.t.id+'\')">'+
+      '<div class="tlogo">'+tLogo(r.t)+'</div>'+
+      '<div class="pf-row-mid"><div class="pf-row-nm">'+esc(r.t.name)+' <span class="tk">$'+esc(r.t.ticker)+'</span></div>'+
+        '<div class="pf-row-sub">'+fmtNum(r.amt)+' tokens · '+pct.toFixed(2)+'% of supply</div></div>'+
+      '<div class="pf-row-right"><div class="amt">'+fmtUsdFull(r.val)+'</div><div class="val">'+fmtNum(r.amt)+' $'+esc(r.t.ticker)+'</div></div>'+
+    '</div>';
+  }).join('');
+}
+async function loadCreatedCoins(addr){
+  const wrap = document.getElementById('pf-created-list');
+  const setT=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
+  try{
+    const ro = roProvider();
+    const f = new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro);
+    let evs;
+    try{ evs = await f.queryFilter(f.filters.TokenCreated(null,null,addr), 0, 'latest'); }
+    catch(_){ const head = await ro.getBlockNumber(); evs = await f.queryFilter(f.filters.TokenCreated(null,null,addr), Math.max(0,head-500000), head); }
+    setT('pf-created', String(evs.length));
+    setT('pf-created-cnt', String(evs.length));
+    if(!evs.length){ wrap.innerHTML='<div class="pf-empty">No launches yet — <a href="#" onclick="go(\'create\');return false" class="gold">create a coin</a>.</div>'; return; }
+    const rows = await Promise.all(evs.slice().reverse().map(async e=>{
+      const a = e.args;
+      const ca = a.token, curve = a.curve;
+      const known = TOKENS.find(t=>t.ca && t.ca.toLowerCase()===ca.toLowerCase());
+      let mcapUsd = known ? known.mcap : 0, priceUsd = known ? known.price : 0;
+      try{
+        const c = new ethers.Contract(curve, CURVE_ABI, ro);
+        const [m, p] = await Promise.all([c.marketCapEth(), c.currentPrice()]);
+        mcapUsd = Number(ethers.formatEther(m))*ETH_USD;
+        priceUsd = Number(ethers.formatEther(p))*ETH_USD;
+      }catch(_){}
+      return { name:a.name, symbol:a.symbol, ca, curve, id:(known?known.id:null), mcapUsd, logo:(known?tLogo(known):('<span>'+esc((a.symbol||'?')[0]||'?')+'</span>')) };
+    }));
+    wrap.innerHTML = rows.map(r=>{
+      const click = r.id ? "openToken('"+r.id+"')" : "window.open('"+EXPLORER+"/address/"+r.ca+"','_blank')";
+      return '<div class="pf-row" onclick="'+click+'">'+
+        '<div class="tlogo">'+r.logo+'</div>'+
+        '<div class="pf-row-mid"><div class="pf-row-nm">'+esc(r.name)+' <span class="tk">$'+esc(r.symbol)+'</span></div>'+
+          '<div class="pf-row-sub">'+r.ca.slice(0,10)+'…'+r.ca.slice(-6)+'</div></div>'+
+        '<div class="pf-row-right"><div class="amt">'+fmtUsd(r.mcapUsd)+'</div><div class="val">market cap</div></div>'+
+      '</div>';
+    }).join('');
+  }catch(err){
+    setT('pf-created','—'); setT('pf-created-cnt','0');
+    wrap.innerHTML='<div class="pf-empty">Couldn\'t load launches from the chain right now.</div>';
+  }
+}
+
+/* ================================================================
    TOKEN PAGE
    ================================================================ */
 function tok(){ return TOKENS.find(t=>t.id===currentTokenId); }
@@ -1866,9 +2126,31 @@ function renderToken(fresh){
 }
 
 function copyCA(){
-  const t = tok(), ca = realToken(t) ? t.ca : null;
-  if(ca && navigator.clipboard){ navigator.clipboard.writeText(ca).then(()=>toast('Contract address copied','gold')).catch(()=>{}); return; }
-  toast('Contract address copied','gold');
+  const t = tok();
+  // Only real, on-chain tokens have a contract address to copy. For anything
+  // else we must NOT claim "copied" (that would leave whatever was in the
+  // clipboard before — e.g. a shell command — and paste the wrong thing).
+  if(!realToken(t)){
+    toast('Not deployed on-chain yet — no contract address to copy','seal');
+    return;
+  }
+  const ca = t.ca;
+  const done = ()=>toast('Contract address copied — <b>'+shortAddr(ca)+'</b>','gold');
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(ca).then(done).catch(()=>legacyCopy(ca, done));
+  }else{
+    legacyCopy(ca, done);
+  }
+}
+function legacyCopy(text, ok){
+  try{
+    const ta=document.createElement('textarea');
+    ta.value=text; ta.style.position='fixed'; ta.style.opacity='0';
+    document.body.appendChild(ta); ta.focus(); ta.select();
+    const good=document.execCommand('copy'); document.body.removeChild(ta);
+    if(good){ ok(); return; }
+  }catch(e){}
+  toast('Copy failed — address: '+text,'seal');
 }
 
 /* ---------------- candles ---------------- */
@@ -2434,6 +2716,16 @@ function syncCost(){
   const txt = total ? total.toFixed(4).replace(/0+$/,'').replace(/\.$/,'') : '0';
   const el = document.getElementById('deployCost');
   if(el) el.textContent = txt+' ETH + gas';
+  document.querySelectorAll('.devchip').forEach(c=>{
+    c.classList.toggle('on', Math.abs(parseFloat(c.textContent)-b) < 1e-9 && b>0);
+  });
+}
+function setDevBuy(v){
+  const inp=document.getElementById('c-buyin'); if(!inp) return;
+  // tap the active chip again to clear it back to 0
+  const cur=parseFloat(inp.value)||0;
+  inp.value = (Math.abs(cur-v)<1e-9) ? '' : String(v);
+  syncCost();
 }
 /* Read the live on-chain deploy fee so the display + the launch value match. */
 async function refreshDeployFee(){
