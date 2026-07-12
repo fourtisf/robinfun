@@ -1,0 +1,2057 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Robinfun — Fair-Launch Bonding Curves on Robinhood Chain</title>
+<meta name="description" content="Launch tokens with a built-in creator levy. Every trade pays you — on the curve and after graduation. Fair bonding curves, LP 100% burned.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ================================================================
+   Robinfun — design tokens
+   Near-black ground, volt-lime brand accent (Robinhood Chain), mono numerals.
+   ================================================================ */
+:root{
+  --ink:#080B0A;            /* page ground — near-black                */
+  --ink-2:#0B0F0C;          /* deep panel                             */
+  --ledger:#0F140F;         /* card surface                           */
+  --ledger-2:#161C13;       /* raised surface / hover                 */
+  --rule:#1C231A;           /* hairline rules                         */
+  --rule-2:#29321F;         /* strong rules                           */
+  --cream:#F2F5EA;          /* primary text                           */
+  --cream-dim:#9AA18F;      /* secondary text                         */
+  --cream-mute:#5F6653;     /* tertiary / labels                      */
+  --gilt:#C6F23C;           /* volt lime — brand + levy accent        */
+  --gilt-bright:#D8FB5C;
+  --gilt-dim:rgba(198,242,60,.13);
+  --jade:#C6F23C;           /* buys / positive (same volt lime)       */
+  --jade-dim:rgba(198,242,60,.12);
+  --seal:#FF5B4A;           /* sells / negative                       */
+  --seal-bright:#FF7A6A;
+  --seal-dim:rgba(255,91,74,.12);
+  --glow:0 0 22px rgba(198,242,60,.30);
+  --font-display:"Space Grotesk",system-ui,sans-serif;
+  --font-body:"Instrument Sans",system-ui,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,monospace;
+  --r-sm:8px; --r-md:12px; --r-lg:16px;
+  --shadow-card:0 1px 0 rgba(0,0,0,.5),0 16px 40px -20px rgba(0,0,0,.75);
+  --maxw:1240px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{
+  background:var(--ink);
+  color:var(--cream);
+  font-family:var(--font-body);
+  font-size:15px;
+  line-height:1.55;
+  -webkit-font-smoothing:antialiased;
+  overflow-x:hidden;
+}
+body::before{ /* faint dot grain + top glow */
+  content:"";position:fixed;inset:0;pointer-events:none;z-index:0;
+  background-image:radial-gradient(rgba(198,242,60,.018) 1px,transparent 1px);
+  background-size:3px 3px;
+}
+body::after{ /* ambient lime glow, top-center */
+  content:"";position:fixed;left:50%;top:-340px;transform:translateX(-50%);
+  width:1100px;height:620px;pointer-events:none;z-index:0;
+  background:radial-gradient(closest-side,rgba(198,242,60,.10),rgba(198,242,60,.03) 55%,transparent 75%);
+  filter:blur(8px);
+}
+::selection{background:rgba(198,242,60,.30);color:#0B0F04}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select,textarea{font-family:inherit;color:var(--cream)}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible,a:focus-visible{
+  outline:2px solid var(--gilt);outline-offset:2px;border-radius:4px;
+}
+.mono{font-family:var(--font-mono)}
+.up{color:var(--jade)} .down{color:var(--seal)} .gold{color:var(--gilt)}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px;position:relative;z-index:1}
+
+/* ---------------- top bar ---------------- */
+.topbar{
+  position:sticky;top:0;z-index:60;
+  background:rgba(8,11,10,.82);backdrop-filter:blur(16px);
+  border-bottom:1px solid var(--rule);
+}
+.topbar-in{max-width:var(--maxw);margin:0 auto;padding:0 24px;height:62px;display:flex;align-items:center;gap:26px}
+.brand{display:flex;align-items:center;gap:10px;flex-shrink:0}
+.brand-seal{width:32px;height:32px;flex-shrink:0;filter:drop-shadow(0 0 6px rgba(198,242,60,.45))}
+.brand-word{font-family:var(--font-display);font-weight:700;font-size:21px;letter-spacing:.04em;color:var(--cream)}
+.brand-word em{font-style:normal;color:var(--gilt)}
+.brand-sub{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;color:var(--cream-mute);text-transform:uppercase;margin-top:1px}
+.nav{display:flex;gap:4px;align-items:center}
+.nav button{
+  padding:7px 13px;border-radius:var(--r-sm);font-size:14px;font-weight:500;color:var(--cream-dim);
+  transition:color .15s,background .15s;
+}
+.nav button:hover{color:var(--cream);background:var(--ledger)}
+.nav button.active{color:var(--gilt-bright);background:var(--gilt-dim)}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.chain-badge{
+  display:flex;align-items:center;gap:7px;padding:6px 11px;border:1px solid var(--rule-2);
+  border-radius:99px;font-family:var(--font-mono);font-size:11px;color:var(--cream-dim);white-space:nowrap;
+}
+.chain-badge .dot{width:6px;height:6px;border-radius:50%;background:var(--jade);box-shadow:0 0 8px var(--jade);animation:pulse 2.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.45}}
+.btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:8px;
+  padding:9px 16px;border-radius:var(--r-sm);font-weight:600;font-size:14px;
+  transition:transform .12s,box-shadow .15s,background .15s,border-color .15s;white-space:nowrap;
+}
+.btn:active{transform:translateY(1px)}
+.btn-gold{
+  background:linear-gradient(180deg,var(--gilt-bright),var(--gilt));color:#0A1204;letter-spacing:.01em;
+  box-shadow:0 1px 0 rgba(255,255,255,.28) inset,0 10px 26px -12px rgba(198,242,60,.7);
+}
+.btn-gold:hover{box-shadow:0 1px 0 rgba(255,255,255,.4) inset,0 12px 30px -10px rgba(198,242,60,.9);transform:translateY(-1px)}
+.btn-line{border:1px solid var(--rule-2);color:var(--cream)}
+.btn-line:hover{border-color:var(--gilt);color:var(--gilt-bright);box-shadow:0 0 18px -6px rgba(198,242,60,.5)}
+.btn-jade{background:var(--jade);color:#0A1204;box-shadow:0 8px 24px -12px rgba(198,242,60,.7)}
+.btn-jade:hover{filter:brightness(1.06);transform:translateY(-1px)}
+.btn-seal{background:var(--seal);color:#2A0603;box-shadow:0 8px 24px -12px rgba(255,91,74,.6)}
+.btn-seal:hover{filter:brightness(1.06);transform:translateY(-1px)}
+.btn-lg{padding:13px 24px;font-size:15px;border-radius:var(--r-md)}
+.btn-block{width:100%}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.hamburger{display:none;font-size:20px;padding:6px 10px;color:var(--cream)}
+
+/* ---------------- topbar utility cluster (Robinhood-style) ---------------- */
+.tb-icon{
+  height:36px;min-width:36px;border-radius:10px;border:1px solid var(--rule-2);
+  display:inline-flex;align-items:center;justify-content:center;color:var(--cream-dim);
+  transition:color .15s,border-color .15s,background .15s,box-shadow .15s;flex-shrink:0;padding:0;
+}
+.tb-icon:hover{color:var(--gilt-bright);border-color:var(--gilt);background:var(--gilt-dim);box-shadow:0 0 16px -6px var(--gilt)}
+.tb-icon svg{width:16px;height:16px;display:block}
+.tb-lang{font-family:var(--font-mono);font-size:12px;font-weight:600;letter-spacing:.03em;padding:0 10px}
+.tb-sep{width:1px;height:22px;background:var(--rule-2);flex-shrink:0;margin:0 2px}
+.btn-mini{padding:8px 13px;font-size:13px;border-radius:9px}
+
+/* ---------------- light theme ---------------- */
+body.light{
+  --ink:#F5F6EF; --ink-2:#ECEEE2; --ledger:#FFFFFF; --ledger-2:#F2F4E8;
+  --rule:#E4E7D7; --rule-2:#D2D7C2;
+  --cream:#161C11; --cream-dim:#4C5341; --cream-mute:#727963;
+  --gilt:#3C9A1B; --gilt-bright:#44AB20; --gilt-dim:rgba(60,154,27,.13);
+  --jade:#2FA043; --jade-dim:rgba(47,160,67,.13);
+  --seal:#E23B2C; --seal-bright:#F04E3E; --seal-dim:rgba(226,59,44,.12);
+  --glow:0 0 22px rgba(60,154,27,.22);
+  --shadow-card:0 1px 0 rgba(20,30,10,.03),0 14px 34px -22px rgba(20,40,10,.24);
+}
+body.light::after{background:radial-gradient(closest-side,rgba(60,154,27,.06),transparent 72%)}
+body.light .topbar{background:rgba(245,246,239,.85)}
+body.light .btn-gold,body.light .btn-jade,body.light .btn-seal{color:#fff}
+body.light .btn-gold{box-shadow:0 1px 0 rgba(255,255,255,.28) inset,0 10px 24px -14px rgba(60,154,27,.6)}
+body.light .btn-jade{box-shadow:0 8px 22px -12px rgba(60,154,27,.55)}
+body.light .btn-seal{box-shadow:0 8px 22px -12px rgba(226,59,44,.5)}
+body.light .hero h1 .gilt-i,body.light .apr-hero .apr-n{text-shadow:none}
+body.light .watch-star.on{filter:drop-shadow(0 0 5px rgba(60,154,27,.4))}
+body.light .apr-hero{border-color:rgba(60,154,27,.28)}
+body.light .stamp{border-color:rgba(60,154,27,.32)}
+body.light .stamp::before{box-shadow:0 0 6px rgba(60,154,27,.45)}
+body.light .grad-pill{border-color:rgba(60,154,27,.3)}
+body.light .ftab.active{background:var(--cream);color:#F5F6EF}
+/* hero banner stays dark in light mode → keep its content bright */
+body.light .banner-word{color:#F2F5EA}
+body.light .banner-tag{color:#F2F5EA}
+body.light .banner-tag em{color:#D8FB5C}
+body.light .banner-chip{color:#C3CBB4;border-color:rgba(255,255,255,.14)}
+body.light .banner-chip .dot{background:#C6F23C;box-shadow:0 0 8px #C6F23C}
+/* light surfaces → darken the lime line-art for contrast */
+body.light .brand-seal{filter:none}
+body.light .brand-seal circle,body.light .brand-seal ellipse{stroke:#3C9A1B}
+body.light .brand-seal text{fill:#3C9A1B}
+body.light .stake-orbit{filter:none}
+body.light .stake-orbit circle,body.light .stake-orbit ellipse{stroke:#3C9A1B}
+body.light .stake-orbit text{fill:#3C9A1B}
+
+/* ---------------- ticker tape ---------------- */
+.tape{border-bottom:1px solid var(--rule);background:var(--ink-2);overflow:hidden;position:relative;z-index:1}
+.tape-track{display:flex;gap:0;width:max-content;animation:tape 46s linear infinite}
+.tape:hover .tape-track{animation-play-state:paused}
+@keyframes tape{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+.tape-item{
+  display:flex;align-items:center;gap:8px;padding:7px 18px;border-right:1px solid var(--rule);
+  font-family:var(--font-mono);font-size:11.5px;color:var(--cream-dim);white-space:nowrap;
+}
+.tape-item b{color:var(--cream);font-weight:600}
+
+/* ---------------- hero ---------------- */
+.hero{padding:34px 0 30px;position:relative}
+.hero-cta{display:flex;gap:11px;flex-wrap:wrap}
+.hero-top{display:grid;grid-template-columns:1.62fr 1fr;gap:18px;margin-bottom:18px}
+
+/* glowing banner */
+.hero-banner{
+  position:relative;overflow:hidden;border-radius:22px;
+  border:1px solid rgba(198,242,60,.24);min-height:288px;
+  background:
+    radial-gradient(130% 150% at 84% 32%,rgba(198,242,60,.30),rgba(198,242,60,.06) 44%,transparent 68%),
+    linear-gradient(135deg,#111c0d 0%,#0b120a 55%,#0a0f0a 100%);
+  padding:34px 36px 30px;display:flex;flex-direction:column;justify-content:center;
+  box-shadow:0 0 70px -26px rgba(198,242,60,.55),inset 0 0 60px -30px rgba(198,242,60,.35);
+}
+.banner-content{position:relative;z-index:2;max-width:68%}
+.banner-brand{display:flex;align-items:center;gap:15px;margin-bottom:15px}
+.banner-mark{width:56px;height:56px;flex-shrink:0;filter:drop-shadow(0 0 18px rgba(198,242,60,.75))}
+.banner-word{
+  font-family:var(--font-display);font-weight:700;font-size:clamp(42px,5vw,62px);letter-spacing:-.02em;line-height:.9;
+  color:var(--cream);
+}
+.banner-word em{font-style:normal;color:var(--gilt-bright);text-shadow:0 0 32px rgba(198,242,60,.65),0 0 64px rgba(198,242,60,.35)}
+.banner-tag{font-size:17.5px;color:var(--cream);font-weight:500;margin-bottom:10px;line-height:1.3}
+.banner-tag em{color:var(--gilt-bright);font-style:normal;text-shadow:0 0 18px rgba(198,242,60,.5)}
+.banner-chip{
+  display:inline-flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:11px;
+  color:var(--cream-dim);border:1px solid var(--rule-2);border-radius:99px;padding:5px 13px;margin-bottom:22px;
+  background:rgba(0,0,0,.28);
+}
+.banner-chip .dot{width:6px;height:6px;border-radius:50%;background:var(--gilt);box-shadow:0 0 8px var(--gilt)}
+.banner-art{position:absolute;right:-6px;top:0;bottom:0;width:44%;z-index:1;pointer-events:none;
+  display:flex;align-items:flex-end;filter:drop-shadow(0 0 30px rgba(198,242,60,.4))}
+.banner-art svg{width:100%;height:100%}
+
+/* top-volume leaderboard */
+.hero-lead{
+  border:1px solid var(--rule);border-radius:22px;background:var(--ledger);padding:18px 20px;
+  box-shadow:var(--shadow-card);display:flex;flex-direction:column;
+}
+.lead-title{font-family:var(--font-display);font-weight:600;font-size:16px;text-align:center;margin-bottom:15px;letter-spacing:.01em}
+.lead-head{display:grid;grid-template-columns:1fr 82px 74px;gap:10px;font-family:var(--font-mono);font-size:9px;
+  letter-spacing:.14em;color:var(--cream-mute);padding-bottom:10px;border-bottom:1px solid var(--rule)}
+.lead-head span:not(:first-child){text-align:right}
+.lead-row{display:grid;grid-template-columns:1fr 82px 74px;gap:10px;align-items:center;padding:11px 0;
+  border-bottom:1px solid var(--rule);cursor:pointer;transition:background .15s}
+.lead-row:last-child{border-bottom:none}
+.lead-row:hover{background:rgba(198,242,60,.05)}
+.lead-coin{display:flex;align-items:center;gap:10px;min-width:0}
+.lead-logo{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;
+  font-size:17px;background:var(--ledger-2);border:1px solid var(--rule-2);flex-shrink:0}
+.lead-nm{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lead-mc{font-family:var(--font-mono);font-size:12.5px;font-weight:600;text-align:right}
+.lead-mc small{display:block;font-size:10px;font-weight:500;margin-top:2px}
+.lead-vol{font-family:var(--font-mono);font-size:12.5px;color:var(--cream-dim);text-align:right}
+
+/* big stat blocks */
+.stat-blocks{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+.stat-block{
+  border:1px solid var(--rule);border-radius:16px;background:var(--ledger);padding:24px 20px;text-align:center;
+  position:relative;overflow:hidden;
+}
+.stat-block.hl{border-color:rgba(198,242,60,.3);
+  background:radial-gradient(120% 120% at 50% -10%,rgba(198,242,60,.10),transparent 66%),var(--ledger)}
+.stat-block .sb-v{font-family:var(--font-display);font-weight:700;font-size:clamp(28px,3vw,38px);letter-spacing:-.01em;
+  font-variant-numeric:tabular-nums;line-height:1}
+.stat-block .sb-v.gold{color:var(--gilt-bright);text-shadow:0 0 26px rgba(198,242,60,.45)}
+.stat-block .sb-k{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.08em;color:var(--cream-mute);
+  text-transform:uppercase;margin-top:9px}
+
+.hero-desc{text-align:center;max-width:780px;margin:0 auto;color:var(--cream-dim);font-size:15px;line-height:1.65}
+.hero-desc b{color:var(--cream);font-weight:600}
+.hero-desc .lv{color:var(--gilt-bright);font-weight:600}
+
+@media(max-width:900px){
+  .hero-top{grid-template-columns:1fr}
+  .banner-content{max-width:100%}
+  .banner-art{opacity:.28;width:60%}
+}
+@media(max-width:560px){.stat-blocks{grid-template-columns:1fr}}
+
+/* ---------------- section frame ---------------- */
+.section{padding:26px 0 60px}
+.section-head{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:18px;flex-wrap:wrap}
+.section-title{font-family:var(--font-display);font-weight:600;font-size:26px;letter-spacing:-.01em}
+.section-note{font-family:var(--font-mono);font-size:11.5px;color:var(--cream-mute)}
+.live-dot{display:inline-block;width:7px;height:7px;border-radius:50%;background:var(--jade);box-shadow:0 0 9px var(--jade);margin-right:7px;animation:pulse 2s infinite;vertical-align:1px}
+
+/* ---------------- filters ---------------- */
+.filters{display:flex;align-items:center;gap:6px;margin-bottom:20px;flex-wrap:wrap}
+.ftab{
+  padding:7px 14px;border-radius:99px;border:1px solid var(--rule);font-size:13px;font-weight:500;
+  color:var(--cream-dim);transition:all .15s;
+}
+.ftab:hover{border-color:var(--rule-2);color:var(--cream)}
+.ftab.active{background:var(--cream);color:var(--ink);border-color:var(--cream);font-weight:600}
+.fsearch{
+  margin-left:auto;display:flex;align-items:center;gap:8px;padding:8px 13px;
+  border:1px solid var(--rule);border-radius:99px;background:var(--ink-2);min-width:230px;
+}
+.fsearch input{background:none;border:none;outline:none;font-size:13.5px;width:100%;color:var(--cream)}
+.fsearch input::placeholder{color:var(--cream-mute)}
+.fsearch svg{flex-shrink:0;opacity:.5}
+
+/* ---------------- token grid + cards ---------------- */
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(285px,1fr));gap:14px}
+.tcard{
+  background:var(--ledger);border:1px solid var(--rule);border-radius:var(--r-lg);
+  padding:15px 15px 13px;cursor:pointer;position:relative;overflow:hidden;
+  transition:border-color .18s,transform .18s,box-shadow .18s;box-shadow:var(--shadow-card);
+}
+.tcard:hover{border-color:var(--rule-2);transform:translateY(-2px)}
+.tcard.flash-buy{animation:flashB .9s ease-out}
+.tcard.flash-sell{animation:flashS .9s ease-out}
+@keyframes flashB{0%{border-color:var(--jade);box-shadow:0 0 0 1px var(--jade),0 0 26px -4px rgba(198,242,60,.55)}100%{border-color:var(--rule)}}
+@keyframes flashS{0%{border-color:var(--seal);box-shadow:0 0 0 1px var(--seal),0 0 26px -4px rgba(255,91,74,.55)}100%{border-color:var(--rule)}}
+.tcard-top{display:flex;gap:12px;align-items:flex-start;margin-bottom:11px}
+.tlogo{
+  width:46px;height:46px;border-radius:12px;display:flex;align-items:center;justify-content:center;
+  font-size:23px;flex-shrink:0;border:1px solid var(--rule-2);
+  background:radial-gradient(120% 120% at 30% 20%,var(--ledger-2),var(--ink-2));
+}
+.tlogo.lg{width:64px;height:64px;border-radius:16px;font-size:32px}
+.tname-row{display:flex;align-items:center;gap:7px;min-width:0}
+.tname{font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tticker{font-family:var(--font-mono);font-size:11.5px;color:var(--cream-mute)}
+.tdesc{font-size:12.5px;color:var(--cream-dim);line-height:1.45;height:36px;overflow:hidden;margin-bottom:11px;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical}
+.tcard-meta{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px}
+.tmcap{font-family:var(--font-mono);font-size:13.5px;font-weight:600}
+.tmcap span{font-size:10.5px;color:var(--cream-mute);font-weight:400;letter-spacing:.06em;margin-right:5px}
+.tchg{font-family:var(--font-mono);font-size:12px;font-weight:600}
+/* levy badge — clean lime pill */
+.stamp{
+  display:inline-flex;align-items:center;gap:5px;font-family:var(--font-mono);font-size:10px;
+  font-weight:600;letter-spacing:.04em;color:var(--gilt-bright);
+  padding:3px 9px 3px 7px;border:1px solid rgba(198,242,60,.35);border-radius:99px;
+  background:var(--gilt-dim);flex-shrink:0;line-height:1.4;
+}
+.stamp::before{content:"";width:5px;height:5px;border-radius:50%;background:var(--gilt);box-shadow:0 0 7px var(--gilt);flex-shrink:0}
+.stamp.zero{color:var(--cream-mute);border-color:var(--rule-2);background:transparent}
+.stamp.zero::before{background:var(--cream-mute);box-shadow:none}
+.stamp.hot{color:#FFC7BE;border-color:rgba(255,91,74,.5);background:var(--seal-dim)}
+.stamp.hot::before{background:var(--seal);box-shadow:0 0 7px var(--seal)}
+/* curve progress */
+.curve{margin-bottom:9px}
+.curve-bar{height:5px;border-radius:99px;background:var(--ink-2);border:1px solid var(--rule);overflow:hidden}
+.curve-fill{height:100%;border-radius:99px;background:linear-gradient(90deg,var(--gilt),var(--gilt-bright));transition:width .5s ease}
+.curve-fill.grad{background:linear-gradient(90deg,var(--gilt-bright),#EAFFA6)}
+.curve-lbl{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10px;color:var(--cream-mute);margin-top:5px}
+.tcard-foot{display:flex;justify-content:space-between;align-items:center;font-family:var(--font-mono);font-size:10.5px;color:var(--cream-mute)}
+.tcard-foot .earn{color:var(--gilt)}
+.grad-flag{
+  position:absolute;top:0;right:0;font-family:var(--font-mono);font-size:9px;letter-spacing:.1em;
+  padding:4px 9px;background:var(--jade-dim);color:var(--jade);border-left:1px solid var(--rule);
+  border-bottom:1px solid var(--rule);border-radius:0 var(--r-lg) 0 var(--r-md);
+}
+
+/* ---------------- generic panel ---------------- */
+.panel{background:var(--ledger);border:1px solid var(--rule);border-radius:var(--r-lg);box-shadow:var(--shadow-card)}
+.panel-pad{padding:20px}
+.panel-title{font-family:var(--font-mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--cream-mute);margin-bottom:14px}
+.hairline{border:none;border-top:1px solid var(--rule);margin:14px 0}
+
+/* ---------------- create page ---------------- */
+.page-head{padding:44px 0 8px}
+.page-head h2{font-family:var(--font-display);font-weight:600;font-size:34px;letter-spacing:-.01em;margin-bottom:8px}
+.page-head p{color:var(--cream-dim);max-width:620px}
+.create-grid{display:grid;grid-template-columns:1fr 1fr;gap:20px;align-items:start;padding:26px 0 70px}
+.field{margin-bottom:16px}
+.field label{display:block;font-size:12.5px;font-weight:600;color:var(--cream-dim);margin-bottom:7px;letter-spacing:.02em}
+.field label span{color:var(--cream-mute);font-weight:400}
+.field input[type=text],.field input[type=number],.field textarea,.field select{
+  width:100%;background:var(--ink-2);border:1px solid var(--rule);border-radius:var(--r-sm);
+  padding:11px 13px;font-size:14px;transition:border-color .15s;
+}
+.field textarea{resize:vertical;min-height:84px}
+.field input:focus,.field textarea:focus{border-color:var(--gilt);outline:none}
+.field .hint{font-size:11.5px;color:var(--cream-mute);margin-top:6px}
+.field-row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.upload{
+  border:1px dashed var(--rule-2);border-radius:var(--r-md);padding:22px;text-align:center;cursor:pointer;
+  transition:border-color .15s;background:var(--ink-2);
+}
+.upload:hover{border-color:var(--gilt)}
+.upload .big{font-size:26px;margin-bottom:6px}
+.upload p{font-size:12.5px;color:var(--cream-mute)}
+.emoji-pick{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;justify-content:center}
+.emoji-pick button{font-size:19px;padding:5px 7px;border-radius:8px;border:1px solid transparent;transition:all .12s}
+.emoji-pick button:hover{background:var(--ledger-2)}
+.emoji-pick button.sel{border-color:var(--gilt);background:var(--gilt-dim)}
+
+/* levy configurator */
+.levy-box{border:1px solid rgba(198,242,60,.28);position:relative}
+.levy-box::before{
+  content:"CREATOR LEVY";position:absolute;top:-9px;left:16px;background:var(--ledger);
+  padding:0 9px;font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;color:var(--gilt);
+}
+.preset-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:18px}
+.preset{
+  padding:10px 6px;border:1px solid var(--rule);border-radius:var(--r-sm);text-align:center;transition:all .15s;
+}
+.preset:hover{border-color:var(--rule-2)}
+.preset.sel{border-color:var(--gilt);background:var(--gilt-dim)}
+.preset .p-n{font-family:var(--font-mono);font-weight:600;font-size:14px;color:var(--cream)}
+.preset .p-l{font-size:10.5px;color:var(--cream-mute);margin-top:2px}
+.slider-row{margin-bottom:16px}
+.slider-head{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px}
+.slider-head .sl{font-size:13px;font-weight:600;color:var(--cream-dim)}
+.slider-head .sv{font-family:var(--font-mono);font-weight:600;font-size:16px;color:var(--gilt-bright)}
+input[type=range]{
+  -webkit-appearance:none;width:100%;height:5px;border-radius:99px;background:
+  linear-gradient(90deg,var(--gilt) var(--fill,30%),var(--ink-2) var(--fill,30%));
+  border:1px solid var(--rule);outline:none;
+}
+input[type=range]::-webkit-slider-thumb{
+  -webkit-appearance:none;width:18px;height:18px;border-radius:50%;
+  background:linear-gradient(180deg,var(--gilt-bright),var(--gilt));border:2px solid #0A1204;
+  box-shadow:0 2px 8px rgba(0,0,0,.5);cursor:grab;
+}
+input[type=range]::-moz-range-thumb{
+  width:16px;height:16px;border-radius:50%;background:var(--gilt);border:2px solid #0A1204;cursor:grab;
+}
+.tax-warn{display:none;font-size:11.5px;color:var(--seal);margin-top:-8px;margin-bottom:14px}
+.tax-warn.show{display:block}
+.switch-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 0;border-top:1px solid var(--rule)}
+.switch-row .sw-t{font-size:13.5px;font-weight:600}
+.switch-row .sw-d{font-size:11.5px;color:var(--cream-mute);margin-top:2px}
+.switch{position:relative;width:40px;height:22px;flex-shrink:0}
+.switch input{opacity:0;width:0;height:0}
+.switch .track{
+  position:absolute;inset:0;border-radius:99px;background:var(--ink-2);border:1px solid var(--rule-2);
+  transition:all .18s;cursor:pointer;
+}
+.switch .track::after{
+  content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;
+  background:var(--cream-mute);transition:all .18s;
+}
+.switch input:checked + .track{background:var(--gilt-dim);border-color:var(--gilt)}
+.switch input:checked + .track::after{left:20px;background:var(--gilt-bright)}
+/* earnings projector — clean panel */
+.receipt{
+  background:var(--ink-2);border:1px solid var(--rule);border-radius:var(--r-md);padding:16px 16px 15px;
+  font-family:var(--font-mono);position:relative;overflow:hidden;
+}
+.receipt::before{
+  content:"";position:absolute;top:0;left:0;right:0;height:2px;
+  background:linear-gradient(90deg,transparent,var(--gilt),transparent);opacity:.7;
+}
+.r-line{display:flex;justify-content:space-between;font-size:12px;color:var(--cream-dim);padding:3.5px 0}
+.r-line b{color:var(--cream);font-weight:600}
+.r-line.total{border-top:1px dashed var(--rule-2);margin-top:7px;padding-top:9px;font-size:13.5px}
+.r-line.total b{color:var(--gilt-bright);font-size:16px}
+.assurance{display:flex;gap:9px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--rule);font-size:12.5px;color:var(--cream-dim)}
+.assurance:last-child{border-bottom:none}
+.assurance .tick{color:var(--jade);flex-shrink:0;font-weight:700}
+.assurance b{color:var(--cream)}
+.deploy-cost{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:12.5px;color:var(--cream-mute);margin:14px 2px}
+
+/* ---------------- token page ---------------- */
+.tok-head{display:flex;align-items:center;gap:16px;padding:30px 0 18px;flex-wrap:wrap}
+.tok-title h2{font-family:var(--font-display);font-size:30px;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:11px;flex-wrap:wrap}
+.tok-title .tk{font-family:var(--font-mono);font-size:14px;color:var(--cream-mute);font-weight:400}
+.tok-sub{display:flex;gap:14px;align-items:center;margin-top:6px;flex-wrap:wrap;font-family:var(--font-mono);font-size:11.5px;color:var(--cream-mute)}
+.addr-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 9px;border:1px solid var(--rule);border-radius:99px;cursor:pointer;transition:border-color .15s}
+.addr-chip:hover{border-color:var(--gilt)}
+.tok-head-right{margin-left:auto;text-align:right}
+.tok-price{font-family:var(--font-mono);font-size:24px;font-weight:600}
+.tok-chg{font-family:var(--font-mono);font-size:13px;font-weight:600}
+.tok-grid{display:grid;grid-template-columns:1fr 340px;gap:18px;align-items:start;padding-bottom:70px}
+.chart-panel{padding:16px}
+.chart-tools{display:flex;gap:6px;margin-bottom:12px;align-items:center}
+.chart-tools .tf{font-family:var(--font-mono);font-size:11px;padding:4px 9px;border-radius:5px;color:var(--cream-mute);border:1px solid transparent}
+.chart-tools .tf.active{color:var(--gilt-bright);border-color:var(--rule-2);background:var(--ink-2)}
+.chart-wrap{position:relative;width:100%;height:360px}
+#chart{width:100%;height:100%;display:block}
+.stat-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);border-top:1px solid var(--rule);margin-top:14px}
+.stat-cell{background:var(--ledger);padding:11px 13px}
+.stat-cell .k{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--cream-mute)}
+.stat-cell .v{font-family:var(--font-mono);font-size:14.5px;font-weight:600;margin-top:3px}
+/* trade panel */
+.trade-tabs{display:grid;grid-template-columns:1fr 1fr;gap:0;border-bottom:1px solid var(--rule)}
+.trade-tabs button{padding:13px;font-weight:700;font-size:14.5px;color:var(--cream-mute);border-bottom:2px solid transparent;transition:all .15s}
+.trade-tabs button.buy.active{color:var(--jade);border-color:var(--jade);background:var(--jade-dim)}
+.trade-tabs button.sell.active{color:var(--seal);border-color:var(--seal);background:var(--seal-dim)}
+.trade-body{padding:16px}
+.amt-box{background:var(--ink-2);border:1px solid var(--rule);border-radius:var(--r-md);padding:12px 14px;margin-bottom:10px}
+.amt-box:focus-within{border-color:var(--gilt)}
+.amt-top{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:10.5px;color:var(--cream-mute);margin-bottom:6px}
+.amt-row{display:flex;align-items:center;gap:10px}
+.amt-row input{background:none;border:none;outline:none;font-family:var(--font-mono);font-size:20px;font-weight:600;width:100%;color:var(--cream)}
+.amt-unit{font-family:var(--font-mono);font-size:13px;color:var(--cream-dim);font-weight:600;flex-shrink:0}
+.quick-row{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-bottom:14px}
+.quick-row button{
+  font-family:var(--font-mono);font-size:11.5px;padding:7px 4px;border:1px solid var(--rule);
+  border-radius:var(--r-sm);color:var(--cream-dim);transition:all .12s;
+}
+.quick-row button:hover{border-color:var(--gilt);color:var(--gilt-bright)}
+.fee-lines{margin:12px 0;font-family:var(--font-mono);font-size:11.5px}
+.fee-lines .fl{display:flex;justify-content:space-between;padding:4px 0;color:var(--cream-mute)}
+.fee-lines .fl b{color:var(--cream-dim);font-weight:500}
+.fee-lines .fl.big{border-top:1px dashed var(--rule-2);margin-top:6px;padding-top:8px;font-size:12.5px}
+.fee-lines .fl.big b{color:var(--cream);font-weight:600;font-size:13.5px}
+.fee-lines .levy-fl{color:var(--gilt)}
+.fee-lines .levy-fl b{color:var(--gilt-bright)}
+/* right column info */
+.info-rows{font-family:var(--font-mono);font-size:12px}
+.info-rows .ir{display:flex;justify-content:space-between;gap:10px;padding:7px 0;border-bottom:1px solid var(--rule);color:var(--cream-mute)}
+.info-rows .ir:last-child{border-bottom:none}
+.info-rows .ir b{color:var(--cream);font-weight:500;text-align:right}
+/* tabs under chart */
+.subtabs{display:flex;gap:2px;border-bottom:1px solid var(--rule);margin-bottom:0}
+.subtabs button{padding:11px 16px;font-size:13.5px;font-weight:600;color:var(--cream-mute);border-bottom:2px solid transparent}
+.subtabs button.active{color:var(--cream);border-color:var(--gilt)}
+.trades-table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px}
+.trades-table th{
+  text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--cream-mute);
+  font-weight:500;padding:10px 14px;border-bottom:1px solid var(--rule);
+}
+.trades-table td{padding:9px 14px;border-bottom:1px solid var(--rule);color:var(--cream-dim)}
+.trades-table tr.new-row{animation:rowIn .5s ease-out}
+@keyframes rowIn{from{background:var(--gilt-dim)}to{background:transparent}}
+.side-b{color:var(--jade);font-weight:600}
+.side-s{color:var(--seal);font-weight:600}
+.holder-bar{height:4px;border-radius:99px;background:var(--ink-2);overflow:hidden;margin-top:4px}
+.holder-fill{height:100%;background:var(--gilt);border-radius:99px}
+.comment{padding:13px 14px;border-bottom:1px solid var(--rule)}
+.comment .c-head{display:flex;gap:9px;align-items:center;font-family:var(--font-mono);font-size:11px;color:var(--cream-mute);margin-bottom:5px}
+.comment .c-head b{color:var(--gilt)}
+.comment p{font-size:13.5px;color:var(--cream-dim)}
+
+/* ---------------- treasury ---------------- */
+.treasury-grid{display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-bottom:22px}
+.t-stat{padding:18px}
+.t-stat .k{font-family:var(--font-mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;color:var(--cream-mute)}
+.t-stat .v{font-family:var(--font-display);font-size:32px;font-weight:600;margin-top:6px;color:var(--cream)}
+.t-stat .v.gold{color:var(--gilt-bright)}
+.t-stat .s{font-family:var(--font-mono);font-size:11px;color:var(--cream-mute);margin-top:4px}
+.t-row{display:grid;grid-template-columns:minmax(180px,1.4fr) 1fr 1fr 1fr auto;gap:14px;align-items:center;padding:14px 18px;border-bottom:1px solid var(--rule)}
+.t-row:last-child{border-bottom:none}
+.t-row .cell-k{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--cream-mute);margin-bottom:3px}
+.t-row .cell-v{font-family:var(--font-mono);font-size:13.5px;font-weight:600}
+.t-tok{display:flex;gap:10px;align-items:center;min-width:0}
+.t-tok .tlogo{width:38px;height:38px;font-size:19px;border-radius:10px}
+
+/* ---------------- docs ---------------- */
+.docs-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;padding-bottom:26px}
+.doc-card{padding:20px}
+.doc-card .n{font-family:var(--font-display);font-size:30px;color:var(--gilt);font-weight:500;margin-bottom:10px;font-style:italic}
+.doc-card h4{font-size:15.5px;margin-bottom:8px}
+.doc-card p{font-size:13px;color:var(--cream-dim)}
+.doc-card p b{color:var(--cream)}
+.rules{max-width:760px;margin:0 auto 70px}
+
+/* ---------------- modal ---------------- */
+.modal-back{
+  position:fixed;inset:0;background:rgba(6,9,7,.75);backdrop-filter:blur(6px);z-index:100;
+  display:none;align-items:center;justify-content:center;padding:20px;
+}
+.modal-back.open{display:flex}
+.modal{
+  width:min(460px,100%);background:var(--ledger);border:1px solid var(--rule-2);border-radius:var(--r-lg);
+  padding:28px;position:relative;animation:modalIn .28s cubic-bezier(.2,.9,.3,1.2);
+}
+@keyframes modalIn{from{transform:translateY(14px) scale(.97);opacity:0}to{transform:none;opacity:1}}
+.modal h3{font-family:var(--font-display);font-size:24px;font-weight:600;margin-bottom:6px}
+.modal .m-sub{color:var(--cream-dim);font-size:13.5px;margin-bottom:18px}
+.modal-close{position:absolute;top:14px;right:14px;color:var(--cream-mute);font-size:18px;padding:4px 8px}
+.modal-close:hover{color:var(--cream)}
+.levied{
+  position:absolute;top:18px;right:52px;font-family:var(--font-display);font-weight:700;font-size:20px;
+  letter-spacing:.1em;color:var(--gilt-bright);border:2.5px solid var(--gilt);border-radius:8px;padding:2px 12px;
+  transform:rotate(-8deg);opacity:0;box-shadow:0 0 22px -2px rgba(198,242,60,.6),inset 0 0 12px -6px rgba(198,242,60,.5);
+  text-shadow:0 0 12px rgba(198,242,60,.5);
+}
+.levied.slam{animation:slam .5s cubic-bezier(.2,1.6,.4,1) forwards}
+@keyframes slam{0%{opacity:0;transform:rotate(-8deg) scale(2.4)}60%{opacity:1;transform:rotate(-8deg) scale(.92)}100%{opacity:.95;transform:rotate(-8deg) scale(1)}}
+
+/* ---------------- toast ---------------- */
+.toasts{position:fixed;bottom:20px;right:20px;z-index:120;display:flex;flex-direction:column;gap:9px;align-items:flex-end}
+.toast{
+  background:var(--ledger-2);border:1px solid var(--rule-2);border-left:3px solid var(--gilt);
+  border-radius:var(--r-sm);padding:11px 15px;font-size:13px;max-width:340px;
+  animation:toastIn .3s ease-out;box-shadow:var(--shadow-card);
+}
+.toast.jade{border-left-color:var(--jade)}
+.toast.seal{border-left-color:var(--seal)}
+.toast b{font-family:var(--font-mono)}
+@keyframes toastIn{from{transform:translateX(20px);opacity:0}to{transform:none;opacity:1}}
+
+/* ---------------- footer ---------------- */
+footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
+.foot-in{display:flex;justify-content:space-between;gap:18px;align-items:center;flex-wrap:wrap}
+.foot-l{font-family:var(--font-mono);font-size:11px;color:var(--cream-mute)}
+.foot-links{display:flex;gap:18px;font-size:13px;color:var(--cream-dim)}
+.foot-links a:hover{color:var(--gilt-bright)}
+
+/* ---------------- pages ---------------- */
+.page{display:none}
+.page.active{display:block}
+
+/* ---------------- responsive ---------------- */
+@media (max-width:1080px){
+  .tok-grid{grid-template-columns:1fr}
+  .create-grid{grid-template-columns:1fr}
+  .treasury-grid{grid-template-columns:1fr}
+  .docs-grid{grid-template-columns:1fr}
+  .t-row{grid-template-columns:1fr 1fr;row-gap:10px}
+}
+@media (max-width:1024px){ .tb-social{display:none} }
+@media (max-width:760px){
+  .nav{display:none}
+  .hamburger{display:block}
+  .nav.open{
+    display:flex;position:absolute;top:62px;left:0;right:0;flex-direction:column;align-items:stretch;
+    background:var(--ink-2);border-bottom:1px solid var(--rule);padding:10px 16px;gap:2px;
+  }
+  .chain-badge{display:none}
+  .tb-launch{display:none}
+  .fsearch{min-width:0;width:100%;margin-left:0}
+  .stat-strip{grid-template-columns:1fr 1fr}
+  .hero{padding:40px 0 30px}
+  .field-row{grid-template-columns:1fr}
+  .preset-row{grid-template-columns:1fr 1fr}
+}
+@media (prefers-reduced-motion:reduce){
+  .tape-track{animation:none}
+  .tcard.flash-buy,.tcard.flash-sell{animation:none}
+  .stake-orbit{animation:none}
+  *{scroll-behavior:auto}
+}
+
+/* ---------------- watchlist star (Robinhood-style) ---------------- */
+.watch-star{
+  position:absolute;top:11px;right:12px;z-index:3;width:28px;height:28px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;color:var(--cream-mute);
+  transition:color .15s,background .15s,transform .12s;
+}
+.watch-star:hover{background:var(--ledger-2);color:var(--cream)}
+.watch-star:active{transform:scale(.88)}
+.watch-star svg{width:16px;height:16px;display:block}
+.watch-star.on{color:var(--gilt);filter:drop-shadow(0 0 6px rgba(198,242,60,.5))}
+.watch-star.on:hover{color:var(--gilt-bright)}
+.grad-pill{
+  display:inline-flex;align-items:center;font-family:var(--font-mono);font-size:9px;font-weight:600;
+  letter-spacing:.08em;padding:2px 7px;border-radius:99px;background:var(--gilt-dim);
+  color:var(--gilt-bright);border:1px solid rgba(198,242,60,.3);flex-shrink:0;
+}
+
+/* ---------------- staking ---------------- */
+.stake-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
+.stake-main{display:grid;grid-template-columns:1fr 380px;gap:18px;align-items:start;padding-bottom:70px}
+@media(max-width:860px){.stake-grid{grid-template-columns:1fr 1fr}.stake-main{grid-template-columns:1fr}}
+@media(max-width:480px){.stake-grid{grid-template-columns:1fr}}
+.stake-card{padding:0;overflow:hidden}
+.stake-tabs{display:grid;grid-template-columns:1fr 1fr;border-bottom:1px solid var(--rule)}
+.stake-tabs button{padding:14px;font-weight:700;font-size:14.5px;color:var(--cream-mute);border-bottom:2px solid transparent;transition:all .15s}
+.stake-tabs button.active{color:var(--gilt-bright);border-color:var(--gilt);background:var(--gilt-dim)}
+.stake-body{padding:20px}
+.stake-you{padding:20px;border-top:1px solid var(--rule);background:var(--ink-2)}
+.stake-you-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:16px}
+.sy-k{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--cream-mute);margin-bottom:4px}
+.sy-v{font-family:var(--font-mono);font-size:18px;font-weight:600}
+.sy-v.reward{color:var(--gilt-bright)}
+.apr-hero{
+  display:flex;align-items:baseline;gap:10px;padding:16px 18px;border:1px solid rgba(198,242,60,.25);
+  background:var(--gilt-dim);border-radius:var(--r-md);margin-bottom:18px;
+}
+.apr-hero .apr-n{font-family:var(--font-display);font-size:38px;font-weight:700;color:var(--gilt-bright);line-height:1;text-shadow:0 0 24px rgba(198,242,60,.4)}
+.apr-hero .apr-l{font-family:var(--font-mono);font-size:11px;color:var(--cream-dim);letter-spacing:.04em}
+.rev-flow{font-family:var(--font-mono)}
+.rev-flow .rf{display:flex;justify-content:space-between;gap:10px;padding:9px 0;border-bottom:1px solid var(--rule);font-size:12.5px;color:var(--cream-dim)}
+.rev-flow .rf:last-child{border-bottom:none}
+.rev-flow .rf b{color:var(--cream);font-weight:600}
+.rev-flow .rf .pos{color:var(--gilt)}
+.stake-src{display:flex;gap:11px;align-items:flex-start;padding:11px 0;border-bottom:1px solid var(--rule);font-size:12.5px;color:var(--cream-dim)}
+.stake-src:last-child{border-bottom:none}
+.stake-src .n{font-family:var(--font-mono);color:var(--gilt-bright);font-weight:600;flex-shrink:0}
+.stake-src b{color:var(--cream)}
+.orbit-wrap{display:flex;justify-content:center;padding:6px 0 16px}
+.stake-orbit{width:120px;height:120px;animation:rotor 60s linear infinite}
+</style>
+</head>
+<body>
+
+<!-- ======================= TOP BAR ======================= -->
+<header class="topbar">
+  <div class="topbar-in">
+    <a class="brand" href="#" onclick="go('home');return false">
+      <svg class="brand-seal" viewBox="0 0 40 40" fill="none" aria-hidden="true">
+        <circle cx="20" cy="20" r="18.5" stroke="#C6F23C" stroke-width="1.4"/>
+        <circle cx="20" cy="20" r="14.5" stroke="#C6F23C" stroke-width=".7" opacity=".55"/>
+        <g stroke="#C6F23C" stroke-width=".55" opacity=".8">
+          <ellipse cx="20" cy="20" rx="14" ry="5.5"/>
+          <ellipse cx="20" cy="20" rx="14" ry="5.5" transform="rotate(45 20 20)"/>
+          <ellipse cx="20" cy="20" rx="14" ry="5.5" transform="rotate(90 20 20)"/>
+          <ellipse cx="20" cy="20" rx="14" ry="5.5" transform="rotate(135 20 20)"/>
+        </g>
+        <text x="20" y="24.5" text-anchor="middle" font-family="Space Grotesk,sans-serif" font-size="13" font-weight="700" fill="#D8FB5C">R</text>
+      </svg>
+      <span>
+        <span class="brand-word">Robin<em>fun</em></span>
+      </span>
+    </a>
+    <nav class="nav" id="nav">
+      <button data-nav="home" class="active" data-i18n="nav.tokens" onclick="go('home')">Tokens</button>
+      <button data-nav="create" data-i18n="nav.create" onclick="go('create')">Create</button>
+      <button data-nav="stake" data-i18n="nav.staking" onclick="go('stake')">Staking</button>
+      <button data-nav="docs" data-i18n="nav.whitepaper" onclick="go('docs')">Whitepaper</button>
+      <button data-i18n="nav.chain" onclick="toast('Robinhood Chain — L2 explorer &amp; bridge coming soon','')">Robinhood Chain</button>
+    </nav>
+    <div class="topbar-right">
+      <button class="tb-icon tb-lang" id="langBtn" onclick="toggleLang()" title="Language" aria-label="Switch language">EN</button>
+      <button class="tb-icon" id="themeBtn" onclick="toggleTheme()" title="Toggle light / dark" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg></button>
+      <a class="tb-icon tb-social" href="#" onclick="return false" title="X" aria-label="X (Twitter)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.9 2H22l-7.6 8.7L23.3 22h-6.9l-5.4-7.1L4.8 22H1.7l8.2-9.4L.9 2h7.1l4.9 6.5L18.9 2zm-1.2 18h1.9L7.1 4H5.1l12.6 16z"/></svg></a>
+      <a class="tb-icon tb-social" href="#" onclick="return false" title="Telegram" aria-label="Telegram"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.94 4.15a.9.9 0 00-1.2-.86L2.9 10.3c-.86.34-.85 1.57.02 1.88l4.35 1.53 1.67 5.28c.19.6.94.8 1.4.38l2.44-2.24 4.42 3.26c.5.37 1.21.1 1.35-.5l3.4-15.4a.9.9 0 00-.01-.34zM9.2 14.3l-.28 3.5-1.02-3.24 8.36-5.36-7.04 5.1z"/></svg></a>
+      <div class="tb-sep tb-social"></div>
+      <button class="btn btn-line btn-mini tb-launch" data-i18n="btn.launch" onclick="go('create')">+ Launch Token</button>
+      <button class="btn btn-gold btn-mini" id="walletBtn" onclick="connectWallet()">Connect wallet</button>
+      <button class="hamburger" onclick="document.getElementById('nav').classList.toggle('open')" aria-label="Menu">☰</button>
+    </div>
+  </div>
+</header>
+
+<!-- ======================= TICKER TAPE ======================= -->
+<div class="tape" aria-hidden="true"><div class="tape-track" id="tape"></div></div>
+
+<!-- ======================= HOME ======================= -->
+<main>
+<div class="page active" id="page-home">
+  <div class="wrap">
+    <section class="hero">
+      <div class="hero-top">
+        <!-- glowing banner -->
+        <div class="hero-banner">
+          <div class="banner-content">
+            <div class="banner-brand">
+              <svg class="banner-mark" viewBox="0 0 56 56" fill="none" aria-hidden="true">
+                <ellipse cx="28" cy="28" rx="26" ry="10.5" stroke="#C6F23C" stroke-width="2" transform="rotate(-28 28 28)" opacity=".75"/>
+                <ellipse cx="28" cy="28" rx="26" ry="10.5" stroke="#C6F23C" stroke-width="1.4" transform="rotate(32 28 28)" opacity=".4"/>
+                <circle cx="28" cy="28" r="15" fill="#0A0F0A" stroke="#C6F23C" stroke-width="2"/>
+                <path d="M28 21 L28 36 M28 21 L22.5 26.5 M28 21 L33.5 26.5" stroke="#D8FB5C" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              <span class="banner-word">Robin<em>fun</em></span>
+            </div>
+            <p class="banner-tag" data-i18n-html="hero.tag">Launch a token. Collect the <em>levy</em> — forever.</p>
+            <div class="banner-chip" data-i18n-html="hero.chip"><span class="dot"></span>Robinhood Chain · fair-launch bonding curves</div>
+            <div class="hero-cta">
+              <button class="btn btn-gold btn-lg" data-i18n="btn.launch" onclick="go('create')">+ Launch Token</button>
+              <button class="btn btn-line btn-lg" data-i18n="hero.explore" onclick="document.getElementById('tokens').scrollIntoView({behavior:'smooth'})">Explore tokens</button>
+            </div>
+          </div>
+          <div class="banner-art" aria-hidden="true">
+            <svg viewBox="0 0 340 300" fill="none" preserveAspectRatio="xMaxYMax meet">
+              <g stroke="#C6F23C" stroke-width="2">
+                <line x1="46" y1="196" x2="46" y2="252" opacity=".4"/>
+                <line x1="94" y1="150" x2="94" y2="228" opacity=".5"/>
+                <line x1="142" y1="168" x2="142" y2="236" opacity=".45"/>
+                <line x1="190" y1="108" x2="190" y2="210" opacity=".6"/>
+                <line x1="238" y1="78" x2="238" y2="188" opacity=".72"/>
+                <line x1="286" y1="42" x2="286" y2="166" opacity=".85"/>
+              </g>
+              <g fill="#C6F23C">
+                <rect x="36" y="206" width="20" height="40" rx="3" opacity=".4"/>
+                <rect x="84" y="162" width="20" height="52" rx="3" opacity=".5"/>
+                <rect x="132" y="180" width="20" height="44" rx="3" opacity=".45"/>
+                <rect x="180" y="122" width="20" height="70" rx="3" opacity=".6"/>
+                <rect x="228" y="92" width="20" height="82" rx="3" opacity=".72"/>
+                <rect x="276" y="56" width="20" height="96" rx="3" opacity=".92"/>
+              </g>
+              <path d="M40 224 L110 168 L156 190 L300 42" stroke="#D8FB5C" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+              <path d="M283 36 L305 40 L296 60" stroke="#D8FB5C" stroke-width="6" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </svg>
+          </div>
+        </div>
+        <!-- top volume leaderboard -->
+        <div class="hero-lead">
+          <div class="lead-title">Top volume</div>
+          <div class="lead-head"><span>COIN</span><span>MCAP</span><span>24H VOL</span></div>
+          <div id="leadRows"></div>
+        </div>
+      </div>
+      <!-- big stat blocks -->
+      <div class="stat-blocks">
+        <div class="stat-block"><div class="sb-v" id="st-vol">—</div><div class="sb-k">24h volume</div></div>
+        <div class="stat-block"><div class="sb-v" id="st-launched">—</div><div class="sb-k">Tokens launched</div></div>
+        <div class="stat-block hl"><div class="sb-v gold" id="st-paid">—</div><div class="sb-k">Paid to creators · all-time</div></div>
+      </div>
+      <p class="hero-desc">
+        Fair-launch bonding curves. Start at a <b>$4k cap</b>, graduate at <b>~$44k</b> into a Uniswap pool with
+        <b>100% of the LP burned</b> — no presale, no team. The twist: set a <span class="lv">creator levy up to 10%</span>,
+        and every buy &amp; sell routes fees to your wallet — on the curve, and long after graduation.
+      </p>
+    </section>
+
+    <section class="section" id="tokens">
+      <div class="section-head">
+        <h2 class="section-title" data-i18n="board.title">The board</h2>
+        <span class="section-note" data-i18n-html="board.note"><span class="live-dot"></span>Live — cards flash and re-sort as trades land</span>
+      </div>
+      <div class="filters">
+        <button class="ftab active" data-f="trending" onclick="setFilter('trending')">Trending</button>
+        <button class="ftab" data-f="watch" onclick="setFilter('watch')">★ Watchlist</button>
+        <button class="ftab" data-f="new" onclick="setFilter('new')">Newest</button>
+        <button class="ftab" data-f="lastTrade" onclick="setFilter('lastTrade')">Last trade</button>
+        <button class="ftab" data-f="mcap" onclick="setFilter('mcap')">Top mcap</button>
+        <button class="ftab" data-f="soon" onclick="setFilter('soon')">Graduating soon</button>
+        <button class="ftab" data-f="graduated" onclick="setFilter('graduated')">Graduated</button>
+        <div class="fsearch">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9AA18F" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+          <input type="text" id="search" placeholder="Search name, ticker, or paste a CA…" oninput="renderGrid()">
+        </div>
+      </div>
+      <div class="grid" id="grid"></div>
+    </section>
+  </div>
+</div>
+
+<!-- ======================= CREATE ======================= -->
+<div class="page" id="page-create">
+  <div class="wrap">
+    <div class="page-head">
+      <h2 data-i18n="create.h">Create a token</h2>
+      <p data-i18n="create.p">Deploys in one transaction. No presale, no team allocation — 1B supply, all of it on the curve. The levy you set below is written into the token contract itself, so it keeps paying you after graduation.</p>
+    </div>
+    <div class="create-grid">
+      <!-- left: identity -->
+      <div class="panel panel-pad">
+        <div class="panel-title">01 · Token identity</div>
+        <div class="field-row">
+          <div class="field">
+            <label for="c-name">Name</label>
+            <input type="text" id="c-name" maxlength="24" placeholder="e.g. Sherwood" oninput="syncPreview()">
+          </div>
+          <div class="field">
+            <label for="c-ticker">Ticker</label>
+            <input type="text" id="c-ticker" maxlength="8" placeholder="e.g. WOOD" style="text-transform:uppercase" oninput="syncPreview()">
+          </div>
+        </div>
+        <div class="field">
+          <label for="c-desc">Description</label>
+          <textarea id="c-desc" maxlength="240" placeholder="What's the story? One or two lines."></textarea>
+        </div>
+        <div class="field">
+          <label>Image <span>— pick a placeholder for the prototype</span></label>
+          <div class="upload" onclick="document.getElementById('emojiRow').scrollIntoView({block:'nearest'})">
+            <div class="big" id="upl-emoji">🪶</div>
+            <p>Drop an image here, or choose an emoji stand-in below</p>
+            <div class="emoji-pick" id="emojiRow"></div>
+          </div>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="c-x">X / Twitter <span>(optional)</span></label>
+            <input type="text" id="c-x" placeholder="https://x.com/…">
+          </div>
+          <div class="field">
+            <label for="c-tg">Telegram <span>(optional)</span></label>
+            <input type="text" id="c-tg" placeholder="https://t.me/…">
+          </div>
+        </div>
+        <div class="field">
+          <label for="c-buyin">Initial dev buy <span>(optional, ETH)</span></label>
+          <input type="number" id="c-buyin" min="0" step="0.01" placeholder="0.00" oninput="syncCost()">
+          <div class="hint">Buys into your own curve in the deploy transaction, before anyone else. Shown publicly as the creator's position.</div>
+        </div>
+      </div>
+
+      <!-- right: levy configurator -->
+      <div>
+        <div class="panel panel-pad levy-box">
+          <div class="preset-row">
+            <button class="preset" data-p="0" onclick="setPreset(0,0,this)"><div class="p-n">0 / 0</div><div class="p-l">No levy</div></button>
+            <button class="preset sel" data-p="3" onclick="setPreset(3,3,this)"><div class="p-n">3 / 3</div><div class="p-l">Standard</div></button>
+            <button class="preset" data-p="5" onclick="setPreset(5,5,this)"><div class="p-n">5 / 5</div><div class="p-l">Degen</div></button>
+            <button class="preset" data-p="c" onclick="markCustom(this)"><div class="p-n">?/?</div><div class="p-l">Custom</div></button>
+          </div>
+          <div class="slider-row">
+            <div class="slider-head"><span class="sl">Buy levy</span><span class="sv" id="v-buy">3%</span></div>
+            <input type="range" id="r-buy" min="0" max="10" step="0.5" value="3" oninput="onSlider()">
+          </div>
+          <div class="slider-row">
+            <div class="slider-head"><span class="sl">Sell levy</span><span class="sv" id="v-sell">3%</span></div>
+            <input type="range" id="r-sell" min="0" max="10" step="0.5" value="3" oninput="onSlider()">
+          </div>
+          <p class="tax-warn" id="taxWarn">High levies (&gt;5%) tend to suppress volume — you may earn more with a lower rate.</p>
+          <div class="field">
+            <label for="c-wallet">Levy destination — your dev wallet</label>
+            <input type="text" id="c-wallet" class="mono" placeholder="Connect wallet to autofill" spellcheck="false">
+            <div class="hint">Fees are harvested to ETH automatically and stream here. Claim any time from the Treasury tab.</div>
+          </div>
+          <div class="switch-row">
+            <div>
+              <div class="sw-t">Halve levy at graduation</div>
+              <div class="sw-d">Signals long-term intent — rates drop 50% when the token graduates to Uniswap.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="c-decay" onchange="projector()"><span class="track"></span></label>
+          </div>
+          <div class="switch-row">
+            <div>
+              <div class="sw-t">Renounce rate control</div>
+              <div class="sw-d">Locks the levy permanently. Without this, you can lower rates later — but never raise them.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="c-renounce"><span class="track"></span></label>
+          </div>
+        </div>
+
+        <div style="height:14px"></div>
+
+        <div class="panel panel-pad">
+          <div class="panel-title">Earnings projector</div>
+          <div class="slider-row">
+            <div class="slider-head"><span class="sl">Assumed daily volume</span><span class="sv" id="v-vol">$50k</span></div>
+            <input type="range" id="r-vol" min="5000" max="500000" step="5000" value="50000" oninput="projector()">
+          </div>
+          <div class="receipt" id="receipt"></div>
+        </div>
+
+        <div style="height:14px"></div>
+
+        <div class="panel panel-pad">
+          <div class="panel-title">Written into the contract</div>
+          <div class="assurance"><span class="tick">✓</span><span><b>Hard cap 10% / 10%.</b> The factory rejects anything higher — honeypots are structurally impossible.</span></div>
+          <div class="assurance"><span class="tick">✓</span><span><b>Rates can only go down.</b> No function exists to raise a levy after deploy.</span></div>
+          <div class="assurance"><span class="tick">✓</span><span><b>No blacklist, no pause, no mint.</b> Transfers can never be blocked or diluted.</span></div>
+          <div class="assurance"><span class="tick">✓</span><span><b>LP 100% burned at graduation.</b> The Uniswap pool can never be pulled.</span></div>
+          <div class="deploy-cost"><span>Deploy cost</span><span id="deployCost">0.002 ETH + gas</span></div>
+          <button class="btn btn-gold btn-lg btn-block" onclick="deploy()">Deploy token</button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= TOKEN DETAIL ======================= -->
+<div class="page" id="page-token">
+  <div class="wrap">
+    <div style="padding-top:22px">
+      <button class="btn btn-line" onclick="go('home')" style="padding:6px 13px;font-size:12.5px">← Back to board</button>
+    </div>
+    <div class="tok-head">
+      <div class="tlogo lg" id="tk-logo">🪙</div>
+      <div class="tok-title">
+        <h2><span id="tk-name">Token</span> <span class="tk" id="tk-ticker">$TKN</span> <span id="tk-stamp"></span></h2>
+        <div class="tok-sub">
+          <span class="addr-chip" id="tk-ca" onclick="copyCA()" title="Copy contract address">0x···<span style="opacity:.6">⧉</span></span>
+          <span>by <span class="gold" id="tk-creator">0x···</span></span>
+          <span id="tk-age">·</span>
+          <span id="tk-status"></span>
+        </div>
+      </div>
+      <div class="tok-head-right">
+        <div class="tok-price" id="tk-price">$0.00000</div>
+        <div class="tok-chg" id="tk-chg">+0.0%</div>
+      </div>
+    </div>
+
+    <div class="tok-grid">
+      <div>
+        <div class="panel chart-panel">
+          <div class="chart-tools">
+            <button class="tf active">5m</button><button class="tf">1h</button><button class="tf">4h</button><button class="tf">1d</button>
+            <span style="margin-left:auto" class="section-note"><span class="live-dot"></span>live</span>
+          </div>
+          <div class="chart-wrap"><canvas id="chart"></canvas></div>
+          <div class="stat-strip">
+            <div class="stat-cell"><div class="k">Market cap</div><div class="v" id="ts-mcap">—</div></div>
+            <div class="stat-cell"><div class="k">24h volume</div><div class="v" id="ts-vol">—</div></div>
+            <div class="stat-cell"><div class="k">Holders</div><div class="v" id="ts-holders">—</div></div>
+            <div class="stat-cell"><div class="k">Levy paid to creator</div><div class="v gold" id="ts-earned">—</div></div>
+          </div>
+        </div>
+
+        <div style="height:16px"></div>
+
+        <div class="panel">
+          <div class="subtabs">
+            <button class="active" data-st="trades" onclick="setSubtab('trades')">Trades</button>
+            <button data-st="holders" onclick="setSubtab('holders')">Holders</button>
+            <button data-st="thread" onclick="setSubtab('thread')">Thread</button>
+          </div>
+          <div id="subtab-trades">
+            <table class="trades-table">
+              <thead><tr><th>Time</th><th>Side</th><th>ETH</th><th>Tokens</th><th class="levy-col" style="color:#C6F23C">Levy</th><th>Wallet</th></tr></thead>
+              <tbody id="tradesBody"></tbody>
+            </table>
+          </div>
+          <div id="subtab-holders" style="display:none"><div id="holdersBody" style="padding:6px 0"></div></div>
+          <div id="subtab-thread" style="display:none"><div id="threadBody"></div></div>
+        </div>
+      </div>
+
+      <div>
+        <div class="panel">
+          <div class="trade-tabs">
+            <button class="buy active" id="tab-buy" onclick="setSide('buy')">Buy</button>
+            <button class="sell" id="tab-sell" onclick="setSide('sell')">Sell</button>
+          </div>
+          <div class="trade-body">
+            <div class="amt-box">
+              <div class="amt-top"><span id="amt-label">You pay</span><span>Balance: <span id="amt-bal">2.4810 ETH</span></span></div>
+              <div class="amt-row">
+                <input type="number" id="amt" placeholder="0.0" min="0" step="0.01" oninput="quote()">
+                <span class="amt-unit" id="amt-unit">ETH</span>
+              </div>
+            </div>
+            <div class="quick-row" id="quickRow"></div>
+            <div class="fee-lines" id="feeLines"></div>
+            <button class="btn btn-jade btn-lg btn-block" id="tradeBtn" onclick="doTrade()">Buy</button>
+            <p style="font-family:var(--font-mono);font-size:10.5px;color:var(--cream-mute);margin-top:10px;text-align:center">
+              1% curve fee · slippage auto · <span id="fee-note">3% buy levy → creator</span>
+            </p>
+          </div>
+        </div>
+
+        <div style="height:14px"></div>
+
+        <div class="panel panel-pad">
+          <div class="panel-title">Bonding curve</div>
+          <div class="curve">
+            <div class="curve-bar" style="height:8px"><div class="curve-fill" id="tk-fill" style="width:0%"></div></div>
+            <div class="curve-lbl"><span id="tk-curvelbl">$0 raised</span><span>graduates at $44k</span></div>
+          </div>
+          <p style="font-size:12px;color:var(--cream-dim);margin-top:8px" id="tk-curvedesc">
+            When the cap reaches ~$44k, liquidity deploys to Uniswap and <b style="color:var(--cream)">100% of the LP is burned</b>. The levy keeps working after graduation — it lives in the token contract.
+          </p>
+        </div>
+
+        <div style="height:14px"></div>
+
+        <div class="panel panel-pad">
+          <div class="panel-title">Creator levy — public record</div>
+          <div class="info-rows">
+            <div class="ir"><span>Buy levy</span><b id="li-buy">—</b></div>
+            <div class="ir"><span>Sell levy</span><b id="li-sell">—</b></div>
+            <div class="ir"><span>After graduation</span><b id="li-decay">—</b></div>
+            <div class="ir"><span>Rate control</span><b id="li-ren">—</b></div>
+            <div class="ir"><span>Destination</span><b class="gold" id="li-dest">—</b></div>
+            <div class="ir"><span>Collected to date</span><b class="gold" id="li-earned">—</b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= TREASURY ======================= -->
+<div class="page" id="page-treasury">
+  <div class="wrap">
+    <div class="page-head">
+      <h2 data-i18n="treasury.h">Treasury</h2>
+      <p data-i18n="treasury.p">Levies from your tokens are harvested to ETH automatically and accrue here. Claim per token, or sweep everything at once.</p>
+    </div>
+    <div class="treasury-grid">
+      <div class="panel t-stat"><div class="k">Claimable now</div><div class="v gold" id="tr-claimable">0 ETH</div><div class="s" id="tr-claimusd">≈ $0</div></div>
+      <div class="panel t-stat"><div class="k">Earned all-time</div><div class="v" id="tr-alltime">0 ETH</div><div class="s">across <span id="tr-count">0</span> tokens</div></div>
+      <div class="panel t-stat"><div class="k">Best earner</div><div class="v" id="tr-best">—</div><div class="s" id="tr-bestsub">launch something</div></div>
+    </div>
+    <div style="display:flex;justify-content:flex-end;margin-bottom:12px">
+      <button class="btn btn-gold" onclick="claimAll()">Sweep all to wallet</button>
+    </div>
+    <div class="panel" id="tr-rows"></div>
+  </div>
+</div>
+
+<!-- ======================= STAKE ======================= -->
+<div class="page" id="page-stake">
+  <div class="wrap">
+    <div class="page-head">
+      <h2 data-i18n="stake.h">Stake $ROBIN</h2>
+      <p data-i18n-html="stake.p">The protocol keeps a 1% curve fee and 10% of every creator levy across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.</p>
+    </div>
+    <div class="stake-grid">
+      <div class="panel t-stat"><div class="k">Est. APR · 30d</div><div class="v gold" id="stk-apr">—%</div><div class="s">paid in ETH</div></div>
+      <div class="panel t-stat"><div class="k">Total staked</div><div class="v" id="stk-total">—</div><div class="s"><span id="stk-totalpct">—</span> of supply</div></div>
+      <div class="panel t-stat"><div class="k">Revenue to stakers · 24h</div><div class="v" id="stk-rev24">—</div><div class="s" id="stk-rev24usd">≈ $0</div></div>
+      <div class="panel t-stat"><div class="k">Distributed all-time</div><div class="v" id="stk-revall">—</div><div class="s">since launch</div></div>
+    </div>
+
+    <div class="stake-main">
+      <!-- left: stake/unstake -->
+      <div class="panel stake-card">
+        <div class="stake-tabs">
+          <button id="stk-tab-stake" class="active" onclick="setStakeSide('stake')">Stake</button>
+          <button id="stk-tab-unstake" onclick="setStakeSide('unstake')">Unstake</button>
+        </div>
+        <div class="stake-body">
+          <div class="apr-hero">
+            <span class="apr-n" id="stk-apr2">—%</span>
+            <span class="apr-l">estimated annual yield on staked $ROBIN,<br>paid continuously in ETH from protocol revenue</span>
+          </div>
+          <div class="amt-box" id="stk-box">
+            <div class="amt-top"><span id="stk-amt-label">Stake amount</span><span>Balance: <b id="stk-bal">—</b></span></div>
+            <div class="amt-row">
+              <input id="stk-amt" inputmode="decimal" placeholder="0" oninput="quoteStake()">
+              <span class="amt-unit">$ROBIN</span>
+            </div>
+          </div>
+          <div class="quick-row" id="stk-quick"></div>
+          <div class="rev-flow" id="stk-quote" style="margin:4px 0 16px"></div>
+          <button class="btn btn-gold btn-lg btn-block" id="stk-btn" onclick="doStake()">Stake $ROBIN</button>
+        </div>
+        <div class="stake-you">
+          <div class="panel-title" style="margin-bottom:14px">Your position</div>
+          <div class="stake-you-grid">
+            <div><div class="sy-k">Staked</div><div class="sy-v" id="sy-staked">0 $ROBIN</div></div>
+            <div><div class="sy-k">Pending rewards</div><div class="sy-v reward" id="sy-reward">0.00000 Ξ</div></div>
+          </div>
+          <button class="btn btn-line btn-block" id="sy-claim" onclick="claimStake()" disabled>Claim ETH rewards</button>
+        </div>
+      </div>
+
+      <!-- right: explainer -->
+      <div style="display:flex;flex-direction:column;gap:18px">
+        <div class="panel panel-pad">
+          <div class="orbit-wrap">
+            <svg class="stake-orbit" viewBox="0 0 120 120" fill="none" aria-hidden="true">
+              <circle cx="60" cy="60" r="54" stroke="#C6F23C" stroke-width="1" opacity=".4"/>
+              <circle cx="60" cy="60" r="40" stroke="#C6F23C" stroke-width=".7" opacity=".3"/>
+              <ellipse cx="60" cy="60" rx="54" ry="20" stroke="#C6F23C" stroke-width=".7" opacity=".5"/>
+              <ellipse cx="60" cy="60" rx="54" ry="20" stroke="#C6F23C" stroke-width=".7" opacity=".5" transform="rotate(60 60 60)"/>
+              <ellipse cx="60" cy="60" rx="54" ry="20" stroke="#C6F23C" stroke-width=".7" opacity=".5" transform="rotate(120 60 60)"/>
+              <circle cx="60" cy="60" r="16" fill="#0F140F" stroke="#C6F23C" stroke-width="1"/>
+              <text x="60" y="65" text-anchor="middle" font-family="Space Grotesk,sans-serif" font-size="13" font-weight="700" fill="#D8FB5C">Ξ</text>
+            </svg>
+          </div>
+          <div class="panel-title">Where the yield comes from</div>
+          <div class="stake-src"><span class="n">1%</span><span><b>Curve trade fee.</b> Every buy and sell on every bonding curve pays a flat 1% to the protocol.</span></div>
+          <div class="stake-src"><span class="n">10%</span><span><b>Protocol levy cut.</b> Of every creator levy collected platform-wide, 90% goes to the creator, 10% to stakers.</span></div>
+          <div class="stake-src"><span class="n">100%</span><span><b>Streamed to stakers.</b> All of it is swapped to ETH and distributed pro-rata to staked $ROBIN. The protocol keeps nothing extra.</span></div>
+        </div>
+        <div class="panel panel-pad">
+          <div class="panel-title">Live protocol revenue</div>
+          <div class="rev-flow">
+            <div class="rf"><span>Fees collected · 24h</span><b id="rf-fees24">—</b></div>
+            <div class="rf"><span>Your share · 24h</span><b class="pos" id="rf-yourshare">—</b></div>
+            <div class="rf"><span>Unstaking cooldown</span><b>none · instant</b></div>
+            <div class="rf"><span>Rewards token</span><b>ETH</b></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ======================= DOCS ======================= -->
+<div class="page" id="page-docs">
+  <div class="wrap">
+    <div class="page-head">
+      <h2 data-i18n="docs.h">How Robinfun works</h2>
+      <p data-i18n="docs.p">Pump-style fair launches, plus one thing nobody else gives creators: a revenue stream written into the token itself.</p>
+    </div>
+    <div class="docs-grid" style="padding-top:20px">
+      <div class="panel doc-card"><div class="n">i.</div><h4>Launch on the curve</h4><p>Every token starts at a <b>$4,000 market cap</b> with 1B supply, all on a bonding curve. No presale, no team bags. Price moves deterministically with buys and sells; a flat <b>1% curve fee</b> funds the platform.</p></div>
+      <div class="panel doc-card"><div class="n">ii.</div><h4>Set your levy</h4><p>Choose a buy and sell levy from <b>0–10%</b> at deploy. Every trade routes that share to your dev wallet, auto-harvested to ETH. Rates can be lowered or renounced — <b>never raised</b>. The rate is stamped on the token card for everyone to see.</p></div>
+      <div class="panel doc-card"><div class="n">iii.</div><h4>Graduate & keep earning</h4><p>At <b>~$44,000</b> the curve closes and liquidity moves to Uniswap with <b>100% of the LP burned</b>. Platform creator fees end there on other launchpads — your levy doesn't, because it lives in the contract, not the platform.</p></div>
+    </div>
+    <div class="rules panel panel-pad">
+      <div class="panel-title">The fine print, in plain terms</div>
+      <div class="assurance"><span class="tick">✓</span><span><b>Creator levy split:</b> 90% to the creator wallet, 10% to Robinfun (streamed to $ROBIN stakers). Harvests run automatically every ~$500 of accrued fees.</span></div>
+      <div class="assurance"><span class="tick">✓</span><span><b>Anti-honeypot by construction:</b> max 10%/10%, no blacklist, no pause, no mint, no transfer gates. If it deployed through Robinfun, you can always sell.</span></div>
+      <div class="assurance"><span class="tick">✓</span><span><b>Zero-levy launches welcome:</b> set 0/0 and Robinfun behaves like a classic fair launchpad — the stamp shows <b>0/0</b> so traders know.</span></div>
+      <div class="assurance"><span class="tick">✓</span><span><b>Chain:</b> Robinhood Chain (Arbitrum Orbit). Gas in ETH. Graduation pool on Uniswap v2.</span></div>
+    </div>
+  </div>
+</div>
+</main>
+
+<!-- ======================= DEPLOY MODAL ======================= -->
+<div class="modal-back" id="modalBack" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()" aria-label="Close">✕</button>
+    <div class="levied" id="leviedStamp">LEVIED</div>
+    <h3 id="m-title">Deploying…</h3>
+    <p class="m-sub" id="m-sub">Confirm in your wallet.</p>
+    <div class="receipt" id="m-receipt"></div>
+    <div style="height:16px"></div>
+    <div style="display:flex;gap:10px">
+      <button class="btn btn-gold btn-lg" style="flex:1" id="m-view" onclick="viewDeployed()">View token page</button>
+      <button class="btn btn-line btn-lg" onclick="closeModal()">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<!-- ======================= FOOTER ======================= -->
+<footer>
+  <div class="wrap foot-in">
+    <div class="foot-l">Robinfun · fair-launch bonding curves · creator levy 0–10% · LP 100% burned · Robinhood Chain</div>
+    <div class="foot-links"><a href="#" onclick="go('docs');return false">Whitepaper</a><a href="#">X</a><a href="#">Telegram</a><a href="#">RobinBridge</a></div>
+  </div>
+</footer>
+
+<script>
+/* ================================================================
+   Robinfun prototype engine — all data simulated client-side
+   ================================================================ */
+const ETH_USD = 3850;
+const GRAD_CAP = 44000, START_CAP = 4000;
+const fmtUsd = n => n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n>=1e3 ? '$'+(n/1e3).toFixed(1)+'k' : '$'+n.toFixed(0);
+const fmtUsdFull = n => '$'+Math.round(n).toLocaleString('en-US');
+const fmtEth = n => n.toFixed(n<0.01?5:n<1?4:3)+' ETH';
+const fmtNum = n => n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':n.toFixed(0);
+const fmtPrice = p => p>=0.01 ? '$'+p.toFixed(4) : '$'+p.toFixed(8).replace(/0+$/,'').padEnd(9,'0');
+const shortAddr = a => a.slice(0,6)+'…'+a.slice(-4);
+const ago = ts => { const s=(Date.now()-ts)/1000; if(s<60)return Math.floor(s)+'s'; if(s<3600)return Math.floor(s/60)+'m'; if(s<86400)return Math.floor(s/3600)+'h'; return Math.floor(s/86400)+'d'; };
+const rnd = (a,b)=>a+Math.random()*(b-a);
+const pick = arr => arr[Math.floor(Math.random()*arr.length)];
+const randAddr = ()=>'0x'+Array.from({length:8},()=>'0123456789abcdefABCDEF'[Math.floor(Math.random()*22)]).join('')+'…'+Array.from({length:4},()=>'0123456789abcdef'[Math.floor(Math.random()*16)]).join('');
+
+/* ---------------- seed tokens ---------------- */
+const SUPPLY = 1e9;
+let seq = 0;
+function mkTok(o){
+  const t = Object.assign({
+    id:'t'+(seq++), emoji:'🪙', desc:'', buyTax:3, sellTax:3, decay:false, renounced:false,
+    mcap:START_CAP, vol24:0, chg24:0, holders:12, replies:0, graduated:false,
+    creator:randAddr(), created:Date.now()-rnd(2,80)*3600e3, lastTrade:Date.now()-rnd(1,900)*1e3,
+    earnedEth:0, mine:false, trades:[], candles:null,
+  },o);
+  t.price = t.mcap/SUPPLY;
+  if(t.earnedEth===0 && (t.buyTax||t.sellTax)) t.earnedEth = (t.vol24*rnd(1.4,4)*((t.buyTax+t.sellTax)/200)*0.9)/ETH_USD;
+  return t;
+}
+let TOKENS = [
+  mkTok({name:'Hood Rat', ticker:'HOODRAT', emoji:'🐀', desc:'The rat that robs the rich. Community levy funds weekly buyback raids.', buyTax:3, sellTax:3, mcap:31200, vol24:184000, chg24:212.4, holders:1841, replies:326, created:Date.now()-31*3600e3}),
+  mkTok({name:'Taxman', ticker:'TAXMAN', emoji:'🎩', desc:'He always collects. 5/5 levy, creator streams P&L live on X.', buyTax:5, sellTax:5, mcap:18900, vol24:96500, chg24:88.1, holders:922, replies:204}),
+  mkTok({name:'Feather', ticker:'FTHR', emoji:'🪶', desc:'Light as a levy. 1/1 tax, the gentleman\'s launch.', buyTax:1, sellTax:1, mcap:9400, vol24:41200, chg24:31.7, holders:512, replies:88}),
+  mkTok({name:'Gilded', ticker:'GILD', emoji:'🏆', desc:'First token to graduate on Robinfun. The OG. LP burned, levy still printing.', buyTax:2, sellTax:2, mcap:112000, vol24:238000, chg24:14.2, holders:3204, replies:641, graduated:true, created:Date.now()-9*86400e3}),
+  mkTok({name:'Sherwood', ticker:'WOOD', emoji:'🏹', desc:'Steal from the rich chain, give to the merry holders.', buyTax:3, sellTax:4, mcap:22100, vol24:74300, chg24:-12.6, holders:1104, replies:167}),
+  mkTok({name:'Nottingham', ticker:'NOTTS', emoji:'🏰', desc:'The sheriff\'s coin. 0/0 — no levy, pure fair launch, may the best degen win.', buyTax:0, sellTax:0, mcap:12800, vol24:52800, chg24:44.9, holders:734, replies:121}),
+  mkTok({name:'Loot', ticker:'LOOT', emoji:'💰', desc:'Graduated in 41 minutes. Creator earned 3.1 ETH before Uniswap.', buyTax:4, sellTax:4, mcap:87400, vol24:129000, chg24:-6.8, holders:2410, replies:388, graduated:true, created:Date.now()-4*86400e3}),
+  mkTok({name:'Merry Men', ticker:'MERRY', emoji:'🍻', desc:'A round for everyone. Levy halves at graduation — long game.', buyTax:4, sellTax:4, decay:true, mcap:15600, vol24:47800, chg24:22.3, holders:689, replies:95}),
+  mkTok({name:'Quiver', ticker:'QVR', emoji:'🎯', desc:'Straight shooter. Renounced levy at 2/2, locked forever.', buyTax:2, sellTax:2, renounced:true, mcap:7900, vol24:22100, chg24:9.4, holders:341, replies:44}),
+  mkTok({name:'Robbed', ticker:'ROBBED', emoji:'😭', desc:'We\'ve all been there. Therapy levy: 3/3, proceeds to the group chat.', buyTax:3, sellTax:3, mcap:5900, vol24:18400, chg24:-28.1, holders:287, replies:76}),
+  mkTok({name:'Friar Tuck', ticker:'TUCK', emoji:'🍺', desc:'Blessed be the bag. Sunday-only shill schedule.', buyTax:2.5, sellTax:2.5, mcap:6800, vol24:15900, chg24:12.8, holders:198, replies:31}),
+  mkTok({name:'Marian', ticker:'MARIAN', emoji:'💘', desc:'The chain\'s sweetheart. Soft levy, softer chart.', buyTax:1.5, sellTax:1.5, mcap:8700, vol24:26700, chg24:17.5, holders:404, replies:59}),
+  mkTok({name:'Yoink', ticker:'YOINK', emoji:'🫳', desc:'Grab it before it graduates. 38 minutes old.', buyTax:3, sellTax:3, mcap:4900, vol24:9200, chg24:96.3, holders:118, replies:22, created:Date.now()-38*60e3}),
+  mkTok({name:'Pleb Duty', ticker:'DUTY', emoji:'📜', desc:'Pay your dues, collect your due. Meta-levy token about levies.', buyTax:5, sellTax:3, mcap:11400, vol24:33600, chg24:-4.2, holders:526, replies:83}),
+  mkTok({name:'Arrowhead', ticker:'ARRW', emoji:'🗡️', desc:'Sharp entries only. Creator does daily TA threads.', buyTax:2, sellTax:2, mcap:26900, vol24:88700, chg24:57.9, holders:1355, replies:213}),
+  mkTok({name:'Greenwood', ticker:'GRNW', emoji:'🌲', desc:'Touch grass, hold wood. Eco-larp with a 1/1 levy.', buyTax:1, sellTax:1, mcap:5200, vol24:8800, chg24:6.1, holders:143, replies:18, created:Date.now()-2.4*3600e3}),
+];
+TOKENS.forEach(t=>{
+  const n = 4+Math.floor(rnd(0,20));
+  for(let i=0;i<n;i++) t.trades.push(genTrade(t, Date.now()-rnd(30,7200)*1e3));
+  t.trades.sort((a,b)=>b.ts-a.ts);
+});
+
+/* platform-wide counters */
+let PAID_ALLTIME = 412_806;
+let LAUNCH_COUNT = 4212 + TOKENS.length;
+
+/* ---------------- wallet ---------------- */
+let wallet = null;
+const MY_ADDR = '0x7A3f19bC…C41d';
+function connectWallet(){
+  if(wallet){ go('treasury'); return; }
+  wallet = MY_ADDR;
+  document.getElementById('walletBtn').textContent = shortAddr('0x7A3f19bCe482aa10C41d');
+  const w = document.getElementById('c-wallet'); if(w && !w.value) w.value = wallet;
+  toast('Wallet connected — <b>'+wallet+'</b>','jade');
+  seedMyTokens();
+  /* seed a $ROBIN balance + an existing stake so the staking page feels live */
+  if(LEVY_BAL===0 && myStake===0){
+    LEVY_BAL = 1_250_000;
+    myStake = 850_000;
+    myStakeReward = 0.0417;
+    STAKE_TOTAL += myStake;
+  }
+  renderTreasury();
+  if(document.getElementById('page-stake').classList.contains('active')) renderStake();
+}
+function seedMyTokens(){
+  if(TOKENS.some(t=>t.mine)) return;
+  const mine = [
+    mkTok({name:'Bundle Rat', ticker:'BRAT', emoji:'🧾', desc:'Your earlier launch. Cruising the mid-curve.', buyTax:3, sellTax:3, mcap:16400, vol24:38800, chg24:12.2, holders:512, replies:64, mine:true, creator:MY_ADDR, earnedEth:1.284, created:Date.now()-3*86400e3}),
+    mkTok({name:'Warchest', ticker:'CHEST', emoji:'🪖', desc:'Graduated last week. Levy still streaming from Uniswap volume.', buyTax:4, sellTax:4, mcap:96200, vol24:61200, chg24:4.1, holders:1922, replies:301, mine:true, graduated:true, creator:MY_ADDR, earnedEth:6.917, created:Date.now()-11*86400e3}),
+  ];
+  mine.forEach(t=>{ t.claimable = t.ticker==='BRAT'?0.412:1.108; TOKENS.push(t); });
+  renderGrid();
+}
+
+/* ================================================================
+   THEME + LANGUAGE (Robinhood-style header controls)
+   ================================================================ */
+const SUN_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>';
+const MOON_SVG='<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1111.2 3 7 7 0 0021 12.8z"/></svg>';
+let THEME='dark';
+function toggleTheme(){
+  THEME = THEME==='dark'?'light':'dark';
+  document.body.classList.toggle('light', THEME==='light');
+  document.getElementById('themeBtn').innerHTML = THEME==='dark'? SUN_SVG : MOON_SVG;
+  if(currentTokenId) drawChart(tok());
+}
+
+const I18N = {
+  en:{
+    'nav.tokens':'Tokens','nav.create':'Create','nav.staking':'Staking','nav.whitepaper':'Whitepaper','nav.chain':'Robinhood Chain',
+    'btn.launch':'+ Launch Token','btn.connect':'Connect wallet',
+    'hero.tag':'Launch a token. Collect the <em>levy</em> — forever.',
+    'hero.chip':'<span class="dot"></span>Robinhood Chain · fair-launch bonding curves',
+    'hero.explore':'Explore tokens','board.title':'The board',
+    'board.note':'<span class="live-dot"></span>Live — cards flash and re-sort as trades land',
+    'create.h':'Create a token',
+    'create.p':'Deploys in one transaction. No presale, no team allocation — 1B supply, all of it on the curve. The levy you set below is written into the token contract itself, so it keeps paying you after graduation.',
+    'treasury.h':'Treasury',
+    'treasury.p':'Levies from your tokens are harvested to ETH automatically and accrue here. Claim per token, or sweep everything at once.',
+    'stake.h':'Stake $ROBIN',
+    'stake.p':'The protocol keeps a 1% curve fee and 10% of every creator levy across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.',
+    'docs.h':'How Robinfun works',
+    'docs.p':'Pump-style fair launches, plus one thing nobody else gives creators: a revenue stream written into the token itself.'
+  },
+  zh:{
+    'nav.tokens':'代币','nav.create':'创建','nav.staking':'质押','nav.whitepaper':'白皮书','nav.chain':'Robinhood 链',
+    'btn.launch':'+ 发行代币','btn.connect':'连接钱包',
+    'hero.tag':'发行代币，永久收取你的 <em>levy</em>。',
+    'hero.chip':'<span class="dot"></span>Robinhood 链 · 公平发射联合曲线',
+    'hero.explore':'浏览代币','board.title':'代币榜',
+    'board.note':'<span class="live-dot"></span>实时 — 有成交时卡片闪烁并重新排序',
+    'create.h':'创建代币',
+    'create.p':'一笔交易即可部署。无预售、无团队份额 — 总量 10 亿，全部进入联合曲线。你在下方设置的 levy 会写入代币合约本身，因此毕业后仍持续向你付款。',
+    'treasury.h':'金库',
+    'treasury.p':'你代币产生的 levy 会自动兑换成 ETH 并在此累积。可按代币领取，或一键全部提取。',
+    'stake.h':'质押 $ROBIN',
+    'stake.p':'协议在全平台收取 1% 曲线手续费，以及每笔创作者 levy 的 10%。质押 $ROBIN，这些收入会以<b>真实 ETH</b> 返还给你 — 无通胀、无增发，只是把平台抽成分给持有者。',
+    'docs.h':'Robinfun 如何运作',
+    'docs.p':'Pump 式公平发射，外加别人不会给创作者的东西：写入代币本身的收入流。'
+  }
+};
+let LANG='en';
+function applyLang(l){
+  LANG=l; const d=I18N[l]||I18N.en;
+  document.querySelectorAll('[data-i18n]').forEach(e=>{ const v=d[e.getAttribute('data-i18n')]; if(v!=null) e.textContent=v; });
+  document.querySelectorAll('[data-i18n-html]').forEach(e=>{ const v=d[e.getAttribute('data-i18n-html')]; if(v!=null) e.innerHTML=v; });
+  const wb=document.getElementById('walletBtn'); if(wb && !wallet) wb.textContent=d['btn.connect'];
+  document.getElementById('langBtn').textContent = l==='en'?'EN':'中';
+}
+function toggleLang(){ applyLang(LANG==='en'?'zh':'en'); }
+
+/* ================================================================
+   STAKING ($ROBIN → protocol revenue) + WATCHLIST
+   ================================================================ */
+/* --- watchlist (Robinhood-style ★) --- */
+const WATCH = new Set();
+const starSvg = on => '<svg viewBox="0 0 24 24" fill="'+(on?'currentColor':'none')+'" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"><path d="M12 3l2.7 5.9 6.3.7-4.7 4.4 1.3 6.4L12 17.9 6.1 20.8l1.3-6.4L2.7 9.6l6.3-.7z"/></svg>';
+function toggleWatch(e,id){
+  e.stopPropagation();
+  if(WATCH.has(id)) WATCH.delete(id); else WATCH.add(id);
+  if(filter==='watch'){ renderGrid(); }
+  else{
+    const card = document.getElementById('card-'+id);
+    if(card){ const b=card.querySelector('.watch-star'); if(b){ b.classList.toggle('on',WATCH.has(id)); b.innerHTML=starSvg(WATCH.has(id)); } }
+  }
+  const t = TOKENS.find(x=>x.id===id);
+  toast(WATCH.has(id)? '★ Watching $'+(t?t.ticker:'') : 'Removed from watchlist', WATCH.has(id)?'jade':'');
+}
+
+/* --- staking economics --- */
+const LEVY_PRICE = 0.0042;          // $ per $ROBIN (for APR valuation)
+const LEVY_SUPPLY = 1_000_000_000;  // $ROBIN total supply
+let STAKE_TOTAL = 284_000_000;      // $ROBIN staked platform-wide
+let stkAprEst = 31.5;               // headline APR %, random-walks in sim
+let PROTO_REV_ALL_ETH = 47.2;       // ETH streamed to stakers all-time (seed)
+let PROTO_REV_24H_ETH = 3.86;       // ETH to stakers, last 24h (accrues live)
+let myStake = 0;                    // user's staked $ROBIN
+let myStakeReward = 0;              // user's pending ETH rewards
+let LEVY_BAL = 0;                   // user's wallet $ROBIN (set on connect)
+let stakeSide = 'stake';
+const fmtLevy = n => fmtNum(n)+' $ROBIN';
+const stkVal = levy => levy*LEVY_PRICE;
+
+function setStakeSide(s){
+  stakeSide = s;
+  document.getElementById('stk-tab-stake').classList.toggle('active', s==='stake');
+  document.getElementById('stk-tab-unstake').classList.toggle('active', s==='unstake');
+  document.getElementById('stk-amt-label').textContent = s==='stake'?'Stake amount':'Unstake amount';
+  document.getElementById('stk-btn').className = 'btn btn-lg btn-block '+(s==='stake'?'btn-gold':'btn-line');
+  document.getElementById('stk-bal').textContent = s==='stake'? fmtLevy(LEVY_BAL) : fmtLevy(myStake);
+  document.getElementById('stk-quick').innerHTML = ['25%','50%','75%','Max'].map(v=>`<button onclick="stkQuick('${v}')">${v}</button>`).join('');
+  document.getElementById('stk-amt').value='';
+  stkBtnLabel();
+  quoteStake();
+}
+function stkBtnLabel(){
+  const btn = document.getElementById('stk-btn');
+  btn.textContent = !wallet ? 'Connect wallet to stake' : (stakeSide==='stake'?'Stake $ROBIN':'Unstake $ROBIN');
+}
+function stkQuick(v){
+  const base = stakeSide==='stake'? LEVY_BAL : myStake;
+  const f = v==='Max'?1:parseFloat(v)/100;
+  document.getElementById('stk-amt').value = Math.floor(base*f);
+  quoteStake();
+}
+function quoteStake(){
+  const amt = parseFloat(document.getElementById('stk-amt').value)||0;
+  const el = document.getElementById('stk-quote');
+  if(!amt){ el.innerHTML=''; return; }
+  if(stakeSide==='stake'){
+    const yr = stkVal(amt)*(stkAprEst/100)/ETH_USD;
+    el.innerHTML =
+      `<div class="rf"><span>Est. annual reward</span><b class="pos">≈ ${yr.toFixed(4)} Ξ</b></div>`+
+      `<div class="rf"><span>≈ per day</span><b>${(yr/365).toFixed(5)} Ξ</b></div>`;
+  }else{
+    const remain = Math.max(0, myStake-amt);
+    el.innerHTML =
+      `<div class="rf"><span>Returned to wallet</span><b>${fmtLevy(amt)}</b></div>`+
+      `<div class="rf"><span>Still staked</span><b>${fmtLevy(remain)}</b></div>`;
+  }
+}
+function doStake(){
+  if(!wallet){ connectWallet(); renderStake(); return; }
+  const amt = parseFloat(document.getElementById('stk-amt').value)||0;
+  if(!amt){ toast('Enter an amount','seal'); return; }
+  if(stakeSide==='stake'){
+    if(amt>LEVY_BAL){ toast('Not enough $ROBIN in wallet','seal'); return; }
+    LEVY_BAL -= amt; myStake += amt; STAKE_TOTAL += amt;
+    toast('Staked <b>'+fmtLevy(amt)+'</b> — now earning ETH','jade');
+  }else{
+    if(amt>myStake){ toast('You don\'t have that much staked','seal'); return; }
+    myStake -= amt; LEVY_BAL += amt; STAKE_TOTAL = Math.max(0,STAKE_TOTAL-amt);
+    toast('Unstaked <b>'+fmtLevy(amt)+'</b> → wallet','');
+  }
+  document.getElementById('stk-amt').value='';
+  renderStake();
+}
+function claimStake(){
+  if(!(myStakeReward>0.00001)){ toast('No rewards to claim yet','seal'); return; }
+  toast('Claimed <b>'+myStakeReward.toFixed(5)+' ETH</b> → '+MY_ADDR,'gold');
+  myStakeReward = 0; renderStake();
+}
+function updateStakeLive(){
+  const set=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
+  set('stk-apr', stkAprEst.toFixed(1)+'%');
+  set('stk-apr2', stkAprEst.toFixed(1)+'%');
+  set('stk-rev24', PROTO_REV_24H_ETH.toFixed(2)+' Ξ');
+  set('stk-rev24usd', '≈ '+fmtUsdFull(PROTO_REV_24H_ETH*ETH_USD));
+  set('stk-revall', PROTO_REV_ALL_ETH.toFixed(1)+' Ξ');
+  set('rf-fees24', PROTO_REV_24H_ETH.toFixed(3)+' Ξ');
+  const share = (myStake>0&&STAKE_TOTAL>0)? PROTO_REV_24H_ETH*(myStake/STAKE_TOTAL):0;
+  set('rf-yourshare', share>0? share.toFixed(5)+' Ξ':'—');
+  set('sy-reward', myStakeReward.toFixed(5)+' Ξ');
+}
+function renderStake(){
+  document.getElementById('stk-total').textContent = fmtNum(STAKE_TOTAL);
+  document.getElementById('stk-totalpct').textContent = (STAKE_TOTAL/LEVY_SUPPLY*100).toFixed(1)+'%';
+  document.getElementById('sy-staked').textContent = fmtLevy(myStake);
+  document.getElementById('sy-claim').disabled = !(myStakeReward>0.00001);
+  updateStakeLive();
+  setStakeSide(stakeSide);
+}
+
+/* ---------------- trade generation ---------------- */
+function genTrade(t, ts){
+  const buy = Math.random() < (t.chg24>0?0.58:0.44);
+  const eth = Math.pow(Math.random(),2.2)*rnd(0.02,0.9)+0.005;
+  const rate = buy? t.buyTax : t.sellTax;
+  const levyEth = eth*rate/100;
+  const tokens = (eth*(1-0.01-rate/100))*ETH_USD/(t.price||t.mcap/SUPPLY);
+  return {ts:ts||Date.now(), buy, eth, tokens, levyEth, wallet:randAddr()};
+}
+
+/* ---------------- routing ---------------- */
+let currentTokenId = null;
+function go(page){
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.getElementById('page-'+page).classList.add('active');
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.toggle('active', b.dataset.nav===page));
+  document.getElementById('nav').classList.remove('open');
+  if(page==='treasury') renderTreasury();
+  if(page==='stake') renderStake();
+  if(page!=='token') currentTokenId = null;
+  window.scrollTo({top:0, behavior:'instant'});
+}
+function openToken(id){
+  currentTokenId = id;
+  document.querySelectorAll('.page').forEach(p=>p.classList.remove('active'));
+  document.getElementById('page-token').classList.add('active');
+  document.querySelectorAll('.nav button').forEach(b=>b.classList.remove('active'));
+  renderToken(true);
+  window.scrollTo({top:0, behavior:'instant'});
+}
+
+/* ---------------- home: stats + grid ---------------- */
+let filter = 'trending';
+function setFilter(f){
+  filter = f;
+  document.querySelectorAll('.ftab').forEach(b=>b.classList.toggle('active', b.dataset.f===f));
+  renderGrid();
+}
+function stampHtml(t, small){
+  if(!t.buyTax && !t.sellTax) return '<span class="stamp zero">0/0 · NO LEVY</span>';
+  const hot = Math.max(t.buyTax,t.sellTax) > 5;
+  const cls = hot ? 'stamp hot' : 'stamp';
+  return '<span class="'+cls+'" title="Buy '+t.buyTax+'% / Sell '+t.sellTax+'% — routed to the creator wallet">'+t.buyTax+'/'+t.sellTax+' LEVY</span>';
+}
+function cardHtml(t){
+  const prog = Math.min(100, Math.max(0,(t.mcap-0)/(GRAD_CAP)*100));
+  const chgCls = t.chg24>=0?'up':'down';
+  const chgTxt = (t.chg24>=0?'+':'')+t.chg24.toFixed(1)+'%';
+  return `
+  <div class="tcard" id="card-${t.id}" onclick="openToken('${t.id}')" role="button" tabindex="0" onkeydown="if(event.key==='Enter')openToken('${t.id}')">
+    <button class="watch-star${WATCH.has(t.id)?' on':''}" onclick="toggleWatch(event,'${t.id}')" aria-label="Toggle watchlist" title="Add to watchlist">${starSvg(WATCH.has(t.id))}</button>
+    <div class="tcard-top">
+      <div class="tlogo">${t.emoji}</div>
+      <div style="min-width:0;flex:1">
+        <div class="tname-row"><span class="tname">${t.name}</span><span class="tticker">$${t.ticker}</span>${t.graduated?'<span class="grad-pill">◆ GRAD</span>':''}</div>
+        <div style="margin-top:5px">${stampHtml(t)}</div>
+      </div>
+    </div>
+    <p class="tdesc">${t.desc}</p>
+    <div class="tcard-meta">
+      <span class="tmcap"><span>MCAP</span>${fmtUsd(t.mcap)}</span>
+      <span class="tchg ${chgCls}">${chgTxt}</span>
+    </div>
+    ${t.graduated
+      ? '<div class="curve"><div class="curve-bar"><div class="curve-fill grad" style="width:100%"></div></div><div class="curve-lbl"><span>Uniswap · LP burned</span><span>curve closed</span></div></div>'
+      : `<div class="curve"><div class="curve-bar"><div class="curve-fill" style="width:${prog}%"></div></div><div class="curve-lbl"><span>${prog.toFixed(0)}% to graduation</span><span>${fmtUsd(GRAD_CAP)}</span></div></div>`}
+    <div class="tcard-foot">
+      <span>${t.holders.toLocaleString()} holders · ${ago(t.created)} old</span>
+      <span class="earn">${t.earnedEth>0? '⛁ '+t.earnedEth.toFixed(2)+' ETH to dev':''}</span>
+    </div>
+  </div>`;
+}
+function sortTokens(list){
+  const l=[...list];
+  switch(filter){
+    case 'new': return l.sort((a,b)=>b.created-a.created);
+    case 'lastTrade': return l.sort((a,b)=>b.lastTrade-a.lastTrade);
+    case 'mcap': return l.sort((a,b)=>b.mcap-a.mcap);
+    case 'graduated': return l.filter(t=>t.graduated).sort((a,b)=>b.vol24-a.vol24);
+    case 'watch': return l.filter(t=>WATCH.has(t.id)).sort((a,b)=>b.lastTrade-a.lastTrade);
+    case 'soon': return l.filter(t=>!t.graduated).sort((a,b)=>b.mcap-a.mcap);
+    default: return l.sort((a,b)=>(b.vol24*(1+b.chg24/200))-(a.vol24*(1+a.chg24/200)));
+  }
+}
+function renderGrid(){
+  const q = (document.getElementById('search').value||'').toLowerCase();
+  let list = TOKENS.filter(t=> !q || t.name.toLowerCase().includes(q) || t.ticker.toLowerCase().includes(q));
+  list = sortTokens(list);
+  document.getElementById('grid').innerHTML = list.map(cardHtml).join('') ||
+    (filter==='watch'
+      ? '<p style="color:var(--cream-mute);font-family:var(--font-mono);font-size:13px;padding:30px 4px">Your watchlist is empty — tap the ★ on any token to track it here.</p>'
+      : '<p style="color:var(--cream-mute);font-family:var(--font-mono);font-size:13px;padding:30px 4px">Nothing matches. Try another ticker — or launch it yourself.</p>');
+}
+function renderStats(){
+  const vol = TOKENS.reduce((s,t)=>s+t.vol24,0);
+  document.getElementById('st-vol').textContent = fmtUsd(vol);
+  document.getElementById('st-launched').textContent = LAUNCH_COUNT.toLocaleString();
+  document.getElementById('st-paid').textContent = fmtUsdFull(PAID_ALLTIME);
+  renderLead();
+}
+function renderLead(){
+  const box = document.getElementById('leadRows');
+  if(!box) return;
+  const top = [...TOKENS].sort((a,b)=>b.vol24-a.vol24).slice(0,3);
+  box.innerHTML = top.map(t=>{
+    const up = t.chg24>=0;
+    return `<div class="lead-row" onclick="openToken('${t.id}')">
+      <div class="lead-coin"><div class="lead-logo">${t.emoji}</div><span class="lead-nm">${t.ticker}</span></div>
+      <div class="lead-mc">${fmtUsd(t.mcap)}<small class="${up?'up':'down'}">${up?'▲':'▼'} ${Math.abs(t.chg24).toFixed(1)}%</small></div>
+      <div class="lead-vol">${fmtUsd(t.vol24)}</div>
+    </div>`;
+  }).join('');
+}
+
+/* ---------------- ticker tape ---------------- */
+function tapeItem(t, tr){
+  const side = tr.buy? '<b class="up">BUY</b>':'<b class="down">SELL</b>';
+  const levy = tr.levyEth>0? ' · <span class="gold">levy '+tr.levyEth.toFixed(4)+'Ξ→dev</span>':'';
+  return `<span class="tape-item">${side} <b>$${t.ticker}</b> ${tr.eth.toFixed(3)}Ξ${levy}</span>`;
+}
+function renderTape(){
+  const items = [];
+  const pool = [...TOKENS].sort((a,b)=>b.lastTrade-a.lastTrade).slice(0,10);
+  pool.forEach(t=>{ if(t.trades[0]) items.push(tapeItem(t,t.trades[0])); });
+  const html = items.join('');
+  document.getElementById('tape').innerHTML = html + html; /* duplicated for seamless loop */
+}
+
+/* ================================================================
+   TOKEN PAGE
+   ================================================================ */
+function tok(){ return TOKENS.find(t=>t.id===currentTokenId); }
+let side = 'buy';
+
+function renderToken(fresh){
+  const t = tok(); if(!t) return;
+  document.getElementById('tk-logo').textContent = t.emoji;
+  document.getElementById('tk-name').textContent = t.name;
+  document.getElementById('tk-ticker').textContent = '$'+t.ticker;
+  document.getElementById('tk-stamp').innerHTML = stampHtml(t);
+  document.getElementById('tk-ca').innerHTML = '0x'+t.id.padEnd(4,'f')+'…4f2 <span style="opacity:.6">⧉</span>';
+  document.getElementById('tk-creator').textContent = t.mine? 'you' : t.creator;
+  document.getElementById('tk-age').textContent = '· launched '+ago(t.created)+' ago';
+  document.getElementById('tk-status').innerHTML = t.graduated
+    ? '<span class="up">◆ graduated — trading on Uniswap, LP burned</span>'
+    : '<span class="gold">◈ on the bonding curve</span>';
+  document.getElementById('tk-price').textContent = fmtPrice(t.price);
+  const c = document.getElementById('tk-chg');
+  c.textContent = (t.chg24>=0?'+':'')+t.chg24.toFixed(1)+'% · 24h';
+  c.className = 'tok-chg '+(t.chg24>=0?'up':'down');
+  document.getElementById('ts-mcap').textContent = fmtUsd(t.mcap);
+  document.getElementById('ts-vol').textContent = fmtUsd(t.vol24);
+  document.getElementById('ts-holders').textContent = t.holders.toLocaleString();
+  document.getElementById('ts-earned').textContent = t.earnedEth.toFixed(3)+' ETH';
+  /* curve */
+  const prog = Math.min(100, t.mcap/GRAD_CAP*100);
+  const fill = document.getElementById('tk-fill');
+  fill.style.width = (t.graduated?100:prog)+'%';
+  fill.className = 'curve-fill'+(t.graduated?' grad':'');
+  document.getElementById('tk-curvelbl').textContent = t.graduated? 'curve complete' : fmtUsd(t.mcap)+' · '+prog.toFixed(0)+'%';
+  /* levy record */
+  document.getElementById('li-buy').textContent = t.buyTax+'%';
+  document.getElementById('li-sell').textContent = t.sellTax+'%';
+  document.getElementById('li-decay').textContent = t.decay? 'halves to '+(t.buyTax/2)+'/'+(t.sellTax/2) : 'unchanged';
+  document.getElementById('li-ren').textContent = t.renounced? 'renounced — locked' : 'lower-only';
+  document.getElementById('li-dest').textContent = t.mine? 'your wallet' : t.creator;
+  document.getElementById('li-earned').textContent = t.earnedEth.toFixed(3)+' ETH';
+  document.getElementById('fee-note').textContent = side==='buy'
+    ? (t.buyTax>0? t.buyTax+'% buy levy → creator' : 'no buy levy')
+    : (t.sellTax>0? t.sellTax+'% sell levy → creator' : 'no sell levy');
+  if(fresh){
+    buildCandles(t);
+    renderTrades(t);
+    renderHolders(t);
+    renderThread(t);
+    setSide('buy');
+    document.getElementById('amt').value='';
+    quote();
+    setSubtab('trades');
+  }
+  drawChart(t);
+}
+
+function copyCA(){ toast('Contract address copied','gold'); }
+
+/* ---------------- candles ---------------- */
+function buildCandles(t){
+  const n = 72, out = [];
+  let p = t.price / (1 + t.chg24/100);
+  const drift = Math.pow(t.price/p, 1/n);
+  for(let i=0;i<n;i++){
+    const o = p;
+    p = Math.max(1e-9, p*drift*(1+rnd(-0.045,0.045)));
+    const c2 = p;
+    const hi = Math.max(o,c2)*(1+rnd(0,0.03));
+    const lo = Math.min(o,c2)*(1-rnd(0,0.03));
+    out.push({o,h:hi,l:lo,c:c2,v:rnd(0.2,1)});
+  }
+  out[n-1].c = t.price;
+  t.candles = out;
+}
+function drawChart(t){
+  const cv = document.getElementById('chart');
+  if(!cv || !t.candles) return;
+  const dpr = window.devicePixelRatio||1;
+  const w = cv.clientWidth, h = cv.clientHeight;
+  if(cv.width!==w*dpr){ cv.width=w*dpr; cv.height=h*dpr; }
+  const x = cv.getContext('2d');
+  x.setTransform(dpr,0,0,dpr,0,0);
+  x.clearRect(0,0,w,h);
+  const cs = t.candles;
+  const lo = Math.min(...cs.map(c=>c.l)), hi = Math.max(...cs.map(c=>c.h));
+  const pad = (hi-lo)*0.08 || hi*0.05;
+  const yMin = lo-pad, yMax = hi+pad;
+  const py = v => h-14-((v-yMin)/(yMax-yMin))*(h-28);
+  /* grid + right axis */
+  const lightMode = document.body.classList.contains('light');
+  const C_GRID = lightMode?'rgba(20,32,10,.10)':'rgba(41,50,31,.6)';
+  const C_AXIS = lightMode?'#8A9077':'#5F6653';
+  const C_UP = lightMode?'#2FA043':'#C6F23C';
+  const C_DOWN = lightMode?'#E23B2C':'#FF5B4A';
+  const C_GRAD = lightMode?'rgba(60,154,27,.6)':'rgba(198,242,60,.65)';
+  const C_GRADTXT = lightMode?'#3C9A1B':'#C6F23C';
+  x.strokeStyle = C_GRID; x.lineWidth = 1;
+  x.fillStyle = C_AXIS; x.font = '10px "IBM Plex Mono",monospace'; x.textAlign='right';
+  for(let i=0;i<=4;i++){
+    const v = yMin+(yMax-yMin)*i/4, y = py(v);
+    x.beginPath(); x.moveTo(0,y); x.lineTo(w-58,y); x.stroke();
+    x.fillText(fmtPrice(v), w-4, y+3);
+  }
+  /* graduation line if in range */
+  const gradPrice = GRAD_CAP/SUPPLY;
+  if(gradPrice>yMin && gradPrice<yMax && !t.graduated){
+    const gy = py(gradPrice);
+    x.save(); x.setLineDash([4,4]); x.strokeStyle=C_GRAD;
+    x.beginPath(); x.moveTo(0,gy); x.lineTo(w-58,gy); x.stroke(); x.restore();
+    x.fillStyle=C_GRADTXT; x.textAlign='left'; x.fillText('graduation', 6, gy-5); x.textAlign='right';
+  }
+  /* candles */
+  const cw = (w-70)/cs.length;
+  cs.forEach((c,i)=>{
+    const cx = i*cw+cw/2;
+    const up = c.c>=c.o;
+    x.strokeStyle = up? C_UP:C_DOWN;
+    x.fillStyle = up? C_UP:C_DOWN;
+    x.lineWidth = 1;
+    x.beginPath(); x.moveTo(cx,py(c.h)); x.lineTo(cx,py(c.l)); x.stroke();
+    const bh = Math.max(1, Math.abs(py(c.o)-py(c.c)));
+    x.fillRect(cx-cw*0.32, Math.min(py(c.o),py(c.c)), cw*0.64, bh);
+  });
+}
+
+/* ---------------- trades / holders / thread ---------------- */
+function tradeRow(t,tr,isNew){
+  return `<tr class="${isNew?'new-row':''}">
+    <td>${ago(tr.ts)} ago</td>
+    <td class="${tr.buy?'side-b':'side-s'}">${tr.buy?'BUY':'SELL'}</td>
+    <td>${tr.eth.toFixed(4)}</td>
+    <td>${fmtNum(tr.tokens)}</td>
+    <td class="gold">${tr.levyEth>0? tr.levyEth.toFixed(5)+' Ξ':'—'}</td>
+    <td>${tr.wallet}</td>
+  </tr>`;
+}
+function renderTrades(t){
+  document.getElementById('tradesBody').innerHTML = t.trades.slice(0,26).map(tr=>tradeRow(t,tr)).join('');
+}
+function renderHolders(t){
+  const rows = [];
+  let remaining = 100;
+  if(!t.graduated){ const curvePct = Math.max(8, 78 - t.mcap/GRAD_CAP*60); rows.push({who:'Bonding curve (contract)', pct:curvePct, tag:'curve'}); remaining-=curvePct; }
+  if(t.mine){ rows.push({who:'you (creator)', pct:Math.min(4,remaining*0.1), tag:'dev'}); }
+  const n = 9;
+  for(let i=0;i<n;i++){
+    const pct = remaining * (n-i) / (n*(n+1)/2) * rnd(0.7,1.25);
+    rows.push({who:randAddr(), pct:Math.max(0.2,pct)});
+  }
+  document.getElementById('holdersBody').innerHTML = rows.slice(0,10).map((r,i)=>`
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rule)">
+      <span class="mono" style="font-size:11px;color:var(--cream-mute);width:18px">${i+1}</span>
+      <span class="mono" style="font-size:12px;flex:1">${r.who} ${r.tag?'<span class="gold">· '+r.tag+'</span>':''}</span>
+      <div style="width:120px"><div class="holder-bar"><div class="holder-fill" style="width:${Math.min(100,r.pct*2.2)}%"></div></div></div>
+      <span class="mono" style="font-size:12px;font-weight:600;width:56px;text-align:right">${r.pct.toFixed(2)}%</span>
+    </div>`).join('');
+}
+const SHILL = ['first. levy me daddy','creator based, tax fair, sending it','sold my '+'HOODRAT'+' for this ngl','the 3/3 is honest work','dev doxxed on X, levy renounced, what more do you want','graduation speedrun when','bought the dip, dip kept dipping','this the one'];
+function renderThread(t){
+  const n = Math.min(6, 2+Math.floor(t.replies/40));
+  let html='';
+  for(let i=0;i<n;i++){
+    html += `<div class="comment"><div class="c-head"><b>${randAddr()}</b><span>${Math.floor(rnd(2,300))}m ago</span></div><p>${pick(SHILL)}</p></div>`;
+  }
+  html += '<div style="padding:14px 16px"><input type="text" placeholder="Say something (prototype — not wired)" style="width:100%;background:var(--ink-2);border:1px solid var(--rule);border-radius:6px;padding:10px 12px;font-size:13px"></div>';
+  document.getElementById('threadBody').innerHTML = html;
+}
+function setSubtab(s){
+  document.querySelectorAll('.subtabs button').forEach(b=>b.classList.toggle('active', b.dataset.st===s));
+  ['trades','holders','thread'].forEach(k=>{
+    document.getElementById('subtab-'+k).style.display = k===s? '':'none';
+  });
+}
+
+/* ---------------- trade panel ---------------- */
+function setSide(s){
+  side = s;
+  document.getElementById('tab-buy').classList.toggle('active', s==='buy');
+  document.getElementById('tab-sell').classList.toggle('active', s==='sell');
+  const btn = document.getElementById('tradeBtn');
+  const t = tok();
+  btn.textContent = s==='buy'? 'Buy $'+(t?t.ticker:'') : 'Sell $'+(t?t.ticker:'');
+  btn.className = 'btn btn-lg btn-block '+(s==='buy'?'btn-jade':'btn-seal');
+  document.getElementById('amt-label').textContent = s==='buy'?'You pay':'You sell';
+  document.getElementById('amt-unit').textContent = s==='buy'?'ETH':'$'+(t?t.ticker:'');
+  document.getElementById('amt-bal').textContent = s==='buy'? '2.4810 ETH' : (t? fmtNum(rnd(1e6,4e7))+' $'+t.ticker : '—');
+  const qr = document.getElementById('quickRow');
+  qr.innerHTML = (s==='buy'? ['0.05','0.1','0.5','1.0'].map(v=>`<button onclick="setAmt(${v})">${v} Ξ</button>`)
+                           : ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`)).join('');
+  if(t) document.getElementById('fee-note').textContent = s==='buy'
+    ? (t.buyTax>0? t.buyTax+'% buy levy → creator' : 'no buy levy')
+    : (t.sellTax>0? t.sellTax+'% sell levy → creator' : 'no sell levy');
+  quote();
+}
+function setAmt(v){ document.getElementById('amt').value=v; quote(); }
+function setAmtPct(p){ document.getElementById('amt').value = (parseFloat(p)/100*38_400_000).toFixed(0); quote(); }
+function quote(){
+  const t = tok(); if(!t) return;
+  const amt = parseFloat(document.getElementById('amt').value)||0;
+  const el = document.getElementById('feeLines');
+  if(!amt){ el.innerHTML = '<div class="fl"><span>Enter an amount to preview the levy split.</span></div>'; return; }
+  const rate = side==='buy'? t.buyTax : t.sellTax;
+  if(side==='buy'){
+    const fee = amt*0.01, levy = amt*rate/100, net = amt-fee-levy;
+    const tokens = net*ETH_USD/t.price;
+    el.innerHTML =
+      `<div class="fl"><span>Curve fee · 1%</span><b>${fee.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl levy-fl"><span>Creator levy · ${rate}% → dev wallet</span><b>${levy.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl"><span>To the curve</span><b>${net.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(tokens)} $${t.ticker}</b></div>`;
+  }else{
+    const grossEth = amt*t.price/ETH_USD;
+    const fee = grossEth*0.01, levy = grossEth*rate/100, net = grossEth-fee-levy;
+    el.innerHTML =
+      `<div class="fl"><span>Gross proceeds</span><b>${grossEth.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl"><span>Curve fee · 1%</span><b>−${fee.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl levy-fl"><span>Creator levy · ${rate}% → dev wallet</span><b>−${levy.toFixed(5)} Ξ</b></div>`+
+      `<div class="fl big"><span>You receive</span><b>≈ ${net.toFixed(5)} ETH</b></div>`;
+  }
+}
+function doTrade(){
+  const t = tok(); if(!t) return;
+  if(!wallet){ toast('Connect a wallet first','seal'); return; }
+  const amt = parseFloat(document.getElementById('amt').value)||0;
+  if(!amt){ toast('Enter an amount','seal'); return; }
+  const buy = side==='buy';
+  const eth = buy? amt : amt*t.price/ETH_USD;
+  applyTrade(t, {ts:Date.now(), buy, eth, tokens: buy? eth*ETH_USD/t.price : amt, levyEth: eth*(buy?t.buyTax:t.sellTax)/100, wallet: MY_ADDR}, true);
+  toast((buy?'Bought':'Sold')+' — <b>'+eth.toFixed(4)+' Ξ</b>'+((buy?t.buyTax:t.sellTax)>0?' · levy paid to creator':''), buy?'jade':'seal');
+  document.getElementById('amt').value=''; quote();
+}
+
+/* ================================================================
+   CREATE PAGE
+   ================================================================ */
+const EMOJIS = ['🪶','🏹','🎩','🐀','💰','🏰','🍺','💘','🎯','😭','🫳','📜','🌲','🪙','🔥','🦅'];
+let chosenEmoji = '🪶';
+function buildEmojiRow(){
+  document.getElementById('emojiRow').innerHTML = EMOJIS.map(e=>
+    `<button type="button" class="${e===chosenEmoji?'sel':''}" onclick="event.stopPropagation();pickEmoji('${e}',this)">${e}</button>`).join('');
+}
+function pickEmoji(e,btn){
+  chosenEmoji = e;
+  document.getElementById('upl-emoji').textContent = e;
+  document.querySelectorAll('#emojiRow button').forEach(b=>b.classList.remove('sel'));
+  btn.classList.add('sel');
+}
+function syncPreview(){
+  const tk = document.getElementById('c-ticker');
+  tk.value = tk.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
+}
+function paintSlider(el){
+  el.style.setProperty('--fill', (el.value/el.max*100)+'%');
+}
+function setPreset(b,s,btn){
+  document.getElementById('r-buy').value=b;
+  document.getElementById('r-sell').value=s;
+  document.querySelectorAll('.preset').forEach(p=>p.classList.remove('sel'));
+  btn.classList.add('sel');
+  onSlider(true);
+}
+function markCustom(btn){
+  document.querySelectorAll('.preset').forEach(p=>p.classList.remove('sel'));
+  btn.classList.add('sel');
+}
+function onSlider(fromPreset){
+  const b = parseFloat(document.getElementById('r-buy').value);
+  const s = parseFloat(document.getElementById('r-sell').value);
+  document.getElementById('v-buy').textContent = b+'%';
+  document.getElementById('v-sell').textContent = s+'%';
+  paintSlider(document.getElementById('r-buy'));
+  paintSlider(document.getElementById('r-sell'));
+  document.getElementById('taxWarn').classList.toggle('show', Math.max(b,s)>5);
+  if(!fromPreset){
+    document.querySelectorAll('.preset').forEach(p=>p.classList.remove('sel'));
+    const match = [['0',0,0],['3',3,3],['5',5,5]].find(m=>m[1]===b&&m[2]===s);
+    document.querySelector('.preset[data-p="'+(match?match[0]:'c')+'"]').classList.add('sel');
+  }
+  projector();
+}
+function projector(){
+  const b = parseFloat(document.getElementById('r-buy').value);
+  const s = parseFloat(document.getElementById('r-sell').value);
+  const vol = parseFloat(document.getElementById('r-vol').value);
+  paintSlider(document.getElementById('r-vol'));
+  document.getElementById('v-vol').textContent = fmtUsd(vol);
+  const avg = (b+s)/2/100;
+  const gross = vol*avg;
+  const net = gross*0.9;
+  const decay = document.getElementById('c-decay').checked;
+  document.getElementById('receipt').innerHTML =
+    `<div class="r-line"><span>Assumed volume / day</span><b>${fmtUsdFull(vol)}</b></div>`+
+    `<div class="r-line"><span>Avg levy (buy ${b}% · sell ${s}%)</span><b>${((b+s)/2).toFixed(2)}%</b></div>`+
+    `<div class="r-line"><span>Gross levy / day</span><b>${fmtUsdFull(gross)}</b></div>`+
+    `<div class="r-line"><span>Protocol share · 10%</span><b>−${fmtUsdFull(gross*0.1)}</b></div>`+
+    `<div class="r-line total"><span>To your wallet / day</span><b>${fmtUsdFull(net)}</b></div>`+
+    `<div class="r-line"><span>≈ per month</span><b>${fmtUsdFull(net*30)} · ${(net*30/ETH_USD).toFixed(2)} ETH</b></div>`+
+    (decay? `<div class="r-line"><span>After graduation (halved)</span><b>${fmtUsdFull(net/2)} / day</b></div>`:'');
+}
+function syncCost(){
+  const b = parseFloat(document.getElementById('c-buyin').value)||0;
+  document.getElementById('deployCost').textContent = (0.002+b).toFixed(3)+' ETH + gas';
+}
+function deploy(){
+  const name = document.getElementById('c-name').value.trim();
+  const ticker = document.getElementById('c-ticker').value.trim();
+  if(!name || !ticker){ toast('Name and ticker are required','seal'); return; }
+  if(!wallet){ connectWallet(); }
+  const b = parseFloat(document.getElementById('r-buy').value);
+  const s = parseFloat(document.getElementById('r-sell').value);
+  const devBuy = parseFloat(document.getElementById('c-buyin').value)||0;
+  const t = mkTok({
+    name, ticker, emoji:chosenEmoji,
+    desc: document.getElementById('c-desc').value.trim() || 'Freshly launched on Robinfun.',
+    buyTax:b, sellTax:s,
+    decay: document.getElementById('c-decay').checked,
+    renounced: document.getElementById('c-renounce').checked,
+    mcap: START_CAP + devBuy*ETH_USD*0.96,
+    vol24: devBuy*ETH_USD, chg24: devBuy>0? rnd(2,9):0,
+    holders: devBuy>0?2:1, replies:0, mine:true, creator:MY_ADDR||'you',
+    created: Date.now(), lastTrade: Date.now(), earnedEth: devBuy*b/100,
+  });
+  t.claimable = t.earnedEth*0.9;
+  TOKENS.unshift(t);
+  LAUNCH_COUNT++;
+  lastDeployedId = t.id;
+  /* modal receipt */
+  document.getElementById('m-title').textContent = name+' is live';
+  document.getElementById('m-sub').textContent = 'Deployed to Robinhood Chain · block #'+(9_412_000+Math.floor(rnd(0,999))).toLocaleString();
+  document.getElementById('m-receipt').innerHTML =
+    `<div class="r-line"><span>Token</span><b>${name} · $${ticker}</b></div>`+
+    `<div class="r-line"><span>Supply</span><b>1,000,000,000 · all on curve</b></div>`+
+    `<div class="r-line"><span>Levy</span><b>${b}% buy / ${s}% sell${t.renounced?' · locked':''}</b></div>`+
+    `<div class="r-line"><span>Levy destination</span><b>${MY_ADDR}</b></div>`+
+    (devBuy>0? `<div class="r-line"><span>Dev buy</span><b>${devBuy.toFixed(3)} ETH</b></div>`:'')+
+    `<div class="r-line total"><span>Starting cap</span><b>${fmtUsdFull(t.mcap)}</b></div>`;
+  const back = document.getElementById('modalBack');
+  back.classList.add('open');
+  const stamp = document.getElementById('leviedStamp');
+  stamp.classList.remove('slam'); void stamp.offsetWidth; stamp.classList.add('slam');
+  renderGrid(); renderStats();
+}
+let lastDeployedId = null;
+function viewDeployed(){ closeModal(); if(lastDeployedId) openToken(lastDeployedId); }
+function closeModal(){ document.getElementById('modalBack').classList.remove('open'); }
+
+/* ================================================================
+   TREASURY
+   ================================================================ */
+function renderTreasury(){
+  const mine = TOKENS.filter(t=>t.mine);
+  const rows = document.getElementById('tr-rows');
+  if(!wallet || !mine.length){
+    document.getElementById('tr-claimable').textContent='—';
+    document.getElementById('tr-claimusd').textContent = wallet? 'no tokens yet':'connect your wallet';
+    document.getElementById('tr-alltime').textContent='—';
+    document.getElementById('tr-count').textContent='0';
+    document.getElementById('tr-best').textContent='—';
+    rows.innerHTML = '<div style="padding:34px;text-align:center;color:var(--cream-mute);font-size:13.5px">'+
+      (wallet? 'You haven\'t launched anything yet. <a href="#" onclick="go(\'create\');return false" style="color:var(--gilt-bright)">Deploy your first token →</a>'
+             : 'Connect your wallet to see accrued levies.')+'</div>';
+    return;
+  }
+  const claimable = mine.reduce((s,t)=>s+(t.claimable||0),0);
+  const alltime = mine.reduce((s,t)=>s+t.earnedEth,0);
+  const best = [...mine].sort((a,b)=>b.earnedEth-a.earnedEth)[0];
+  document.getElementById('tr-claimable').textContent = claimable.toFixed(3)+' ETH';
+  document.getElementById('tr-claimusd').textContent = '≈ '+fmtUsdFull(claimable*ETH_USD);
+  document.getElementById('tr-alltime').textContent = alltime.toFixed(3)+' ETH';
+  document.getElementById('tr-count').textContent = mine.length;
+  document.getElementById('tr-best').textContent = '$'+best.ticker;
+  document.getElementById('tr-bestsub').textContent = best.earnedEth.toFixed(3)+' ETH all-time';
+  rows.innerHTML = mine.map(t=>`
+    <div class="t-row">
+      <div class="t-tok"><div class="tlogo">${t.emoji}</div>
+        <div style="min-width:0"><div style="font-weight:600;font-size:14px">${t.name} <span class="tticker">$${t.ticker}</span></div>
+        <div style="margin-top:3px">${stampHtml(t)} ${t.graduated?'<span class="mono up" style="font-size:9.5px">◆ GRADUATED</span>':''}</div></div>
+      </div>
+      <div><div class="cell-k">24h volume</div><div class="cell-v">${fmtUsd(t.vol24)}</div></div>
+      <div><div class="cell-k">Earned all-time</div><div class="cell-v">${t.earnedEth.toFixed(3)} Ξ</div></div>
+      <div><div class="cell-k">Claimable</div><div class="cell-v gold">${(t.claimable||0).toFixed(3)} Ξ</div></div>
+      <button class="btn btn-line" onclick="claimOne('${t.id}')" ${!(t.claimable>0.0005)?'disabled':''}>Claim</button>
+    </div>`).join('');
+}
+function claimOne(id){
+  const t = TOKENS.find(x=>x.id===id);
+  if(!t || !(t.claimable>0)) return;
+  toast('Claimed <b>'+t.claimable.toFixed(3)+' ETH</b> from $'+t.ticker+' → '+MY_ADDR,'gold');
+  t.claimable = 0;
+  renderTreasury();
+}
+function claimAll(){
+  const mine = TOKENS.filter(t=>t.mine && t.claimable>0);
+  if(!wallet){ toast('Connect a wallet first','seal'); return; }
+  if(!mine.length){ toast('Nothing to claim yet — levies accrue as your tokens trade','gold'); return; }
+  const total = mine.reduce((s,t)=>s+t.claimable,0);
+  mine.forEach(t=>t.claimable=0);
+  toast('Swept <b>'+total.toFixed(3)+' ETH</b> to '+MY_ADDR,'gold');
+  renderTreasury();
+}
+
+/* ================================================================
+   LIVE SIMULATION
+   ================================================================ */
+function applyTrade(t, tr, user){
+  t.trades.unshift(tr); if(t.trades.length>60) t.trades.pop();
+  t.lastTrade = tr.ts;
+  const usd = tr.eth*ETH_USD;
+  const impact = usd/(t.graduated? 260000 : 42000) * (tr.buy?1:-1);
+  t.mcap = Math.max(1200, t.mcap*(1+impact));
+  t.price = t.mcap/SUPPLY;
+  t.vol24 += usd;
+  t.chg24 += impact*100*rnd(0.5,1);
+  if(tr.buy && Math.random()<0.5) t.holders++;
+  if(tr.levyEth>0){
+    const net = tr.levyEth*0.9;
+    t.earnedEth += net;
+    if(t.mine) t.claimable = (t.claimable||0)+net;
+    PAID_ALLTIME += net*ETH_USD;
+  }
+  /* protocol revenue → $ROBIN stakers: 1% curve fee + 10% of every levy */
+  const protoTake = tr.eth*0.01 + (tr.levyEth||0)*0.10;
+  PROTO_REV_ALL_ETH += protoTake;
+  PROTO_REV_24H_ETH += protoTake;
+  if(myStake>0 && STAKE_TOTAL>0) myStakeReward += protoTake*(myStake/STAKE_TOTAL);
+  if(document.getElementById('page-stake').classList.contains('active')) updateStakeLive();
+  /* graduation */
+  if(!t.graduated && t.mcap>=GRAD_CAP){
+    t.graduated = true;
+    if(t.decay){ t.buyTax/=2; t.sellTax/=2; }
+    toast('◆ <b>$'+t.ticker+'</b> graduated — LP deployed to Uniswap and burned'+(t.decay?' · levy halved':''),'jade');
+  }
+  /* candle update */
+  if(t.candles){
+    const last = t.candles[t.candles.length-1];
+    last.c = t.price; last.h=Math.max(last.h,t.price); last.l=Math.min(last.l,t.price);
+    if(Math.random()<0.28){ t.candles.push({o:t.price,h:t.price,l:t.price,c:t.price,v:0.4}); if(t.candles.length>72) t.candles.shift(); }
+  }
+  /* paint */
+  const card = document.getElementById('card-'+t.id);
+  if(card){
+    card.classList.remove('flash-buy','flash-sell'); void card.offsetWidth;
+    card.classList.add(tr.buy?'flash-buy':'flash-sell');
+    const mc = card.querySelector('.tmcap'); if(mc) mc.innerHTML = '<span>MCAP</span>'+fmtUsd(t.mcap);
+    const ch = card.querySelector('.tchg'); if(ch){ ch.textContent=(t.chg24>=0?'+':'')+t.chg24.toFixed(1)+'%'; ch.className='tchg '+(t.chg24>=0?'up':'down'); }
+    const cf = card.querySelector('.curve-fill'); if(cf && !t.graduated) cf.style.width = Math.min(100,t.mcap/GRAD_CAP*100)+'%';
+  }
+  if(currentTokenId===t.id){
+    renderToken(false);
+    const body = document.getElementById('tradesBody');
+    body.insertAdjacentHTML('afterbegin', tradeRow(t,tr,true));
+    if(body.children.length>26) body.lastElementChild.remove();
+  }
+  renderStats();
+}
+function simTick(){
+  const live = TOKENS.filter(t=>!t.mine || Math.random()<0.35);
+  const weights = live.map(t=> (t.vol24+6000) * (t.graduated?0.5:1) * (Date.now()-t.created<7200e3?2.2:1));
+  const total = weights.reduce((a,b)=>a+b,0);
+  let r = Math.random()*total, t = live[0];
+  for(let i=0;i<live.length;i++){ r-=weights[i]; if(r<=0){ t=live[i]; break; } }
+  applyTrade(t, genTrade(t));
+  /* gently drift the headline staking APR */
+  stkAprEst = Math.max(19, Math.min(46, stkAprEst + rnd(-0.5,0.5)));
+  if(document.getElementById('page-stake').classList.contains('active')) updateStakeLive();
+  if(filter==='lastTrade' || filter==='watch') renderGrid();
+  renderTape();
+}
+
+/* ---------------- toast ---------------- */
+function toast(html, kind){
+  const box = document.getElementById('toasts');
+  const el = document.createElement('div');
+  el.className = 'toast '+(kind||'');
+  el.innerHTML = html;
+  box.appendChild(el);
+  setTimeout(()=>{ el.style.opacity='0'; el.style.transition='opacity .4s'; setTimeout(()=>el.remove(),400); }, 4200);
+}
+
+/* ---------------- init ---------------- */
+function init(){
+  buildEmojiRow();
+  onSlider(true);
+  projector();
+  renderStats();
+  renderGrid();
+  renderTape();
+  setInterval(simTick, 1700);
+  setInterval(()=>{ if(currentTokenId) drawChart(tok()); }, 4000);
+  window.addEventListener('resize', ()=>{ if(currentTokenId) drawChart(tok()); });
+}
+document.addEventListener('DOMContentLoaded', init);
+</script>
+</body>
+</html>
