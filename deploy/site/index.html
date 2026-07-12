@@ -377,6 +377,11 @@ body.light .stake-orbit text{fill:#3C9A1B}
   font-family:var(--font-display);font-weight:700;letter-spacing:.02em;color:#0A1204;
   background:linear-gradient(140deg,var(--gilt-bright),var(--gilt));text-transform:uppercase}
 .upl-remove{color:var(--gilt);text-decoration:underline;cursor:pointer;background:none;border:none;font:inherit;padding:0}
+.tok-links{display:flex;gap:8px;flex-wrap:wrap;margin-top:9px}
+.link-chip{display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border:1px solid var(--rule-2);border-radius:99px;
+  font-family:var(--font-mono);font-size:11.5px;color:var(--cream-dim);transition:color .15s,border-color .15s,background .15s}
+.link-chip:hover{color:var(--gilt-bright);border-color:var(--gilt);background:var(--gilt-dim)}
+.link-chip svg{width:13px;height:13px}
 .emoji-pick{display:flex;gap:6px;flex-wrap:wrap;margin-top:10px;justify-content:center}
 .emoji-pick button{font-size:19px;padding:5px 7px;border-radius:8px;border:1px solid transparent;transition:all .12s}
 .emoji-pick button:hover{background:var(--ledger-2)}
@@ -841,6 +846,10 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <input type="file" id="logoInput" accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml" hidden>
           </div>
         </div>
+        <div class="field">
+          <label for="c-web">Website <span>(optional)</span></label>
+          <input type="text" id="c-web" placeholder="https://…">
+        </div>
         <div class="field-row">
           <div class="field">
             <label for="c-x">X / Twitter <span>(optional)</span></label>
@@ -940,6 +949,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <span id="tk-age">·</span>
           <span id="tk-status"></span>
         </div>
+        <div class="tok-links" id="tk-links"></div>
       </div>
       <div class="tok-head-right">
         <div class="tok-price" id="tk-price">$0.00000</div>
@@ -1642,6 +1652,7 @@ function renderToken(fresh){
   document.getElementById('tk-status').innerHTML = t.graduated
     ? '<span class="up">◆ graduated — trading on Uniswap, LP burned</span>'
     : '<span class="gold">◈ on the bonding curve</span>';
+  const lc = document.getElementById('tk-links'); if(lc) lc.innerHTML = tokenLinks(t);
   document.getElementById('tk-price').textContent = fmtPrice(t.price);
   const c = document.getElementById('tk-chg');
   c.textContent = (t.chg24>=0?'+':'')+t.chg24.toFixed(1)+'% · 24h';
@@ -1900,6 +1911,22 @@ function tLogo(t){
   if(t.emoji) return t.emoji;
   return '<span class="mono-logo">'+((t.ticker||'?').slice(0,2))+'</span>';
 }
+
+/* Social/website link chips for the token page. */
+const _ICONS = {
+  web:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 010 18M12 3a15 15 0 000 18"/></svg>',
+  x:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.9 2H22l-7.6 8.7L23.3 22h-6.9l-5.4-7.1L4.8 22H1.7l8.2-9.4L.9 2h7.1l4.9 6.5L18.9 2z"/></svg>',
+  tg:'<svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.94 4.15a.9.9 0 00-1.2-.86L2.9 10.3c-.86.34-.85 1.57.02 1.88l4.35 1.53 1.67 5.28c.19.6.94.8 1.4.38l2.44-2.24 4.42 3.26c.5.37 1.21.1 1.35-.5l3.4-15.4z"/></svg>'
+};
+function normUrl(u){ u=(u||'').trim(); if(!u) return ''; return /^https?:\/\//i.test(u)? u : 'https://'+u; }
+function linkChip(url,label,icon){
+  const u = normUrl(url); if(!u) return '';
+  return '<a class="link-chip" href="'+u+'" target="_blank" rel="noopener noreferrer">'+(icon||'')+label+'</a>';
+}
+function tokenLinks(t){
+  return [linkChip(t.website,'Website',_ICONS.web), linkChip(t.x,'X',_ICONS.x), linkChip(t.tg,'Telegram',_ICONS.tg)]
+    .filter(Boolean).join('');
+}
 function syncPreview(){
   const tk = document.getElementById('c-ticker');
   tk.value = tk.value.toUpperCase().replace(/[^A-Z0-9]/g,'');
@@ -1966,6 +1993,9 @@ function deploy(){
   const devBuy = parseFloat(document.getElementById('c-buyin').value)||0;
   const t = mkTok({
     name, ticker, emoji:null, logo:chosenLogo,
+    website: document.getElementById('c-web').value.trim(),
+    x: document.getElementById('c-x').value.trim(),
+    tg: document.getElementById('c-tg').value.trim(),
     desc: document.getElementById('c-desc').value.trim() || 'Freshly launched on Robinfun.',
     buyTax:b, sellTax:s,
     decay: document.getElementById('c-decay').checked,
