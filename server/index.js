@@ -111,10 +111,13 @@ app.post('/api/tokens', rateLimit, (req, res) => {
       catch { return res.status(400).json({ error: 'invalid image (png/jpg/gif/webp, max 2MB)' }); }
     }
 
+    const ca = /^0x[0-9a-fA-F]{40}$/.test(String(b.ca || '').trim()) ? String(b.ca).trim() : '';
+
     const rec = {
       id: crypto.randomBytes(8).toString('hex'),
       name,
       ticker,
+      ca,
       description: clip(b.description, 280),
       website: cleanUrl(b.website),
       x: cleanUrl(b.x),

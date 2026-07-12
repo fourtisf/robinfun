@@ -103,7 +103,9 @@ server {
     client_max_body_size 8m;   # allow base64 logo uploads through /api
 
     location / {
-        try_files \$uri \$uri/ =404;
+        # SPA fallback so /create, /staking, /whitepaper, /token/<id> and
+        # refresh/deep-links all serve index.html (client-side routing).
+        try_files \$uri \$uri/ /index.html;
     }
 
     location = /index.html { add_header Cache-Control "no-cache"; }

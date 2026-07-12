@@ -115,6 +115,31 @@ the live contracts (chainId 46630).
 For mainnet later, use `contracts/script/Deploy.s.sol` with the real audited
 Uniswap v2 addresses — only after a third-party audit.
 
+## Telegram listing bot (@robinlistbot)
+
+A paid listing bot: a project DMs the bot, fills a short wizard, pays a fee in
+ETH to the Robinfun treasury, and once the payment confirms on-chain the token
+is auto-posted to `@robinfunlisting` and the board. See [`bot/README.md`](../bot/README.md).
+
+**1.** Create the bot with [@BotFather](https://t.me/BotFather) → copy the token.
+Reserve the username `@robinlistbot`.
+
+**2.** Create the channel `@robinfunlisting` and **add the bot as an admin**
+(needs "Post messages").
+
+**3.** Deploy on the VPS (as `root`):
+```bash
+curl -fsSL https://raw.githubusercontent.com/fourtisf/robinfun/claude/new-session-v8c9tt/deploy/bootstrap-bot.sh -o /root/bootstrap-bot.sh && chmod +x /root/bootstrap-bot.sh
+BOT_TOKEN=123:ABC TREASURY=0xYOUR_WALLET LISTING_CHANNEL=@robinfunlisting LISTING_FEE_ETH=0.01 /root/bootstrap-bot.sh
+```
+Runs as the `robinfun-bot` systemd service (long polling — no extra ports/nginx).
+Uses Robinhood Chain **testnet** by default, so the fee is faucet ETH (free) while
+you test. Switch `RPC_URL`/`CHAIN_ID`/`TREASURY` + a real `LISTING_FEE_ETH` for mainnet.
+
+- Config: `/etc/robinfun-bot.env` (chmod 600 — keep `BOT_TOKEN` secret)
+- Logs:  `journalctl -u robinfun-bot -f`
+- Test:  DM the bot `/list`
+
 ## Updating the site later
 
 Replace the file and reload isn't even needed (static files):

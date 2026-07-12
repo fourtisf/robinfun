@@ -1,0 +1,15 @@
+{
+  "name": "robinfun-listbot",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Robinfun paid listing bot (@robinlistbot) — Telegram → on-chain fee check → listings channel + board.",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node index.js",
+    "test": "node selftest.mjs"
+  },
+  "dependencies": {
+    "grammy": "^1.30.0"
+  }
+}
