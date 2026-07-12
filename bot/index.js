@@ -307,5 +307,15 @@ bot.api.setMyDescription(
   'The moment it confirms, your token is auto-posted to ' + LISTING_CHANNEL + ' and the Robinfun board. Tap /list to begin.'
 ).catch((e) => console.error('setMyDescription failed (non-fatal):', e?.message || e));
 
+// A bad token or a transient Telegram error should log ONE clear line and exit
+// cleanly (systemd restarts it in a bounded way) — not dump an unhandled stack.
+process.on('unhandledRejection', (e) => { console.error('FATAL unhandledRejection:', e?.message || e); process.exit(1); });
+process.on('uncaughtException', (e) => { console.error('FATAL uncaughtException:', e?.message || e); process.exit(1); });
+
 console.log(`@robinlistbot up · fee ${weiToEth(FEE_WEI)} ETH · channel ${LISTING_CHANNEL} · chain ${CHAIN_ID}`);
-bot.start();
+bot.start().catch((e) => {
+  const msg = e?.message || String(e);
+  if (/401|unauthorized/i.test(msg)) console.error('FATAL: Telegram rejected BOT_TOKEN (401). Check the token from @BotFather.');
+  else console.error('FATAL: bot.start failed:', msg);
+  process.exit(1);
+});
