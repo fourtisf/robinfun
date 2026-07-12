@@ -523,6 +523,13 @@ input[type=range]::-moz-range-thumb{
 .assurance .tick{color:var(--jade);flex-shrink:0;font-weight:700}
 .assurance b{color:var(--cream)}
 .deploy-cost{display:flex;justify-content:space-between;font-family:var(--font-mono);font-size:12.5px;color:var(--cream-mute);margin:14px 2px}
+.cost-box{margin:15px 0 12px;padding:13px 14px;border:1px solid var(--rule);border-radius:var(--r-md);background:var(--ink-2)}
+.cost-row{display:flex;justify-content:space-between;gap:12px;font-family:var(--font-mono);font-size:12.5px;color:var(--cream-dim);padding:5px 0}
+.cost-row .cost-sub{color:var(--cream-mute);font-size:11px}
+.cost-help{cursor:help;color:var(--cream-mute);border:1px solid var(--rule-2);border-radius:50%;font-size:9px;padding:0 4px;margin-left:3px}
+.cost-total{border-top:1px solid var(--rule);margin-top:5px;padding-top:9px;color:var(--cream);font-weight:600;font-size:13.5px}
+.cost-total span:last-child{color:var(--gilt)}
+.cost-note{font-size:11px;color:var(--cream-mute);margin-top:9px;line-height:1.5}
 
 /* ---------------- token page ---------------- */
 .tok-head{display:flex;align-items:center;gap:16px;padding:30px 0 18px;flex-wrap:wrap}
@@ -1021,7 +1028,21 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <div class="assurance"><span class="tick">✓</span><span><b>Rates can only go down.</b> No function exists to raise a fee after deploy.</span></div>
           <div class="assurance"><span class="tick">✓</span><span><b>No blacklist, no pause, no mint.</b> Transfers can never be blocked or diluted.</span></div>
           <div class="assurance"><span class="tick">✓</span><span><b>LP 100% burned at graduation.</b> The Uniswap pool can never be pulled.</span></div>
-          <div class="deploy-cost"><span>Deploy cost</span><span id="deployCost">0.002 ETH + gas</span></div>
+          <div class="cost-box">
+            <div class="cost-row">
+              <span>Protocol deploy fee <span class="cost-help" title="One-time fee charged on-chain by the factory when your token is created. Funds the platform and streams to $ROBIN stakers. Non-refundable. It is NOT your money going into the token — your dev buy below is separate.">ⓘ</span></span>
+              <span id="costFee">0.001 ETH</span>
+            </div>
+            <div class="cost-row">
+              <span>Your dev buy <span class="cost-sub">(goes into your own bag)</span></span>
+              <span id="costDev">0.05 ETH</span>
+            </div>
+            <div class="cost-row cost-total">
+              <span>Total to confirm</span>
+              <span id="deployCost">0.051 ETH + gas</span>
+            </div>
+            <div class="cost-note">The <b>protocol fee</b> is set in the contract, not the website — it's read live from the factory. Gas is paid separately to the network.</div>
+          </div>
           <button class="btn btn-gold btn-lg btn-block" id="deployBtn" onclick="deploy()">Deploy token</button>
         </div>
       </div>
@@ -2716,10 +2737,12 @@ function projector(){
 }
 function syncCost(){
   const b = parseFloat(document.getElementById('c-buyin').value)||0;
+  const trim = n => n.toFixed(4).replace(/0+$/,'').replace(/\.$/,'');
   const total = deployFeeEth + b;
-  const txt = total ? total.toFixed(4).replace(/0+$/,'').replace(/\.$/,'') : '0';
+  const fee = document.getElementById('costFee'); if(fee) fee.textContent = trim(deployFeeEth)+' ETH';
+  const dev = document.getElementById('costDev'); if(dev) dev.textContent = (b>0? trim(b) : '0')+' ETH';
   const el = document.getElementById('deployCost');
-  if(el) el.textContent = txt+' ETH + gas';
+  if(el) el.textContent = (total? trim(total) : '0')+' ETH + gas';
   document.querySelectorAll('.devchip').forEach(c=>{
     c.classList.toggle('on', Math.abs(parseFloat(c.textContent)-b) < 1e-9 && b>0);
   });
