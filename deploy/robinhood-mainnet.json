@@ -5,21 +5,25 @@
   "rpc": "https://rpc.mainnet.chain.robinhood.com",
   "explorer": "https://robinhoodchain.blockscout.com",
   "deployedAt": "2026-07-13",
-  "build": "mainnet private beta (own DEX + betaMode allowlist + 0.001 ETH cap)",
+  "build": "mainnet private beta v2 — graduates to REAL Uniswap V2 (DexScreener/bot-trackable), betaMode allowlist, 0.001 ETH cap",
   "deployFeeWei": "1000000000000000",
   "graduationEthWei": "1000000000000000",
   "betaMode": true,
   "allowlisted": ["0xA49dc277A65CCb35D94522cecDa19CA340AE991C"],
   "admin": "0xA49dc277A65CCb35D94522cecDa19CA340AE991C",
   "contracts": {
-    "factory": "0xc8b95E3212d1876a2Ce1CD2876cAD23592cb0819",
-    "feeRouter": "0x2894A7E9728dcA83DD60cEdD29Bce8054b96a4cF",
-    "weth": "0xabbD2fc6065f0AC5929500f5326db0c37D186bE1",
-    "dexFactory": "0xe84dedbff1609634bfcd5af0b3E757F8B539B6dc",
-    "dexRouter": "0xAAF3fb3C1c8aa48655fB81CEF0c62e1b2E80240f",
-    "tokenImpl": "0xc8858C1AdE7959126f06F28D0c92fD890F9E2AFE",
-    "curveImpl": "0x31A53259CDc35738A9CB391E67650dc2c611C617",
+    "factory": "0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2",
+    "feeRouter": "0x630216d06a54581e04c452892f69137e75ea45da",
+    "tokenImpl": "0xfdc16f1705fd9a320c08db278edb35bd86254f7f",
+    "curveImpl": "0x51efbe1f4baa601f7f7762e43babf1cc09094614",
     "treasury": "0xA49dc277A65CCb35D94522cecDa19CA340AE991C"
   },
-  "notes": "MAINNET private beta. betaMode ON — only the allowlisted wallet creates/trades. Each curve holds <=0.001 ETH before graduating (LP burned). Own Uniswap-v2 DEX + WETH deployed alongside. Admin/owner/treasury = the deployer 0xA49dc277 (NOTE: this key was exposed in plaintext during setup — rotate ownership to a fresh/multisig wallet before scaling or going public). Add wallets: factory.setBetaAllowed([addr], true). Go public: factory.setBetaMode(false)."
+  "dex": {
+    "name": "Uniswap V2 (canonical on Robinhood Chain)",
+    "factory": "0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f",
+    "router02": "0x89e5db8b5aa49aa85ac63f691524311aeb649eba",
+    "weth9": "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
+  },
+  "supersedes": "0xc8b95E3212d1876a2Ce1CD2876cAD23592cb0819 (mock-DEX beta — orphaned)",
+  "notes": "MAINNET private beta v2. Tokens graduate to REAL Uniswap V2 → appear on DexScreener + are bot-trackable AFTER graduation (pre-graduation they live on the bonding curve, like pump.fun before Raydium). betaMode ON — only the allowlisted wallet creates/trades; per-token cap 0.001 ETH. Admin/owner/treasury = the deployer 0xA49dc277 (this key was exposed during setup — rotate to a fresh/multisig before scaling). Go public: factory.setBetaMode(false)."
 }
