@@ -1181,7 +1181,9 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <div class="ir"><span>Rate control</span><b id="li-ren">—</b></div>
             <div class="ir"><span>Destination</span><b class="gold" id="li-dest">—</b></div>
             <div class="ir"><span>Collected to date</span><b class="gold" id="li-earned">—</b></div>
+            <div class="ir" id="li-claim-row" style="display:none"><span>Claimable now</span><b class="gold" id="li-claimable">—</b></div>
           </div>
+          <button class="btn btn-gold btn-block" id="claimFeeBtn" style="display:none;margin-top:12px" onclick="claimCreatorFee()">Claim creator fee</button>
         </div>
       </div>
     </div>
@@ -1459,7 +1461,22 @@ const CHAIN = {
 const FACTORY_ADDR = '0xc8b95E3212d1876a2Ce1CD2876cAD23592cb0819';   // mainnet beta (capped 0.001, allowlist)
 /* FeeRouter — authoritative source for a creator's real, on-chain earnings. */
 const FEEROUTER_ADDR = '0x2894A7E9728dcA83DD60cEdD29Bce8054b96a4cF';
-const FEEROUTER_ABI = [ 'function creatorEarnedLifetime(address) view returns (uint256)' ];
+const FEEROUTER_ABI = [
+  'function creatorEarnedLifetime(address) view returns (uint256)',
+  'function creatorOwed(address) view returns (uint256)',
+  'function claim(address token)',
+  'error NotCreator()','error NothingToDo()','error UnknownToken()','error EthTransferFailed()',
+];
+/* DEX (post-graduation): graduated tokens trade here — token/WETH v2 pair. */
+const DEX_ROUTER_ADDR = '0xAAF3fb3C1c8aa48655fB81CEF0c62e1b2E80240f';
+const DEX_FACTORY_ADDR = '0xe84dedbff1609634bfcd5af0b3E757F8B539B6dc';
+const WETH_ADDR = '0xabbD2fc6065f0AC5929500f5326db0c37D186bE1';
+const ROUTER_ABI = [
+  'function swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline) payable',
+  'function swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)',
+];
+const DEXFACTORY_ABI = [ 'function getPair(address,address) view returns (address)' ];
+const PAIR_ABI = [ 'function getReserves() view returns (uint112,uint112,uint32)', 'function token0() view returns (address)' ];
 let DEPLOY_FEE_WEI = 1000000000000000n;     // 0.001 ETH — refreshed live from the chain
 let deployFeeEth = 0.001;
 const MIN_DEV_BUY = 0.0001;                // dev buy is mandatory — creator must hold a launch position (sized to the 0.001 ETH beta cap so a launch stays on the curve)
@@ -2470,6 +2487,9 @@ async function refreshReal(t, withTrades){
     if(!t.candles){ buildCandlesFromTrades(t); drawChart(t); }
     return;
   }
+  // After graduation the curve reserves are frozen — the live price/mcap live
+  // in the DEX pair. Load them so the header + quotes reflect real DEX state.
+  if(t.graduated){ await loadDexState(t); if(currentTokenId!==t.id) return; }
   document.getElementById('tk-price').textContent = fmtPrice(t.price);
   document.getElementById('ts-mcap').textContent = fmtUsd(t.mcap);
   document.getElementById('tk-status').innerHTML = t.graduated
@@ -2493,8 +2513,9 @@ async function refreshReal(t, withTrades){
   buildCandlesFromTrades(t); drawChart(t);
   // renderToken()'s initial setSide() ran before the chain state loaded, so the
   // trade panel wouldn't know the curve had graduated. Re-sync it here once we
-  // do — locks the button/input/chips and shows the "graduated" quote.
+  // do — swaps the panel over to DEX trading and its label/chips.
   if(t.graduated) setSide(side);
+  updateClaimUI(t);
   loadBalances(t);
 }
 function startRealPoll(t){
@@ -2503,6 +2524,113 @@ function startRealPoll(t){
   realPoll = setInterval(()=>{ if(currentTokenId===t.id) refreshReal(t, true); else stopRealPoll(); }, 12000);
 }
 function stopRealPoll(){ if(realPoll){ clearInterval(realPoll); realPoll=null; } }
+
+/* ---------------- post-graduation DEX trading + fee claim ---------------- */
+async function loadDexState(t){
+  try{
+    const ro = roProvider();
+    if(!t._pair){
+      const p = await new ethers.Contract(DEX_FACTORY_ADDR, DEXFACTORY_ABI, ro).getPair(t.ca, WETH_ADDR);
+      if(!p || p===ethers.ZeroAddress) return false;
+      t._pair = p;
+    }
+    const pair = new ethers.Contract(t._pair, PAIR_ABI, ro);
+    const [r, tok0] = await Promise.all([pair.getReserves(), pair.token0()]);
+    const tokenIs0 = tok0.toLowerCase()===t.ca.toLowerCase();
+    t._dexRTok = Number(ethers.formatUnits(tokenIs0? r[0]:r[1], 18));
+    t._dexREth = Number(ethers.formatEther(tokenIs0? r[1]:r[0]));
+    if(t._dexRTok>0){ t.priceEth = t._dexREth/t._dexRTok; t.price = t.priceEth*ETH_USD; t.mcap = t.priceEth*SUPPLY*ETH_USD; }
+    return true;
+  }catch(e){ console.error('loadDexState', e); return false; }
+}
+function quoteDex(t){
+  const amt = parseFloat(document.getElementById('amt').value)||0;
+  const el = document.getElementById('feeLines');
+  if(!t._dexREth){ el.innerHTML = '<div class="fl"><span>◆ Graduated — trades on the DEX. Loading pool…</span></div>'; return; }
+  if(!amt){ el.innerHTML = '<div class="fl"><span>◆ Graduated — trades on the DEX. Enter an amount.</span></div>'; return; }
+  if(side==='buy'){
+    const inFee = amt*0.997;                            // 0.3% DEX fee
+    let out = (inFee*t._dexRTok)/(t._dexREth+inFee);    // constant product
+    out = out*(1-(t.buyTax||0)/100);                    // token levy on receipt
+    el.innerHTML = `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(out)} $${t.ticker}</b></div>`;
+  }else{
+    const inFee = amt*(1-(t.sellTax||0)/100)*0.997;     // levy on send + 0.3% DEX fee
+    const out = (inFee*t._dexREth)/(t._dexRTok+inFee);
+    el.innerHTML = `<div class="fl big"><span>You receive</span><b>≈ ${out.toFixed(6)} ETH</b></div>`;
+  }
+}
+async function doTradeDex(t){
+  const btn = document.getElementById('tradeBtn');
+  const buy = side==='buy';
+  try{
+    if(!activeProvider){ toast('Connect a wallet first','seal'); connectWallet(); return; }
+    await ensureChain(activeProvider);
+    if((await activeProvider.request({method:'eth_chainId'}))!==CHAIN.chainId){ toast('Switch to Robinhood Chain','seal'); return; }
+    const amt = parseFloat(document.getElementById('amt').value)||0;
+    if(!(amt>0)){ toast('Enter an amount','seal'); return; }
+    const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
+    const owner = await signer.getAddress();
+    const router = new ethers.Contract(DEX_ROUTER_ADDR, ROUTER_ABI, signer);
+    const deadline = Math.floor(Date.now()/1000)+600;
+    // minOut = 0: acceptable for a single-wallet private beta (no sandwich
+    // risk). Set a real slippage floor before opening trading to the public.
+    btn.disabled = true;
+    if(buy){
+      if(t._ethBal!=null && amt > t._ethBal-0.0002){ toast('Not enough ETH — you have '+(t._ethBal||0).toFixed(4),'seal'); btn.disabled=false; setSide(side); return; }
+      btn.textContent='Confirm in wallet…';
+      const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(0n, [WETH_ADDR, t.ca], owner, deadline, {value: ethers.parseEther(String(amt))});
+      toast('Buy sent — waiting…','jade'); btn.textContent='Buying…';
+      await tx.wait(); toast('Bought $'+t.ticker+' ✓','jade');
+    }else{
+      const tokensIn = ethers.parseUnits(String(amt), 18);
+      const allow = await new ethers.Contract(t.ca, ERC20_ABI, roProvider()).allowance(owner, DEX_ROUTER_ADDR);
+      if(allow < tokensIn){ btn.textContent='Approve in wallet…'; const atx = await new ethers.Contract(t.ca, ERC20_ABI, signer).approve(DEX_ROUTER_ADDR, tokensIn); toast('Approving $'+t.ticker+'…','jade'); await atx.wait(); }
+      btn.textContent='Confirm in wallet…';
+      const tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(tokensIn, 0n, [t.ca, WETH_ADDR], owner, deadline);
+      toast('Sell sent — waiting…','seal'); btn.textContent='Selling…';
+      await tx.wait(); toast('Sold $'+t.ticker+' ✓','seal');
+    }
+    document.getElementById('amt').value='';
+    await refreshReal(t, true);
+  }catch(err){
+    console.error(err);
+    const msg = (err && (err.shortMessage||err.reason||err.message)) || 'transaction failed';
+    if(err && (err.code===4001 || err.code==='ACTION_REJECTED' || /reject|denied/i.test(msg))) toast('Cancelled','seal');
+    else toast('Trade failed — '+esc(String(msg).slice(0,130)),'seal');
+  }finally{ if(btn) btn.disabled=false; setSide(side); }
+}
+async function updateClaimUI(t){
+  const row = document.getElementById('li-claim-row'), btn = document.getElementById('claimFeeBtn'), amtEl = document.getElementById('li-claimable');
+  if(!btn) return;
+  const isCreator = wallet && t._creatorAddr && wallet.toLowerCase()===t._creatorAddr;
+  if(!isCreator){ if(row) row.style.display='none'; btn.style.display='none'; return; }
+  let owed = 0;
+  try{ owed = Number(ethers.formatEther(await new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, roProvider()).creatorOwed(t.ca))); }catch(_){}
+  if(currentTokenId!==t.id) return;
+  if(amtEl) amtEl.textContent = (+owed.toFixed(6))+' ETH';
+  if(row) row.style.display = '';
+  btn.style.display = owed>1e-12 ? '' : 'none';
+}
+async function claimCreatorFee(){
+  const t = tok(); if(!t || !realToken(t)) return;
+  const btn = document.getElementById('claimFeeBtn');
+  try{
+    if(!activeProvider){ toast('Connect your wallet first','seal'); connectWallet(); return; }
+    await ensureChain(activeProvider);
+    const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
+    const fr = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, signer);
+    btn.disabled=true; btn.textContent='Confirm in wallet…';
+    const tx = await fr.claim(t.ca);
+    toast('Claim sent — waiting…','jade'); btn.textContent='Claiming…';
+    await tx.wait(); toast('Creator fee claimed ✓','jade');
+    updateClaimUI(t);
+  }catch(err){
+    console.error(err);
+    const msg = (err && (err.shortMessage||err.reason||err.message)) || 'failed';
+    if(err && (err.code===4001 || err.code==='ACTION_REJECTED' || /reject|denied/i.test(msg))) toast('Cancelled','seal');
+    else toast('Claim failed — '+esc(String(msg).slice(0,130)),'seal');
+  }finally{ const b=document.getElementById('claimFeeBtn'); if(b){ b.disabled=false; b.textContent='Claim creator fee'; } }
+}
 
 async function doTradeReal(t){
   const btn = document.getElementById('tradeBtn');
@@ -2513,9 +2641,9 @@ async function doTradeReal(t){
     if((await activeProvider.request({method:'eth_chainId'}))!==CHAIN.chainId){ toast('Switch to Robinhood Chain','seal'); return; }
     const amt = parseFloat(document.getElementById('amt').value)||0;
     if(!(amt>0)){ toast('Enter an amount','seal'); return; }
-    // Graduated curves are closed forever — a curve buy/sell would revert
-    // (AlreadyGraduatedErr). Stop here with a clear message instead.
-    if(t.graduated){ toast('$'+t.ticker+' has <b>graduated</b> — the bonding curve is closed. It now lives on the DEX (LP burned). On-DEX trading isn\'t in this beta build yet.','seal'); return; }
+    // Safety net: a graduated token should have been routed to the DEX path by
+    // doTrade(); if we somehow land here, don't send a doomed curve tx.
+    if(t.graduated){ return doTradeDex(t); }
     const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
     const curveW = new ethers.Contract(t.curveAddr, CURVE_ABI, signer);
     const curveR = new ethers.Contract(t.curveAddr, CURVE_ABI, roProvider());
@@ -2689,32 +2817,25 @@ function setSide(s){
   document.getElementById('tab-sell').classList.toggle('active', s==='sell');
   const btn = document.getElementById('tradeBtn');
   const t = tok();
-  const gradClosed = !!(t && realToken(t) && t.graduated);
-  // Graduated curve = trading closed. Disable the button + input and say so.
+  const grad = !!(t && realToken(t) && t.graduated);   // graduated → trades on the DEX
   const amtInput = document.getElementById('amt');
-  if(gradClosed){
-    btn.textContent = '◆ Graduated — curve closed';
-    btn.className = 'btn btn-lg btn-block btn-line';
-    btn.disabled = true;
-    if(amtInput){ amtInput.value=''; amtInput.disabled = true; }
-  }else{
-    btn.textContent = s==='buy'? 'Buy $'+(t?t.ticker:'') : 'Sell $'+(t?t.ticker:'');
-    btn.className = 'btn btn-lg btn-block '+(s==='buy'?'btn-jade':'btn-seal');
-    btn.disabled = false;
-    if(amtInput) amtInput.disabled = false;
-  }
+  btn.textContent = (s==='buy'? 'Buy $'+(t?t.ticker:'') : 'Sell $'+(t?t.ticker:'')) + (grad?' · DEX':'');
+  btn.className = 'btn btn-lg btn-block '+(s==='buy'?'btn-jade':'btn-seal');
+  btn.disabled = false;
+  if(amtInput) amtInput.disabled = false;
   document.getElementById('amt-label').textContent = s==='buy'?'You pay':'You sell';
   document.getElementById('amt-unit').textContent = s==='buy'?'ETH':'$'+(t?t.ticker:'');
   document.getElementById('amt-bal').textContent = realToken(t)
     ? (s==='buy'? ((t._ethBal||0).toFixed(4)+' ETH') : (fmtNum(t._tokBal||0)+' $'+t.ticker))
     : (s==='buy'? '2.4810 ETH' : (t? fmtNum(rnd(1e6,4e7))+' $'+t.ticker : '—'));
   const qr = document.getElementById('quickRow');
-  if(gradClosed){
-    qr.innerHTML = '';   // no quick-buy chips on a closed curve
-  }else if(s!=='buy'){
+  if(s!=='buy'){
     qr.innerHTML = ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`).join('');
+  }else if(grad){
+    // Post-graduation DEX buy — small ETH chips (no curve cap anymore).
+    qr.innerHTML = ['0.0005','0.001','0.005','0.01'].map(v=>`<button onclick="setAmt(${v})">${v} Ξ</button>`).join('');
   }else{
-    const g = gradBuyEth(t);   // gross ETH to graduate this curve (null for sim/graduated)
+    const g = gradBuyEth(t);   // gross ETH to graduate this curve (null for sim)
     if(g && g>0){
       // Buttons scale to the graduation cap so you never overpay (excess just refunds).
       const q = x => `<button onclick="setAmt(${x.toPrecision(3)})">${(+x.toPrecision(2))} Ξ</button>`;
@@ -2758,7 +2879,7 @@ function setAmtPct(p){
 }
 function quote(){
   const t = tok(); if(!t) return;
-  if(realToken(t)) return quoteReal(t);
+  if(realToken(t)) return t.graduated ? quoteDex(t) : quoteReal(t);
   const amt = parseFloat(document.getElementById('amt').value)||0;
   const el = document.getElementById('feeLines');
   if(!amt){ el.innerHTML = '<div class="fl"><span>Enter an amount to preview the fee split.</span></div>'; return; }
@@ -2784,7 +2905,7 @@ function quote(){
 function doTrade(){
   const t = tok(); if(!t) return;
   if(!wallet){ toast('Connect a wallet first','seal'); connectWallet(); return; }
-  if(realToken(t)) return doTradeReal(t);
+  if(realToken(t)) return t.graduated ? doTradeDex(t) : doTradeReal(t);
   const amt = parseFloat(document.getElementById('amt').value)||0;
   if(!amt){ toast('Enter an amount','seal'); return; }
   const buy = side==='buy';
