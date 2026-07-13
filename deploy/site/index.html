@@ -1454,7 +1454,7 @@ let deployFeeEth = 0.001;
 const MIN_DEV_BUY = 0.01;                  // dev buy is mandatory — creator must hold a launch position
 const EXPLORER = 'https://explorer.testnet.chain.robinhood.com';
 const FACTORY_ABI = [
-  'function createToken((string name,string symbol,string metadataURI,uint16 buyLevyBps,uint16 sellLevyBps,bool decayAtGraduation,bool renounceRateControl,uint256 devBuyMinTokensOut,bytes32 vanitySalt)) payable returns (address token, address curve)',
+  'function createToken((string name,string symbol,string metadataURI,uint16 buyLevyBps,uint16 sellLevyBps,bool decayAtGraduation,bool renounceRateControl,uint256 devBuyMinTokensOut,bytes32 vanitySalt,uint256 maxDeployFee)) payable returns (address token, address curve)',
   'function deployFee() view returns (uint256)',
   'function owner() view returns (address)',
   'function setDeployFee(uint256 fee)',
@@ -2871,6 +2871,9 @@ async function realLaunch(meta){
       buyLevyBps: toBps(meta.buyTax), sellLevyBps: toBps(meta.sellTax),
       decayAtGraduation: !!meta.decay, renounceRateControl: !!meta.renounced,
       devBuyMinTokensOut: 0n, vanitySalt: ethers.ZeroHash,
+      // Front-run guard: revert if the owner raised the deploy fee above ~2x
+      // what we just read, so a fee bump can't silently eat the dev buy.
+      maxDeployFee: DEPLOY_FEE_WEI * 2n,
     };
     let value = DEPLOY_FEE_WEI;
     if(meta.devBuy>0) value += ethers.parseEther(String(meta.devBuy));

@@ -96,6 +96,11 @@ contract RobinfunFactory is Ownable2Step {
         ///      (see `_tokenSalt`) so a mined salt cannot be front-run. Pass 0
         ///      to skip vanity — the address is still deterministic and unique.
         bytes32 vanitySalt;
+        /// @dev Slippage guard on the deploy fee: the launch reverts if the
+        ///      live `deployFee` exceeds this. Protects a creator's dev-buy ETH
+        ///      from an owner front-running `setDeployFee` higher between the
+        ///      creator broadcasting and the tx mining. Pass 0 to disable.
+        uint256 maxDeployFee;
     }
 
     // ---------------------------------------------------------------- events
@@ -125,6 +130,7 @@ contract RobinfunFactory is Ownable2Step {
     error LevyNotOnStep();
     error BadName();
     error InsufficientDeployFee();
+    error DeployFeeTooHigh();
     error BadCurveParams();
     error EthTransferFailed();
     error UnexpectedEth();
@@ -167,6 +173,7 @@ contract RobinfunFactory is Ownable2Step {
     ///      the deploy fee is spent on the dev buy.
     function createToken(CreateParams calldata p) external payable returns (address token, address curve) {
         if (msg.value < deployFee) revert InsufficientDeployFee();
+        if (p.maxDeployFee != 0 && deployFee > p.maxDeployFee) revert DeployFeeTooHigh();
         _validateLevy(p.buyLevyBps);
         _validateLevy(p.sellLevyBps);
         if (bytes(p.name).length == 0 || bytes(p.name).length > 64) revert BadName();

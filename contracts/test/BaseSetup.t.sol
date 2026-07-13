@@ -103,7 +103,8 @@ abstract contract BaseSetup is Test {
                 decayAtGraduation: decay,
                 renounceRateControl: renounce,
                 devBuyMinTokensOut: 0,
-                vanitySalt: bytes32(0)
+                vanitySalt: bytes32(0),
+                maxDeployFee: 0
             })
         );
         return (RobinfunToken(t), BondingCurve(payable(c)));

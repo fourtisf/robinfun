@@ -87,6 +87,15 @@ contract RobinfunToken is ERC20Upgradeable, ERC20PermitUpgradeable {
     /// @notice Addresses whose transfers are never levied (frozen at init).
     mapping(address => bool) public levyExempt;
 
+    /// @notice Levy tokens skimmed to the FeeRouter that are the creator-levy
+    ///         basis (their ETH proceeds split 90/10 at harvest). Zeroed when
+    ///         the FeeRouter reads them via `takeLevyAccounting` at harvest.
+    uint256 public levyBasisAccrued;
+
+    /// @notice Levy tokens skimmed that are the always-on protocol fee (their
+    ///         ETH proceeds are 100% protocol). Zeroed at harvest.
+    uint256 public protocolBasisAccrued;
+
     // ---------------------------------------------------------------- events
 
     event LeviesLowered(uint16 buyLevyBps, uint16 sellLevyBps);
@@ -100,6 +109,7 @@ contract RobinfunToken is ERC20Upgradeable, ERC20PermitUpgradeable {
 
     error NotCreator();
     error NotCurve();
+    error NotFeeRouter();
     error LevyTooHigh();
     error LevyIncreaseForbidden();
     error RateControlIsRenounced();
@@ -201,6 +211,16 @@ contract RobinfunToken is ERC20Upgradeable, ERC20PermitUpgradeable {
         emit Graduated(pair);
     }
 
+    /// @notice Returns and zeroes the accrued levy composition. Only the
+    ///         FeeRouter calls this, at harvest, to split proceeds exactly.
+    function takeLevyAccounting() external returns (uint256 levyBasis, uint256 protocolBasis) {
+        if (msg.sender != feeRouter) revert NotFeeRouter();
+        levyBasis = levyBasisAccrued;
+        protocolBasis = protocolBasisAccrued;
+        levyBasisAccrued = 0;
+        protocolBasisAccrued = 0;
+    }
+
     // ---------------------------------------------------------------- fee-on-transfer
 
     /// @dev Applies the levy on trades against the canonical AMM pair.
@@ -216,9 +236,15 @@ contract RobinfunToken is ERC20Upgradeable, ERC20PermitUpgradeable {
                 // always-on 0.5% protocol fee (so 0/0 tokens still pay Robinfun).
                 // Both skim to the FeeRouter, which splits after harvest.
                 uint256 rate = from == pair ? buyLevyBps : sellLevyBps;
-                uint256 fee = (value * (rate + PROTOCOL_FEE_BPS)) / BPS;
+                uint256 levyComp = (value * rate) / BPS; // creator-levy basis (90/10 at harvest)
+                uint256 protoComp = (value * PROTOCOL_FEE_BPS) / BPS; // protocol fee (100% protocol)
+                uint256 fee = levyComp + protoComp;
                 if (fee != 0) {
                     super._update(from, feeRouter, fee);
+                    // Record the exact composition so the FeeRouter splits the
+                    // harvested ETH by true basis, not an average-rate guess.
+                    levyBasisAccrued += levyComp;
+                    protocolBasisAccrued += protoComp;
                     unchecked {
                         value -= fee;
                     }

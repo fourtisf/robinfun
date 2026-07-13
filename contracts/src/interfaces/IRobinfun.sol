@@ -31,6 +31,10 @@ interface IRobinfunToken is IERC20 {
     function ammPair() external view returns (address);
 
     function onGraduation(address pair) external;
+
+    /// @notice Returns and zeroes the accrued (creator-levy, protocol-fee) token
+    ///         basis skimmed since the last read. FeeRouter-only.
+    function takeLevyAccounting() external returns (uint256 levyBasis, uint256 protocolBasis);
 }
 
 interface IBondingCurve {

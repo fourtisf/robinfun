@@ -41,6 +41,13 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
 
     uint16 private constant BPS = 10_000;
 
+    /// @notice Minimum protocol revenue that `flushProtocol` will push. Each
+    ///         flush restarts the staking reward stream (resets its end time),
+    ///         so allowing dust flushes would let anyone repeatedly reset and
+    ///         dilute/delay the stream. A floor ties each flush to real accrued
+    ///         fees; sub-floor revenue simply waits for the next flush.
+    uint256 public constant MIN_FLUSH = 0.001 ether;
+
     // ---------------------------------------------------------------- config
 
     /// @notice The Robinfun factory; used to recognize legitimate tokens.
@@ -134,8 +141,15 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
 
     /// @notice Sets the DEX router used for levy harvests (§10.2 — the
     ///         canonical Robinhood Chain DEX is still an open question).
+    /// @dev One-shot. `harvest` approves the router for the FULL accumulated
+    ///      levy inventory (90% owed to creators), so a re-pointable router
+    ///      would be an owner rug path: point it at a contract whose "swap"
+    ///      merely `transferFrom`s the approval away. Locking it after the
+    ///      first set removes that path. A genuine DEX migration is a
+    ///      deliberate governance event → deploy a fresh FeeRouter.
     function setDexRouter(address router_) external onlyOwner {
         if (router_ == address(0)) revert ZeroAddress();
+        if (address(dexRouter) != address(0)) revert AlreadySet();
         dexRouter = IUniswapV2Router02(router_);
         weth = dexRouter.WETH();
         emit DexRouterSet(router_, weth);
@@ -243,7 +257,10 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
     ///         treasury while staking has not launched). Permissionless.
     function flushProtocol() external nonReentrant {
         uint256 amount = protocolPending;
-        if (amount == 0) revert NothingToDo();
+        // Dust-flush guard: sub-floor revenue waits (it is never lost — it
+        // stays in `protocolPending` for the next flush). Prevents repeated
+        // stream-reset griefing of stakers.
+        if (amount < MIN_FLUSH) revert NothingToDo();
         protocolPending = 0;
 
         address vault = stakingVault;
@@ -301,19 +318,20 @@ contract FeeRouter is Ownable2Step, ReentrancyGuard {
         emit LevyCollected(token, amount, creatorShare, protocolShare);
     }
 
-    /// @dev Splits a post-graduation harvest. The harvested tokens are the
-    ///      creator levy PLUS the always-on protocol fee, so the creator is
-    ///      owed 90% of only the levy portion; the protocol keeps the other
-    ///      10% of the levy plus 100% of the protocol fee. The levy portion is
-    ///      taken as the average of the buy/sell rate (exact when they are
-    ///      equal or zero — the common cases, incl. every 0/0 token).
+    /// @dev Splits a post-graduation harvest by the EXACT composition of the
+    ///      skimmed tokens (not an average-rate guess): the token tracks how
+    ///      many skimmed tokens were the creator-levy basis vs the always-on
+    ///      protocol fee. The creator is owed 90% of the levy-basis proceeds;
+    ///      the protocol keeps the other 10% plus 100% of the protocol-fee
+    ///      proceeds. This is correct even when buy/sell rates differ and
+    ///      realized volume is skewed. Any untracked surplus (donated tokens)
+    ///      falls to the protocol.
     function _splitHarvest(address token, uint256 amount) private {
         if (amount == 0) return;
-        uint256 levyRate =
-            (uint256(IRobinfunToken(token).buyLevyBps()) + IRobinfunToken(token).sellLevyBps()) / 2;
-        uint256 totalRate = levyRate + IRobinfunToken(token).PROTOCOL_FEE_BPS();
-        // creator's slice of the total = (levyRate * 90%) / totalRate
-        uint256 creatorShare = totalRate == 0 ? 0 : (amount * ((levyRate * CREATOR_SHARE_BPS) / BPS)) / totalRate;
+        (uint256 levyBasis, uint256 protocolBasis) = IRobinfunToken(token).takeLevyAccounting();
+        uint256 total = levyBasis + protocolBasis;
+        // creator ETH = amount * (levyBasis / total) * 90%
+        uint256 creatorShare = total == 0 ? 0 : (amount * levyBasis * CREATOR_SHARE_BPS) / (total * BPS);
         uint256 protocolShare = amount - creatorShare;
         if (creatorShare != 0) {
             creatorOwed[token] += creatorShare;

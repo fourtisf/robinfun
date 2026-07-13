@@ -455,7 +455,8 @@ contract RobinfunFactoryTest is BaseSetup {
             decayAtGraduation: false,
             renounceRateControl: false,
             devBuyMinTokensOut: 0,
-            vanitySalt: bytes32(0)
+            vanitySalt: bytes32(0),
+            maxDeployFee: 0
         });
     }
 

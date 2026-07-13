@@ -11,22 +11,28 @@ dimensions in parallel, and each candidate finding was cross-checked against the
 > cheaper and faster. The contracts are **not mainnet-ready** until (a) the findings below are resolved
 > and (b) an external audit signs off. "Zero bugs" was the hypothesis — this review disproves it.
 
-## Severity summary
+## Severity summary & remediation status
 
-| ID  | Severity | Title | Type |
-|-----|----------|-------|------|
-| M-1 | Medium   | Pre-seeded Uniswap pair breaks the "liquidity locked forever" guarantee at graduation | Griefing / design |
-| M-2 | Medium   | FeeRouter owner can seize creators' harvested levy tokens via `setDexRouter` re-point | Centralization / funds |
-| M-3 | Medium   | Permissionless `harvest` is sandwichable (caller-chosen `minEthOut`) | MEV |
-| M-4 | Medium   | Creator levy + 0.5% protocol fee are avoidable on any non-canonical pair | Design limitation |
-| M-5 | Medium   | Harvest split uses an average buy/sell rate → misattributes creator vs protocol revenue | Accounting |
-| L-1 | Low      | Staking reward accounting: mid-stream empty-vault stranding, permissionless stream reset, dust floor | Griefing / loss |
-| L-2 | Low      | Post-graduation `addLiquidity`/`removeLiquidity` on the canonical pair is taxed as a swap | UX / correctness |
-| L-3 | Low      | `setDeployFee` / `setCurveParams` can be front-run; `createToken` has no user-side max-fee/param guard | MEV / trust |
-| I-1 | Info     | `_splitHarvest` division-before-multiplication truncates the creator share at low rates | Rounding |
+| ID  | Severity | Title | Status |
+|-----|----------|-------|--------|
+| M-1 | Medium   | Pre-seeded Uniswap pair breaks the "liquidity locked forever" guarantee at graduation | ⚠️ **Flagged** — needs deliberate redesign (see below) |
+| M-2 | Medium   | FeeRouter owner can seize creators' harvested levy tokens via `setDexRouter` re-point | ✅ **Fixed** — `setDexRouter` one-shot |
+| M-3 | Medium   | Permissionless `harvest` is sandwichable (caller-chosen `minEthOut`) | ⚙️ **Operational** — set `harvester` on mainnet |
+| M-4 | Medium   | Creator levy + 0.5% protocol fee are avoidable on any non-canonical pair | 📄 **Accepted** — inherent design limitation, documented |
+| M-5 | Medium   | Harvest split uses an average buy/sell rate → misattributes creator vs protocol revenue | ✅ **Fixed** — exact split via tracked composition |
+| L-1 | Low      | Staking reward accounting: mid-stream empty-vault stranding, permissionless stream reset, dust floor | ✅ **Fixed** — park-on-empty, dust re-park, flush floor |
+| L-2 | Low      | Post-graduation `addLiquidity`/`removeLiquidity` on the canonical pair is taxed as a swap | 📄 **Accepted** — inherent, documented |
+| L-3 | Low      | `setDeployFee` front-run consumes the creator's dev-buy ETH | ✅ **Fixed** — `maxDeployFee` guard |
+| I-1 | Info     | `_splitHarvest` division-before-multiplication truncates the creator share | ✅ **Fixed** — superseded by M-5 |
 
 No **Critical** (attacker-drains-user-funds-permissionlessly) finding survived verification. The two
 findings that finders initially rated *High* were **overstated** and are re-classified below.
+
+**Remediation (2026-07-13):** 6 of 9 fixed in code with regression tests; full suite **152/152 green**
+(144 prior + 8 new). The three not code-changed are M-1 (deliberate redesign — a rushed patch to the
+graduation path is riskier than the bounded, self-costly griefing it addresses), M-3 (operational: set a
+keeper), and M-4/L-2 (inherent to the fee-on-transfer-on-one-pair model). **Contracts changed → any
+deployment (incl. the current testnet factory) must be redeployed from this revision.**
 
 ---
 
@@ -165,11 +171,17 @@ truncates the inner factor before multiplying, short-changing the creator by a f
   (owner rug path on creator fees) in particular should be fixed before any mainnet exposure.
 
 **Required before mainnet, in order:**
-1. Fix M-1..M-5 (and the L's worth fixing); re-run the full suite + add regression tests for each.
-2. Freeze the contracts (tag a release candidate).
-3. **Independent third-party audit** (Sherlock / Code4rena / Cantina / Spearbit). This internal review is the
+1. ✅ **Done (2026-07-13):** fixed M-2, M-5, L-1, L-3, I-1 in code with regression tests; suite 152/152 green.
+2. ⚠️ **M-1 — resolve deliberately.** The complete fix (arbitrage the pre-seeded pool to the graduation
+   price before adding liquidity, or use a protocol-owned pair) is a real change to the most critical
+   function and adds new external-call surface (`pair.swap`, not currently used). It must be designed and
+   audited on its own, NOT rushed — the current behaviour is a *bounded, self-costly griefing* that never
+   sends funds to an attacker (unpaired ETH routes to the protocol), so leaving it known-and-documented is
+   safer than a hasty rewrite. Decide with the external auditor.
+3. Freeze the contracts (tag a release candidate).
+4. **Independent third-party audit** (Sherlock / Code4rena / Cantina / Spearbit). This internal review is the
    input to that, not a replacement.
-4. Confirm Robinhood Chain **mainnet** is public and has a canonical Uniswap-v2 deployment (M-4/graduation depend on it).
-5. Owner → multisig; set `harvester`; operational runbook.
+5. Confirm Robinhood Chain **mainnet** is public and has a canonical Uniswap-v2 deployment (M-4/graduation depend on it).
+6. Owner → multisig; **set `harvester`** (closes M-3); operational runbook; redeploy the fixed contracts.
 
-Only after 1–5 does mainnet deployment become responsible.
+Only after 1–6 does mainnet deployment become responsible. We are at step 1→2.

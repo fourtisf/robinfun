@@ -165,6 +165,16 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
         if (stakedBalance[msg.sender] < amount) revert InsufficientStake();
         totalStaked -= amount;
         stakedBalance[msg.sender] -= amount;
+        // If this empties the vault mid-stream, park the un-emitted remainder.
+        // Otherwise `rewardPerToken` stops accruing (totalStaked == 0) and those
+        // emissions would be permanently stranded — or, if the vault refills
+        // before `periodFinish`, silently raked by a just-in-time restaker
+        // resuming the stale stream. Parking folds them into the next stream.
+        if (totalStaked == 0 && block.timestamp < periodFinish) {
+            pendingUndistributed += (periodFinish - block.timestamp) * rewardRate;
+            rewardRate = 0;
+            periodFinish = block.timestamp;
+        }
         robin.safeTransfer(msg.sender, amount);
         emit Withdrawn(msg.sender, amount);
     }
@@ -207,12 +217,23 @@ contract RobinStaking is Ownable2Step, ReentrancyGuard, IRobinStaking {
         }
         pendingUndistributed = 0;
 
+        uint256 newRate;
         if (block.timestamp >= periodFinish) {
-            rewardRate = amount / rewardsDuration;
+            newRate = amount / rewardsDuration;
         } else {
             uint256 leftover = (periodFinish - block.timestamp) * rewardRate;
-            rewardRate = (amount + leftover) / rewardsDuration;
+            newRate = (amount + leftover) / rewardsDuration;
         }
+
+        // Amount too small to emit a non-zero per-second rate (would floor to 0
+        // and strand the funds while advancing periodFinish). Re-park it and
+        // leave any active stream untouched; it folds into the next notify.
+        if (newRate == 0) {
+            pendingUndistributed = amount;
+            emit RewardNotified(0, rewardRate, periodFinish);
+            return;
+        }
+        rewardRate = newRate;
 
         // Solvency: the stream must be fully funded by ETH actually held (net
         // of parked funds, which are reserved for a future stream, and of the
