@@ -469,11 +469,11 @@ function roContracts(){
 const shortAddr = a => a ? a.slice(0,6)+'…'+a.slice(-4) : '—';
 const isAddr = a => /^0x[0-9a-fA-F]{40}$/.test((a||'').trim());
 const eq = (a,b) => a && b && a.toLowerCase()===b.toLowerCase();
-function fmtEth(wei){ const n=Number(ethers.formatEther(wei)); if(n===0) return '0 Ξ'; if(n<1e-5) return n.toExponential(2)+' Ξ'; return n.toFixed(n<1?5:4).replace(/0+$/,'').replace(/\.$/,'')+' Ξ'; }
-function usdOf(wei){ return Number(ethers.formatEther(wei))*ETH_USD; }
+function fmtEth(wei){ if(wei===undefined||wei===null) return '—'; const n=Number(ethers.formatEther(wei)); if(n===0) return '0 Ξ'; if(n<1e-5) return n.toExponential(2)+' Ξ'; return n.toFixed(n<1?5:4).replace(/0+$/,'').replace(/\.$/,'')+' Ξ'; }
+function usdOf(wei){ if(wei===undefined||wei===null) return NaN; return Number(ethers.formatEther(wei))*ETH_USD; }
 function fmtUsd(v){ if(!isFinite(v)) return ''; if(v>=1000) return '$'+Math.round(v).toLocaleString('en-US'); if(v>=1) return '$'+v.toFixed(2); return '$'+v.toFixed(4); }
 const ADDR0 = '0x0000000000000000000000000000000000000000';
-function addrOrNone(a){ return (!a || a===ADDR0) ? 'not set' : a; }
+function addrOrNone(a){ if(a===undefined||a===null) return '—'; return a===ADDR0 ? 'not set' : a; }
 
 let _tid=null;
 function toast(msg,kind){ const t=document.getElementById('toast'); t.textContent=msg; t.className='show'+(kind?' '+kind:''); clearTimeout(_tid); _tid=setTimeout(()=>t.className='',3400); }
@@ -551,58 +551,60 @@ function applyGate(){
 async function refreshAll(){
   roContracts();
   setNet('','Loading…');
-  try{
-    const [fo, fpend, beta, fee, cp, dexf, weth,
-           ro, rpend, treas, vault, harv, router, ppend, plife, towed, tokLen] = await Promise.all([
-      facR.owner(), facR.pendingOwner(), facR.betaMode(), facR.deployFee(), facR.curveParams(), facR.dexFactory(), facR.weth(),
-      rtrR.owner(), rtrR.pendingOwner(), rtrR.treasury(), rtrR.stakingVault(), rtrR.harvester(), rtrR.dexRouter(),
-      rtrR.protocolPending(), rtrR.protocolEarnedLifetime(), rtrR.totalCreatorOwed(), facR.allTokensLength(),
-    ]);
-    ownerAddr = fo;
-    isOwner = wallet && (eq(wallet,fo)||eq(wallet,ro));   // owner of either contract counts as admin
-    setNet('ok','Robinhood Chain · 4663');
-
-    // stat grid
-    setV('s-rev', fmtEth(plife)); setV('s-rev-usd', fmtUsd(usdOf(plife)));
-    setV('s-pend', fmtEth(ppend)); setV('s-pend-usd', fmtUsd(usdOf(ppend)));
-    setV('s-owed', fmtEth(towed)); setV('s-owed-usd', fmtUsd(usdOf(towed)));
-    setV('s-tok', tokLen.toString());
-    setV('s-beta', beta?'ON':'OFF');
-    setV('s-fee', fmtEth(fee)); setV('s-fee-usd', fmtUsd(usdOf(fee)));
-    setV('s-cap', fmtEth(cp.graduationEth)); setV('s-cap-usd', fmtUsd(usdOf(cp.graduationEth)));
-    setV('s-eth', '$'+ETH_USD.toLocaleString('en-US',{maximumFractionDigits:2}));
-
-    // beta card
-    const bp=document.getElementById('betaPill'); bp.textContent=beta?'ON':'OFF'; bp.className='pill '+(beta?'red':'off');
-    setT('c-beta', beta?'ON — allowlist only':'OFF — permissionless (public)');
-
-    // economics
-    setT('c-fee', fmtEth(fee)+' · '+fmtUsd(usdOf(fee)));
-    setT('c-cap', fmtEth(cp.graduationEth)+' · '+fmtUsd(usdOf(cp.graduationEth)));
-    setT('c-veth', cp.virtualEth.toString()); setT('c-vtok', cp.virtualToken.toString());
-
-    // treasury
-    setT('c-treas', addrOrNone(treas)); setT('c-vault', addrOrNone(vault));
-    setT('c-harv', harv===ADDR0?'not set (harvest is permissionless)':harv);
-    setT('c-router', addrOrNone(router));
-
-    // dex
-    setT('c-dexf', dexf); setT('c-weth', weth);
-
-    // ownership
-    setT('c-fowner', fo); setT('c-fpending', fpend===ADDR0?'none':fpend);
-    setT('c-rowner', ro); setT('c-rpending', rpend===ADDR0?'none':rpend);
-
-    // footer
-    setT('f-addr', shortAddr(FACTORY_ADDR)); setT('r-addr', shortAddr(FEEROUTER_ADDR));
-
-    applyGate();
-    loadTokens(Number(tokLen));
-  }catch(e){
-    setNet('bad','RPC error');
-    logLine('Refresh failed: '+errMsg(e),'err');
-    toast('Could not read chain — RPC may be down','err');
+  // allSettled, NOT all: one flaky read must not blank the whole console (and the
+  // read-only view is meant to render before a wallet is even connected).
+  const P = await Promise.allSettled([
+    facR.owner(), facR.pendingOwner(), facR.betaMode(), facR.deployFee(), facR.curveParams(), facR.dexFactory(), facR.weth(),
+    rtrR.owner(), rtrR.pendingOwner(), rtrR.treasury(), rtrR.stakingVault(), rtrR.harvester(), rtrR.dexRouter(),
+    rtrR.protocolPending(), rtrR.protocolEarnedLifetime(), rtrR.totalCreatorOwed(), facR.allTokensLength(),
+  ]);
+  const v = P.map(x=> x.status==='fulfilled' ? x.value : undefined);
+  const [fo, fpend, beta, fee, cp, dexf, weth, ro, rpend, treas, vault, harv, router, ppend, plife, towed, tokLen] = v;
+  const anyFail = P.some(x=>x.status==='rejected');
+  if(fo===undefined && ro===undefined){                 // total failure — nothing to show
+    setNet('bad','RPC error'); logLine('Refresh failed — RPC unreachable','err'); toast('Could not read chain — RPC may be down','err');
+    applyGate(); return;
   }
+  if(fo!==undefined) ownerAddr = fo;
+  isOwner = !!(wallet && ((fo!==undefined&&eq(wallet,fo))||(ro!==undefined&&eq(wallet,ro))));   // owner of either contract counts
+  setNet(anyFail?'warn':'ok', anyFail?'Robinhood Chain · partial read':'Robinhood Chain · 4663');
+
+  // stat grid (each value independently guarded — a missing read shows "—")
+  setV('s-rev', fmtEth(plife)); setV('s-rev-usd', fmtUsd(usdOf(plife)));
+  setV('s-pend', fmtEth(ppend)); setV('s-pend-usd', fmtUsd(usdOf(ppend)));
+  setV('s-owed', fmtEth(towed)); setV('s-owed-usd', fmtUsd(usdOf(towed)));
+  setV('s-tok', tokLen!==undefined ? tokLen.toString() : '—');
+  setV('s-beta', beta===undefined ? '—' : (beta?'ON':'OFF'));
+  setV('s-fee', fmtEth(fee)); setV('s-fee-usd', fmtUsd(usdOf(fee)));
+  setV('s-cap', cp ? fmtEth(cp.graduationEth) : '—'); setV('s-cap-usd', cp ? fmtUsd(usdOf(cp.graduationEth)) : '');
+  setV('s-eth', '$'+ETH_USD.toLocaleString('en-US',{maximumFractionDigits:2}));
+
+  // beta card
+  const bp=document.getElementById('betaPill'); bp.textContent = beta===undefined?'—':(beta?'ON':'OFF'); bp.className='pill '+(beta===undefined?'off':(beta?'red':'off'));
+  setT('c-beta', beta===undefined ? '—' : (beta?'ON — allowlist only':'OFF — permissionless (public)'));
+
+  // economics
+  setT('c-fee', fmtEth(fee)+' · '+fmtUsd(usdOf(fee)));
+  setT('c-cap', cp ? (fmtEth(cp.graduationEth)+' · '+fmtUsd(usdOf(cp.graduationEth))) : '—');
+  setT('c-veth', cp ? cp.virtualEth.toString() : '—'); setT('c-vtok', cp ? cp.virtualToken.toString() : '—');
+
+  // treasury
+  setT('c-treas', addrOrNone(treas)); setT('c-vault', addrOrNone(vault));
+  setT('c-harv', harv===undefined ? '—' : (harv===ADDR0?'not set (harvest is permissionless)':harv));
+  setT('c-router', addrOrNone(router));
+
+  // dex
+  setT('c-dexf', dexf===undefined?'—':dexf); setT('c-weth', weth===undefined?'—':weth);
+
+  // ownership
+  setT('c-fowner', fo===undefined?'—':fo); setT('c-fpending', fpend===undefined?'—':(fpend===ADDR0?'none':fpend));
+  setT('c-rowner', ro===undefined?'—':ro); setT('c-rpending', rpend===undefined?'—':(rpend===ADDR0?'none':rpend));
+
+  // footer
+  setT('f-addr', shortAddr(FACTORY_ADDR)); setT('r-addr', shortAddr(FEEROUTER_ADDR));
+
+  applyGate();
+  if(tokLen!==undefined) loadTokens(Number(tokLen));
 }
 function setV(id,v){ const e=document.getElementById(id); if(e) e.textContent=v; }
 function setT(id,v){ const e=document.getElementById(id); if(e) e.textContent=v; }
@@ -659,17 +661,25 @@ function requireOwner(){
    confirm the network — so a mid-session key rotation or a wallet that silently
    switched chains is caught here, not just on-chain. An RPC hiccup falls back to
    cached state (the tx would still revert on-chain if we were wrong). */
-async function send(label, fn){
-  try{
-    if(provider){
+async function send(label, fn, opts){
+  // Network guard — in its OWN try so a wallet hiccup here can never skip the
+  // independent owner re-check below.
+  if(provider){
+    try{
       const net = await provider.getNetwork();
       if(Number(net.chainId) !== 4663){ toast('Wrong network — switch to Robinhood Chain (4663)','err'); logLine(label+' — blocked: wrong network','err'); return false; }
-    }
+    }catch(_){}
+  }
+  // Live owner re-check (catches a mid-session key rotation). SKIPPED on the
+  // accept path: by Ownable2Step, the pending owner calling acceptOwnership() is
+  // by definition NOT yet the owner — re-checking would deadlock the very
+  // key-rotation-to-multisig flow this console is meant to perform.
+  if(!(opts && opts.skipOwnerCheck)){
     try{
       const [fo,ro] = await Promise.all([facR.owner(), rtrR.owner()]);
       if(!eq(wallet,fo) && !eq(wallet,ro)){ isOwner=false; isProven=false; ownerAddr=fo; applyGate(); toast('Owner changed — you are no longer an owner','err'); logLine(label+' — blocked: not owner','err'); return false; }
     }catch(_){ if(!isOwner){ toast('Cannot verify owner right now','err'); return false; } }
-  }catch(_){}
+  }
   try{
     logLine(label+' — sending…');
     const tx = await fn();
@@ -765,7 +775,15 @@ async function doTransfer(which){
 async function doAccept(which){
   if(!wallet){ toast('Connect your wallet first','err'); return; }
   const c = which==='factory'?facW:rtrW;
-  await send('Accept '+which+' ownership', ()=>c.acceptOwnership());
+  // Pre-check we are the pending owner so the button gives a clear message
+  // instead of an opaque revert; the tx itself still enforces this on-chain.
+  try{
+    const cr = which==='factory'?facR:rtrR;
+    const pend = await cr.pendingOwner();
+    if(!eq(pend, wallet)){ toast('You are not the pending '+which+' owner','err'); logLine('Accept '+which+' — not pending owner ('+shortAddr(pend)+')','err'); return; }
+  }catch(_){}
+  // skipOwnerCheck: the pending owner is not yet the owner — see send().
+  await send('Accept '+which+' ownership', ()=>c.acceptOwnership(), {skipOwnerCheck:true});
 }
 
 /* ---- ETH price ---- */

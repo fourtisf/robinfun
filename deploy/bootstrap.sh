@@ -98,8 +98,11 @@ server {
     location = /index.html {
         add_header Cache-Control "no-cache";
     }
+    # Force the console through the hardened /admin location — the raw /admin.html
+    # URL would otherwise be served WITHOUT the CSP / X-Frame-Options headers set
+    # on /admin (nginx does not merge add_header across levels).
     location = /admin.html {
-        add_header Cache-Control "no-cache";
+        return 301 /admin;
     }
     location ~* \.(?:css|js|png|jpg|jpeg|gif|svg|ico|webp|woff2?)\$ {
         expires 7d;
