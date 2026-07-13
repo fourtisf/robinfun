@@ -15,7 +15,7 @@ dimensions in parallel, and each candidate finding was cross-checked against the
 
 | ID  | Severity | Title | Status |
 |-----|----------|-------|--------|
-| M-1 | Medium   | Pre-seeded Uniswap pair breaks the "liquidity locked forever" guarantee at graduation | ⚠️ **Flagged** — needs deliberate redesign (see below) |
+| M-1 | Medium   | Pre-seeded Uniswap pair breaks the "liquidity locked forever" guarantee at graduation | ✅ **Fixed** — arb-toward-fair before deposit |
 | M-2 | Medium   | FeeRouter owner can seize creators' harvested levy tokens via `setDexRouter` re-point | ✅ **Fixed** — `setDexRouter` one-shot |
 | M-3 | Medium   | Permissionless `harvest` is sandwichable (caller-chosen `minEthOut`) | ⚙️ **Operational** — set `harvester` on mainnet |
 | M-4 | Medium   | Creator levy + 0.5% protocol fee are avoidable on any non-canonical pair | 📄 **Accepted** — inherent design limitation, documented |
@@ -28,11 +28,11 @@ dimensions in parallel, and each candidate finding was cross-checked against the
 No **Critical** (attacker-drains-user-funds-permissionlessly) finding survived verification. The two
 findings that finders initially rated *High* were **overstated** and are re-classified below.
 
-**Remediation (2026-07-13):** 6 of 9 fixed in code with regression tests; full suite **152/152 green**
-(144 prior + 8 new). The three not code-changed are M-1 (deliberate redesign — a rushed patch to the
-graduation path is riskier than the bounded, self-costly griefing it addresses), M-3 (operational: set a
-keeper), and M-4/L-2 (inherent to the fee-on-transfer-on-one-pair model). **Contracts changed → any
-deployment (incl. the current testnet factory) must be redeployed from this revision.**
+**Remediation (2026-07-13):** 7 of 9 fixed in code with regression tests; full suite **154/154 green**
+(144 prior + 10 new), incl. a 5,000-run fuzz proving graduation never bricks or strands funds for any
+pre-seed. The two not code-changed are M-3 (operational: set a keeper) and M-4/L-2 (inherent to the
+fee-on-transfer-on-one-pair model). **Contracts changed → any deployment (incl. the current testnet
+factory) must be redeployed from this revision.**
 
 ---
 
@@ -58,10 +58,17 @@ pays for the attack — but it degrades a targeted launch.
 graduation (tokens stuck on the curve forever). The current code chose "graduate anyway." A proper fix needs
 care.
 
-**Recommendation:** require the pair to be freshly created by the curve at graduation (create it deterministically
-and revert if a non-empty pool already exists *with LP minted by someone else*), or enforce a minimum
-fraction of `graduationEth` actually locked as LP before allowing the ETH-to-protocol fallback, with a
-documented, bounded griefing cost. Flag this explicitly for the external auditor.
+**Resolution (implemented):** `BondingCurve._graduate` now, in the pre-seeded branch, calls
+`arbTowardFair` — a best-effort, try/catch-wrapped market swap that moves the mispriced pool toward the
+curve's graduation price *before* depositing. Because it trades at market against a pool the attacker
+mispriced *in the curve's favour*, it can only add value (the curve is levy-exempt so it's untaxed), and
+the swap output is computed with the exact fee formula so the pair's K-check never reverts; any failure
+falls back to the safe deposit-at-prevailing path, so graduation can never brick. After the arb the pool
+sits at ~fair price, so the deposit locks the full graduation liquidity as burned LP. The seeder cannot
+profit — arbitraging one's own mispriced pool to fair is zero-sum-at-best (AM-GM: pre-dilution LP value
+`2·√(a·b) ≤ a+b` = their cost, and the curve's deposit dilutes them further). Verified by regression tests
+(the extreme low- and high-price seeds) and a 5,000-run fuzz (never bricks/strands). **The external
+auditor should still scrutinise this swap-in-graduation path specifically.**
 
 ### M-2 — FeeRouter owner can seize harvested creator levy
 
@@ -171,17 +178,13 @@ truncates the inner factor before multiplying, short-changing the creator by a f
   (owner rug path on creator fees) in particular should be fixed before any mainnet exposure.
 
 **Required before mainnet, in order:**
-1. ✅ **Done (2026-07-13):** fixed M-2, M-5, L-1, L-3, I-1 in code with regression tests; suite 152/152 green.
-2. ⚠️ **M-1 — resolve deliberately.** The complete fix (arbitrage the pre-seeded pool to the graduation
-   price before adding liquidity, or use a protocol-owned pair) is a real change to the most critical
-   function and adds new external-call surface (`pair.swap`, not currently used). It must be designed and
-   audited on its own, NOT rushed — the current behaviour is a *bounded, self-costly griefing* that never
-   sends funds to an attacker (unpaired ETH routes to the protocol), so leaving it known-and-documented is
-   safer than a hasty rewrite. Decide with the external auditor.
-3. Freeze the contracts (tag a release candidate).
-4. **Independent third-party audit** (Sherlock / Code4rena / Cantina / Spearbit). This internal review is the
-   input to that, not a replacement.
-5. Confirm Robinhood Chain **mainnet** is public and has a canonical Uniswap-v2 deployment (M-4/graduation depend on it).
-6. Owner → multisig; **set `harvester`** (closes M-3); operational runbook; redeploy the fixed contracts.
+1. ✅ **Done (2026-07-13):** fixed M-1, M-2, M-5, L-1, L-3, I-1 in code with regression tests + a
+   5,000-run graduation fuzz; suite **154/154 green**.
+2. Freeze the contracts (tag a release candidate).
+3. **Independent third-party audit** (Sherlock / Code4rena / Cantina / Spearbit). This internal review is the
+   input to that, not a replacement — the new swap-in-graduation path (M-1) especially warrants their eyes.
+4. Confirm Robinhood Chain **mainnet** is public and has a canonical Uniswap-v2 deployment (M-4/graduation depend on it).
+5. Owner → multisig; **set `harvester`** (closes M-3); operational runbook; redeploy the fixed contracts.
 
-Only after 1–6 does mainnet deployment become responsible. We are at step 1→2.
+Only after 1–5 does mainnet deployment become responsible. We are at step 1→2 (all code findings resolved;
+external audit is the gate that remains).

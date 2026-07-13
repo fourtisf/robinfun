@@ -6,6 +6,7 @@ import {RobinfunFactory} from "../../src/RobinfunFactory.sol";
 import {RobinfunToken} from "../../src/RobinfunToken.sol";
 import {BondingCurve} from "../../src/BondingCurve.sol";
 import {FeeRouter} from "../../src/FeeRouter.sol";
+import {MockUniswapV2Pair} from "../mocks/MockUniswapV2.sol";
 
 /// @dev Regression tests for the 2026-07-13 internal security-audit fixes
 ///      (contracts/audit/INTERNAL_AUDIT.md): M-2, M-5/I-1, L-1, L-3.
@@ -59,6 +60,84 @@ contract AuditFixesTest is BaseSetup {
             vanitySalt: bytes32(0),
             maxDeployFee: 0
         });
+    }
+
+    // ================================================================ M-1
+    /// @dev The griefing attack: pre-seed the canonical pair at an absurdly low
+    ///      token price so the naive deposit-at-prevailing would lock almost
+    ///      nothing and divert the graduation ETH to the protocol. The
+    ///      arb-toward-fair fix must still lock the bulk of graduationEth as
+    ///      burned LP despite the seed.
+    function test_M1_preSeededGriefing_stillLocksLiquidity() public {
+        (RobinfunToken token, BondingCurve curve) = createToken(0, 0);
+
+        // Griefer buys tokens cheaply from the young curve to seed with.
+        vm.prank(bob);
+        curve.buy{value: 0.2 ether}(0, block.timestamp);
+        uint256 seed = token.balanceOf(bob);
+        assertGt(seed, 0);
+
+        // Griefer creates the canonical pair and seeds it at an absurd low token
+        // price: all their tokens against a dust WETH amount.
+        address pair = dexFactory.createPair(address(token), address(weth));
+        vm.startPrank(bob);
+        token.transfer(pair, seed);
+        weth.deposit{value: 1000 wei}();
+        weth.transfer(pair, 1000 wei);
+        MockUniswapV2Pair(pair).mint(bob); // griefer holds the seed LP
+        vm.stopPrank();
+
+        // Someone graduates the curve.
+        vm.prank(alice);
+        curve.buy{value: 5 ether}(0, block.timestamp);
+        assertTrue(curve.graduated(), "graduated");
+        assertEq(token.ammPair(), pair, "graduated into the pre-seeded pair");
+
+        // The fix arbitraged the seed toward fair and locked real liquidity.
+        (uint112 r0, uint112 r1,) = MockUniswapV2Pair(pair).getReserves();
+        uint256 wethReserve = address(token) < address(weth) ? uint256(r1) : uint256(r0);
+        assertGe(wethReserve, 2 ether, "graduation locked real liquidity despite the pre-seed");
+
+        // The griefer's seed LP is now negligible next to the burned (DEAD) LP.
+        uint256 deadLp = MockUniswapV2Pair(pair).balanceOf(DEAD);
+        uint256 bobLp = MockUniswapV2Pair(pair).balanceOf(bob);
+        assertGt(deadLp, bobLp * 1000, "burned LP dominates the griefer's seed");
+    }
+
+    /// @dev Fuzz safety net for the graduation arb: whatever the pre-seed
+    ///      (token amount × WETH side), graduation must always complete and
+    ///      never strand ETH or tokens in the curve. The arb is best-effort and
+    ///      try/catch-wrapped, so it can only help or no-op — never brick.
+    function testFuzz_M1_graduationNeverBricksOrStrands(uint96 rawBuy, uint96 rawSeedWeth) public {
+        (RobinfunToken token, BondingCurve curve) = createToken(0, 0);
+        address seeder = makeAddr("seeder");
+        vm.deal(seeder, 1_000 ether);
+        uint256 curveBuy = bound(uint256(rawBuy), 0.01 ether, 2 ether);
+        uint256 seedWeth = bound(uint256(rawSeedWeth), 1000 wei, 50 ether);
+
+        vm.startPrank(seeder);
+        curve.buy{value: curveBuy}(0, block.timestamp);
+        uint256 seedTokens = token.balanceOf(seeder);
+        if (seedTokens == 0) {
+            vm.stopPrank();
+            return;
+        }
+        address pair = dexFactory.createPair(address(token), address(weth));
+        token.transfer(pair, seedTokens);
+        weth.deposit{value: seedWeth}();
+        weth.transfer(pair, seedWeth);
+        try MockUniswapV2Pair(pair).mint(seeder) returns (uint256) {} catch {
+            vm.stopPrank();
+            return; // seed too small to mint LP; not the case under test
+        }
+        vm.stopPrank();
+
+        vm.prank(alice);
+        curve.buy{value: 10 ether}(0, block.timestamp);
+
+        assertTrue(curve.graduated(), "graduates for any seed");
+        assertEq(address(curve).balance, 0, "no stranded ETH");
+        assertEq(token.balanceOf(address(curve)), 0, "no stranded tokens");
     }
 
     // ================================================================ M-2

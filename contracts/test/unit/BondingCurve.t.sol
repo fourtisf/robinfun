@@ -292,7 +292,7 @@ contract BondingCurveTest is BaseSetup {
         vm.stopPrank();
         assertGt(attackerLp, 0, "attacker seeded real LP");
 
-        uint256 protocolBefore = feeRouter.protocolPending();
+        uint256 attackerSpent = 0.5 ether + 0.01 ether; // curve buy + seed WETH
 
         // Graduate.
         vm.prank(alice);
@@ -306,17 +306,20 @@ contract BondingCurveTest is BaseSetup {
         // supply except the attacker's own pre-existing seed LP.
         assertEq(p.balanceOf(DEAD), p.totalSupply() - attackerLp, "curve LP 100% burned");
 
-        // No curve ETH leaked to the attacker. Their entire LP position redeems
-        // to far less WETH than the fair-launch liquidity (2.6 ETH): the
-        // unpairable ETH was diverted to the protocol, never socialized to them.
+        // M-1 fix: the arb corrects the mispriced seed, so graduation now LOCKS
+        // real liquidity (instead of the old griefed outcome where it was
+        // diverted to the protocol). The burned (DEAD) LP dominates the seed.
         (uint112 r0, uint112 r1,) = p.getReserves();
         uint256 wethReserve = address(token) < address(weth) ? uint256(r1) : uint256(r0);
-        uint256 attackerRedeemableWeth = (wethReserve * attackerLp) / p.totalSupply();
-        assertLt(attackerRedeemableWeth, 0.1 ether, "attacker cannot pull the curve's ETH");
+        assertGe(wethReserve, 2 ether, "graduation locked real liquidity despite the seed");
+        assertGt(p.balanceOf(DEAD), attackerLp, "burned LP dominates the seed");
 
-        // The bulk of graduation ETH went to the protocol (not the attacker),
-        // and the curve is fully drained.
-        assertGt(feeRouter.protocolPending() - protocolBefore, 2 ether, "unpairable ETH to protocol");
+        // The attacker STILL cannot profit: arbitraging their own mispriced pool
+        // to fair is zero-sum-at-best for them (AM-GM). Their LP redeems — both
+        // sides, valued at the pool price — to less than they spent.
+        uint256 redeemableValue = (2 * wethReserve * attackerLp) / p.totalSupply();
+        assertLt(redeemableValue, attackerSpent, "seeder cannot profit from the arb");
+
         assertEq(address(curve).balance, 0, "no stranded ETH");
         assertEq(token.balanceOf(address(curve)), 0, "no stranded tokens");
     }
@@ -350,13 +353,20 @@ contract BondingCurveTest is BaseSetup {
         curve.buy{value: 5 ether}(0, block.timestamp);
         assertTrue(curve.graduated(), "token graduates despite the griefing seed");
 
-        // The curve is fully drained and all graduation ETH went to the
-        // protocol (plus the final buy's own 1% curve fee), never the attacker.
+        // The curve is fully drained; graduation ETH (plus, with the M-1 arb,
+        // the griefer's own over-priced 40-ETH seed swept in at market) is
+        // locked/routed to the protocol — never recoverable by the attacker.
         assertEq(address(curve).balance, 0, "no stranded ETH");
         assertEq(token.balanceOf(address(curve)), 0, "no stranded tokens");
-        uint256 protocolGain = feeRouter.protocolPending() - protocolBefore;
-        assertGe(protocolGain, GRADUATION_ETH, "all graduation ETH to protocol");
-        assertLt(protocolGain, GRADUATION_ETH + 0.1 ether, "only grad ETH + trade fees");
+        assertGe(feeRouter.protocolPending() - protocolBefore, GRADUATION_ETH, "at least all graduation ETH accounted");
+
+        // The griefer's mispriced 40-ETH seed is not recoverable via their LP.
+        MockUniswapV2Pair p = MockUniswapV2Pair(pair);
+        (uint112 r0, uint112 r1,) = p.getReserves();
+        uint256 wethReserve = address(token) < address(weth) ? uint256(r1) : uint256(r0);
+        uint256 attackerLp = p.balanceOf(attacker);
+        uint256 redeemable = p.totalSupply() == 0 ? 0 : (2 * wethReserve * attackerLp) / p.totalSupply();
+        assertLt(redeemable, 40 ether, "griefer cannot recover their seed");
     }
 
     /// @dev Regression: a buy sized one wei below the exact gross needed to

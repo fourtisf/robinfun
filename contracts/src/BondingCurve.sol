@@ -124,6 +124,7 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
     error ZeroAddress();
     error SlippageExceeded();
     error EthTransferFailed();
+    error NotSelf();
 
     constructor() {
         _disableInitializers();
@@ -415,12 +416,28 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
             IUniswapV2Pair(pair).mint(DEAD);
             ethDeposited = ethToLp;
         } else {
-            // Attacker pre-seeded real LP. Deposit at the prevailing pool ratio
-            // so 100% of the curve's contribution is captured as burned LP and
-            // nothing is socialized to the attacker. If the ratio is so extreme
-            // that the deposit would mint zero LP (a griefing DoS), reclaim it
-            // and fall through — the ETH below is routed to the protocol, not
-            // the attacker, and the token still graduates.
+            // Attacker pre-seeded real LP. Left alone, an extreme seed ratio
+            // would let the deposit-at-prevailing below lock almost nothing and
+            // divert the graduation ETH to the protocol (M-1 griefing). First
+            // arbitrage the pool toward the graduation price — a market trade
+            // against a pool the attacker mispriced in our favour, so it only
+            // adds value — then deposit at the corrected ratio. Best-effort and
+            // self-contained: any failure falls back to the safe path below, so
+            // graduation can never brick.
+            try this.arbTowardFair(pair, tokenAddr, wethAddr, ethToLp) returns (uint256 ethAfterArb) {
+                ethToLp = ethAfterArb;
+                (tokenReserve, wethReserve) = _pairReserves(pair, tokenAddr, wethAddr);
+                inventory = token.balanceOf(address(this));
+            } catch {
+                // keep pre-arb reserves / inventory / ethToLp
+            }
+
+            // Deposit at the (now corrected) prevailing ratio so 100% of the
+            // curve's contribution is captured as burned LP and nothing is
+            // socialized to the attacker. If the ratio is still so extreme that
+            // the deposit would mint zero LP, reclaim it and fall through — the
+            // ETH is routed to the protocol, not the attacker, and the token
+            // still graduates.
             tokensToLp = (ethToLp * tokenReserve) / wethReserve;
             uint256 ethIn = ethToLp;
             if (tokensToLp > inventory) {
@@ -457,6 +474,73 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
         if (ethLeft != 0) feeRouter.collectCurveFee{value: ethLeft}(tokenAddr);
 
         emit Graduated(tokenAddr, pair, ethDeposited, tokensToLp, leftover);
+    }
+
+    /// @notice Arbitrages a pre-seeded graduation pair toward the curve's
+    ///         graduation price so the subsequent LP deposit locks real
+    ///         liquidity instead of a griefing dust pool (audit finding M-1).
+    /// @dev Self-only: reachable in practice only from `_graduate` via
+    ///      `this.arbTowardFair(...)`, wrapped in try/catch so any revert falls
+    ///      back to the safe deposit-at-prevailing path. The swap is a market
+    ///      trade against a pool an attacker mispriced in the curve's favour, so
+    ///      it can only add value; the curve is levy-exempt so it is untaxed.
+    /// @return ethRemaining ETH left for the LP deposit after the arb.
+    function arbTowardFair(address pair, address tokenAddr, address wethAddr, uint256 ethAvailable)
+        external
+        returns (uint256 ethRemaining)
+    {
+        if (msg.sender != address(this)) revert NotSelf();
+        (uint256 rt, uint256 rw) = _pairReserves(pair, tokenAddr, wethAddr);
+        ethRemaining = ethAvailable;
+        if (rt == 0 || rw == 0) return ethRemaining;
+
+        uint256 vE = virtualEthReserve;
+        uint256 vT = virtualTokenReserve;
+        // Pool price (rw/rt) vs graduation price (vE/vT): compare rw*vT to rt*vE.
+        uint256 poolSide = rw * vT;
+        uint256 fairSide = rt * vE;
+
+        if (poolSide < fairSide) {
+            // Pool underprices the token → buy tokens with WETH to raise price.
+            // Fee-free target weth reserve: sqrt(rt*rw*vE/vT). The 0.3% swap fee
+            // makes the actual move slightly undershoot fair, which is safe.
+            uint256 targetRw = Math.sqrt(Math.mulDiv(rt * rw, vE, vT));
+            if (targetRw <= rw) return ethRemaining;
+            uint256 wethIn = targetRw - rw;
+            if (wethIn > ethAvailable) wethIn = ethAvailable;
+            if (wethIn == 0) return ethRemaining;
+            uint256 tokOut = (wethIn * 997 * rt) / (rw * 1000 + wethIn * 997);
+            if (tokOut == 0) return ethRemaining;
+            weth.deposit{value: wethIn}();
+            IERC20(wethAddr).safeTransfer(pair, wethIn);
+            _swapExactOut(pair, tokenAddr, wethAddr, tokOut, true);
+            ethRemaining = ethAvailable - wethIn;
+        } else if (poolSide > fairSide) {
+            // Pool overprices the token → sell tokens for WETH to lower price.
+            uint256 targetRt = Math.sqrt(Math.mulDiv(rt * rw, vT, vE));
+            if (targetRt <= rt) return ethRemaining;
+            uint256 tokIn = targetRt - rt;
+            uint256 inv = token.balanceOf(address(this));
+            if (tokIn > inv) tokIn = inv;
+            if (tokIn == 0) return ethRemaining;
+            uint256 wethOut = (tokIn * 997 * rw) / (rt * 1000 + tokIn * 997);
+            if (wethOut == 0) return ethRemaining;
+            IERC20(tokenAddr).safeTransfer(pair, tokIn);
+            _swapExactOut(pair, tokenAddr, wethAddr, wethOut, false);
+            weth.withdraw(wethOut);
+            ethRemaining = ethAvailable + wethOut;
+        }
+    }
+
+    /// @dev Single-sided `pair.swap` (input must already be transferred in).
+    ///      `wantToken` picks which asset flows out to the curve.
+    function _swapExactOut(address pair, address tokenAddr, address wethAddr, uint256 amountOut, bool wantToken)
+        private
+    {
+        address token0 = tokenAddr < wethAddr ? tokenAddr : wethAddr;
+        address outAsset = wantToken ? tokenAddr : wethAddr;
+        (uint256 a0, uint256 a1) = outAsset == token0 ? (amountOut, uint256(0)) : (uint256(0), amountOut);
+        IUniswapV2Pair(pair).swap(a0, a1, address(this), "");
     }
 
     /// @dev Reads a pair's reserves in (token, weth) order.
