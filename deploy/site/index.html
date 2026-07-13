@@ -351,6 +351,11 @@ body.light .stake-orbit text{fill:#3C9A1B}
 .stamp.zero::before{background:var(--cream-mute);box-shadow:none}
 .stamp.hot{color:#FFC7BE;border-color:rgba(255,91,74,.5);background:var(--seal-dim)}
 .stamp.hot::before{background:var(--seal);box-shadow:0 0 7px var(--seal)}
+.stamp.bond{color:#FFD98A;border-color:rgba(255,193,86,.55);background:rgba(255,193,86,.09)}
+.stamp.bond::before{background:#FFC156;box-shadow:0 0 7px #FFC156;animation:bondpulse 1.4s ease-in-out infinite}
+@keyframes bondpulse{0%,100%{opacity:1}50%{opacity:.35}}
+.stamp.grad{color:#9DEE6E;border-color:rgba(120,220,80,.55);background:rgba(120,220,80,.11)}
+.stamp.grad::before{background:#9DEE6E;box-shadow:0 0 7px #9DEE6E}
 /* curve progress */
 .curve{margin-bottom:9px}
 .curve-bar{height:5px;border-radius:99px;background:var(--ink-2);border:1px solid var(--rule);overflow:hidden}
@@ -1087,7 +1092,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
     <div class="tok-head">
       <div class="tlogo lg" id="tk-logo">🪙</div>
       <div class="tok-title">
-        <h2><span id="tk-name">Token</span> <span class="tk" id="tk-ticker">$TKN</span> <span id="tk-stamp"></span></h2>
+        <h2><span id="tk-name">Token</span> <span class="tk" id="tk-ticker">$TKN</span> <span id="tk-stamp"></span> <span id="tk-bond"></span></h2>
         <div class="tok-sub">
           <span class="addr-chip" id="tk-ca" onclick="copyCA()" title="Copy contract address">0x···<span style="opacity:.6">⧉</span></span>
           <span>by <span class="gold" id="tk-creator">0x···</span></span>
@@ -1942,6 +1947,12 @@ function stampHtml(t, small){
   const cls = hot ? 'stamp hot' : 'stamp';
   return '<span class="'+cls+'" title="Buy '+t.buyTax+'% / Sell '+t.sellTax+'% — routed to the creator wallet">'+t.buyTax+'/'+t.sellTax+' FEE</span>';
 }
+/* Prominent bonding/graduation status badge shown next to the ticker. */
+function bondBadge(t){
+  if(t.graduated) return '<span class="stamp grad" title="Graduated — trading on Uniswap, LP burned">◆ GRADUATED</span>';
+  const prog = (realToken(t) && t.gradTargetEth) ? Math.min(100,(t.reserveEth||0)/t.gradTargetEth*100) : Math.min(100,(t.mcap||0)/GRAD_CAP*100);
+  return '<span class="stamp bond" title="On the bonding curve — graduates to Uniswap at 100%">◈ BONDING · '+prog.toFixed(0)+'%</span>';
+}
 function cardHtml(t){
   const prog = Math.min(100, Math.max(0,(t.mcap-0)/(GRAD_CAP)*100));
   const chgCls = t.chg24>=0?'up':'down';
@@ -2207,6 +2218,7 @@ function renderToken(fresh){
   document.getElementById('tk-name').textContent = t.name;
   document.getElementById('tk-ticker').textContent = '$'+t.ticker;
   document.getElementById('tk-stamp').innerHTML = stampHtml(t);
+  { const bb = document.getElementById('tk-bond'); if(bb) bb.innerHTML = bondBadge(t); }
   document.getElementById('tk-ca').innerHTML = (realToken(t)? t.ca.slice(0,6)+'…'+t.ca.slice(-4) : '0x'+t.id.padEnd(4,'f')+'…4f2')+' <span style="opacity:.6">⧉</span>';
   document.getElementById('tk-creator').textContent = t.mine? 'you' : t.creator;
   document.getElementById('tk-age').textContent = '· launched '+ago(t.created)+' ago';
@@ -2600,6 +2612,7 @@ async function refreshReal(t, withTrades){
   document.getElementById('tk-status').innerHTML = t.graduated
     ? '<span class="up">◆ graduated — trading on Uniswap, LP burned</span>'
     : '<span class="gold">◈ on the bonding curve</span>';
+  { const bb = document.getElementById('tk-bond'); if(bb) bb.innerHTML = bondBadge(t); }
   const prog = t.gradTargetEth ? Math.min(100, t.reserveEth/t.gradTargetEth*100) : 0;
   const fill = document.getElementById('tk-fill');
   fill.style.width = (t.graduated?100:prog)+'%'; fill.className = 'curve-fill'+(t.graduated?' grad':'');
