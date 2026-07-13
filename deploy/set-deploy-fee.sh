@@ -44,7 +44,11 @@ if [ "$(printf '%s' "$OWNER" | tr 'A-Z' 'a-z')" != "$(printf '%s' "$CALLER" | tr
   die "Caller ${CALLER} is not the factory owner (${OWNER}). Use the treasury key."
 fi
 
-CURRENT="$(cast call "$FACTORY" 'deployFee()(uint256)' --rpc-url "$RPC")"
+# cast annotates large ints like "1000000000000000 [1e15]" — keep only the
+# leading decimal so numeric comparisons don't trip over the suffix.
+onlynum(){ printf '%s' "$1" | awk '{print $1}'; }
+
+CURRENT="$(onlynum "$(cast call "$FACTORY" 'deployFee()(uint256)' --rpc-url "$RPC")")"
 log "Factory ${FACTORY}"
 log "Current deploy fee: ${CURRENT} wei"
 log "Setting deploy fee to ${FEE_ETH} ETH (${FEE_WEI} wei)"
@@ -52,6 +56,6 @@ log "Setting deploy fee to ${FEE_ETH} ETH (${FEE_WEI} wei)"
 cast send "$FACTORY" 'setDeployFee(uint256)' "$FEE_WEI" \
   --private-key "$PRIVATE_KEY" --rpc-url "$RPC" >/dev/null
 
-NEW="$(cast call "$FACTORY" 'deployFee()(uint256)' --rpc-url "$RPC")"
-[ "$NEW" = "$FEE_WEI" ] || die "Fee did not update (got ${NEW}). Check the tx."
+NEW="$(onlynum "$(cast call "$FACTORY" 'deployFee()(uint256)' --rpc-url "$RPC")")"
+[ "$NEW" = "$FEE_WEI" ] || die "Fee did not update (got ${NEW}, wanted ${FEE_WEI}). Check the tx."
 log "Done. Live deploy fee is now ${NEW} wei (${FEE_ETH} ETH). Hard-refresh the site to see it."
