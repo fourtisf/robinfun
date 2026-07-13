@@ -180,6 +180,24 @@ ETH + trusted FeeRouter calls, all `nonReentrant` + CEI), `divide-before-multipl
 **not** flag the M-1 griefing that the manual review caught — automated tools find known patterns, not novel
 logic/economic bugs, which is why they complement but never replace human review.
 
+## Mainnet-beta guardrails (defence-in-depth for launching pre-external-audit)
+
+To bound residual risk on a private mainnet beta before a third-party audit, two owner-controlled guardrails
+were added (both removable to go fully permissionless):
+
+- **Per-token cap (0.05 ETH).** `graduationEth` is the max real ETH a curve ever holds
+  (`invariant_reserveNeverExceedsGraduation`) before graduating and burning 100% of the LP, so setting it to
+  0.05 ETH bounds the at-risk funds per token. `virtualEth` is scaled 1/52 to keep the exact production curve
+  shape. Verified: a 100-ETH whale buy is capped and refunded.
+- **Private allowlist (`betaMode`).** While on, only `betaAllowed` wallets may create tokens or trade on any
+  curve (the curve captures its factory at init and consults `tradeAllowed` in buy/sell). So no unwitting
+  third party can be exposed to a bug — only the team's own capped test funds. `setBetaMode(false)` re-opens
+  everything permissionlessly for the public launch. Verified: non-allowlisted create/buy/sell revert;
+  flipping beta off re-opens a live curve.
+
+These make a bounded, consenting-participants-only mainnet beta reasonable, but they do **not** replace the
+external audit before a public, uncapped, permissionless launch.
+
 ## Verdict & path to mainnet
 
 - **Positive:** the core value-conservation invariants hold (144 tests incl. fuzz/invariant pass), the

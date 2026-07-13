@@ -55,17 +55,28 @@ contract DeployTestnet is Script {
         MockUniswapV2Factory dexFactory = new MockUniswapV2Factory();
         MockUniswapV2Router dexRouter = new MockUniswapV2Router(address(dexFactory), address(weth));
 
-        // Protocol: deployer owns the FeeRouter during wiring; treasury (your
-        // wallet) receives protocol fees and owns the factory.
+        // Protocol: deployer owns both during wiring so it can seed the beta
+        // allowlist, then hands ownership to the treasury (two-step accept).
         FeeRouter feeRouter = new FeeRouter(deployer);
         RobinfunFactory factory =
-            new RobinfunFactory(treasury, address(feeRouter), address(dexFactory), address(weth), params, deployFee);
+            new RobinfunFactory(deployer, address(feeRouter), address(dexFactory), address(weth), params, deployFee);
 
         feeRouter.setFactory(address(factory));
         feeRouter.setDexRouter(address(dexRouter));
         feeRouter.setTreasury(treasury);
-        // Hand FeeRouter ownership to the treasury (two-step: it must accept).
+
+        // PRIVATE BETA: only allowlisted wallets may create or trade. Seed the
+        // deployer + treasury; add more test wallets via factory.setBetaAllowed
+        // after the treasury accepts ownership. Turn beta off (setBetaMode(false))
+        // to go permissionless for the public launch.
+        factory.setBetaMode(true);
+        address[] memory seed = new address[](2);
+        seed[0] = deployer;
+        seed[1] = treasury;
+        factory.setBetaAllowed(seed, true);
+
         feeRouter.transferOwnership(treasury);
+        factory.transferOwnership(treasury);
 
         vm.stopBroadcast();
 
@@ -80,6 +91,10 @@ contract DeployTestnet is Script {
         console.log("  tokenImpl  ", factory.tokenImplementation());
         console.log("  curveImpl  ", factory.curveImplementation());
         console.log("deployFee wei", deployFee);
-        console.log("NOTE: treasury must call feeRouter.acceptOwnership()");
+        console.log("graduation cap wei", graduationEth);
+        console.log("PRIVATE BETA on. Allowlisted:", deployer, treasury);
+        console.log("NOTE: treasury must call feeRouter.acceptOwnership() AND factory.acceptOwnership()");
+        console.log("Add test wallets: factory.setBetaAllowed([wallet...], true)");
+        console.log("Go public later: factory.setBetaMode(false)");
     }
 }

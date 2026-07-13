@@ -86,6 +86,11 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
     /// @notice True once the token has graduated; trading is then closed forever.
     bool public graduated;
 
+    /// @notice The factory that deployed this curve (captured at init). Consulted
+    ///         for the beta allowlist gate; when the factory's beta mode is off
+    ///         (the permanent state after the private beta) every wallet trades.
+    address public factory;
+
     // ---------------------------------------------------------------- events
 
     /// @dev `virtualEthReserve`/`virtualTokenReserve` after the trade let the
@@ -125,6 +130,7 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
     error SlippageExceeded();
     error EthTransferFailed();
     error NotSelf();
+    error NotAllowed();
 
     constructor() {
         _disableInitializers();
@@ -155,9 +161,20 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
         feeRouter = IFeeRouter(feeRouter_);
         dexFactory = IUniswapV2Factory(dexFactory_);
         weth = IWETH(weth_);
+        // The deployer of this clone is the factory; captured for the beta gate.
+        // (initialize is called atomically inside the factory's createToken, so
+        // there is no window for anyone else to be msg.sender here.)
+        factory = msg.sender;
         params = params_;
         virtualEthReserve = params_.virtualEth;
         virtualTokenReserve = params_.virtualToken;
+    }
+
+    /// @dev Beta allowlist gate: true if `who` may trade. Always true once the
+    ///      factory turns beta mode off (or if no factory is set).
+    function _tradeAllowed(address who) private view returns (bool) {
+        address f = factory;
+        return f == address(0) || IBetaGate(f).tradeAllowed(who);
     }
 
     // ---------------------------------------------------------------- trading
@@ -185,6 +202,7 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
         if (block.timestamp > deadline) revert DeadlineExpired();
         if (msg.value == 0) revert ZeroAmount();
         if (recipient == address(0)) revert ZeroAddress();
+        if (!_tradeAllowed(recipient)) revert NotAllowed();
 
         uint16 levyBps = token.buyLevyBps();
         (uint256 gross, uint256 fee, uint256 levy, uint256 net, uint256 refund) =
@@ -228,6 +246,7 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
         if (graduated) revert AlreadyGraduatedErr();
         if (block.timestamp > deadline) revert DeadlineExpired();
         if (tokensIn == 0) revert ZeroAmount();
+        if (!_tradeAllowed(msg.sender)) revert NotAllowed();
 
         uint256 gross = (virtualEthReserve * tokensIn) / (virtualTokenReserve + tokensIn);
         if (gross == 0) revert ZeroAmount();
@@ -557,4 +576,9 @@ contract BondingCurve is Initializable, ReentrancyGuard, IBondingCurve {
 interface IERC20Permit {
     function permit(address owner, address spender, uint256 value, uint256 deadline, uint8 v, bytes32 r, bytes32 s)
         external;
+}
+
+interface IBetaGate {
+    /// @notice True if `who` may create/trade — always true when beta mode is off.
+    function tradeAllowed(address who) external view returns (bool);
 }

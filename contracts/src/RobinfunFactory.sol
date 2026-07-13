@@ -63,6 +63,14 @@ contract RobinfunFactory is Ownable2Step {
     /// @notice Flat ETH fee charged per launch (§10.8 — value pending team).
     uint256 public deployFee;
 
+    /// @notice Private-beta gate. While true, only `betaAllowed` wallets may
+    ///         create tokens or trade on any curve. Turned off permanently for
+    ///         the public launch, after which the protocol is permissionless.
+    bool public betaMode;
+
+    /// @notice Wallets permitted to create/trade while `betaMode` is on.
+    mapping(address => bool) public betaAllowed;
+
     // ---------------------------------------------------------------- registry
 
     /// @notice Every token ever launched, in creation order.
@@ -122,6 +130,8 @@ contract RobinfunFactory is Ownable2Step {
     event CurveParamsSet(uint128 virtualEth, uint128 virtualToken, uint128 graduationEth);
     event DexSet(address indexed dexFactory, address indexed weth);
     event DeployFeeSet(uint256 deployFee);
+    event BetaModeSet(bool on);
+    event BetaAllowedSet(address indexed who, bool allowed);
 
     // ---------------------------------------------------------------- errors
 
@@ -131,6 +141,7 @@ contract RobinfunFactory is Ownable2Step {
     error BadName();
     error InsufficientDeployFee();
     error DeployFeeTooHigh();
+    error NotAllowed();
     error BadCurveParams();
     error EthTransferFailed();
     error UnexpectedEth();
@@ -172,6 +183,7 @@ contract RobinfunFactory is Ownable2Step {
     /// @dev `msg.value` = deployFee + optional dev-buy ETH. Everything above
     ///      the deploy fee is spent on the dev buy.
     function createToken(CreateParams calldata p) external payable returns (address token, address curve) {
+        if (betaMode && !betaAllowed[msg.sender]) revert NotAllowed();
         if (msg.value < deployFee) revert InsufficientDeployFee();
         if (p.maxDeployFee != 0 && deployFee > p.maxDeployFee) revert DeployFeeTooHigh();
         _validateLevy(p.buyLevyBps);
@@ -245,6 +257,12 @@ contract RobinfunFactory is Ownable2Step {
         return allTokens.length;
     }
 
+    /// @notice True if `who` may create or trade. Always true once beta mode is
+    ///         off. Each curve's buy/sell gate calls this.
+    function tradeAllowed(address who) external view returns (bool) {
+        return !betaMode || betaAllowed[who];
+    }
+
     /// @notice The address a token WILL have if `creator` launches with
     ///         `vanitySalt`. An off-chain miner grinds `vanitySalt` until this
     ///         ends in the desired hex suffix (e.g. `…feed`), then passes that
@@ -278,6 +296,21 @@ contract RobinfunFactory is Ownable2Step {
     function setDeployFee(uint256 fee) external onlyOwner {
         deployFee = fee;
         emit DeployFeeSet(fee);
+    }
+
+    /// @notice Toggles the private-beta gate. Off = permissionless (the public
+    ///         launch state). One flip flips create AND trade for every curve.
+    function setBetaMode(bool on) external onlyOwner {
+        betaMode = on;
+        emit BetaModeSet(on);
+    }
+
+    /// @notice Allows/denies a batch of wallets for the private beta.
+    function setBetaAllowed(address[] calldata who, bool allowed) external onlyOwner {
+        for (uint256 i; i < who.length; ++i) {
+            betaAllowed[who[i]] = allowed;
+            emit BetaAllowedSet(who[i], allowed);
+        }
     }
 
     // ---------------------------------------------------------------- internals

@@ -63,6 +63,86 @@ contract AuditFixesTest is BaseSetup {
         });
     }
 
+    // ================================================================ BETA ALLOWLIST
+    /// @dev Private beta: with betaMode on, only allowlisted wallets may create
+    ///      tokens or trade on any curve. Non-allowlisted wallets are rejected
+    ///      at create, buy, and sell.
+    function test_Beta_gatesCreateBuyAndSell() public {
+        address[] memory allow = new address[](1);
+        allow[0] = alice;
+        vm.startPrank(protocolMultisig);
+        factory.setBetaMode(true);
+        factory.setBetaAllowed(allow, true);
+        vm.stopPrank();
+
+        RobinfunFactory.CreateParams memory p = _params();
+
+        // Non-allowlisted creator → reverts.
+        vm.deal(bob, 10 ether);
+        vm.prank(bob);
+        vm.expectRevert(RobinfunFactory.NotAllowed.selector);
+        factory.createToken{value: DEPLOY_FEE}(p);
+
+        // Allowlisted creator → succeeds.
+        vm.deal(alice, 10 ether);
+        vm.prank(alice);
+        (address t, address c) = factory.createToken{value: DEPLOY_FEE}(p);
+        BondingCurve curve = BondingCurve(payable(c));
+
+        // Non-allowlisted buyer → reverts.
+        vm.prank(bob);
+        vm.expectRevert(BondingCurve.NotAllowed.selector);
+        curve.buy{value: 0.01 ether}(0, block.timestamp);
+
+        // Allowlisted buyer → succeeds.
+        vm.prank(alice);
+        curve.buy{value: 0.01 ether}(0, block.timestamp);
+
+        // A non-allowlisted holder cannot sell either.
+        vm.prank(alice);
+        RobinfunToken(t).transfer(bob, 1_000e18);
+        vm.startPrank(bob);
+        RobinfunToken(t).approve(address(curve), 1_000e18);
+        vm.expectRevert(BondingCurve.NotAllowed.selector);
+        curve.sell(1_000e18, 0, block.timestamp);
+        vm.stopPrank();
+    }
+
+    /// @dev betaMode off (the default / public-launch state) is permissionless.
+    function test_Beta_offIsPermissionless() public {
+        assertFalse(factory.betaMode());
+        vm.deal(bob, 10 ether);
+        vm.prank(bob);
+        factory.createToken{value: DEPLOY_FEE}(_params()); // anyone can create
+    }
+
+    /// @dev Turning beta off re-opens an already-live curve to everyone.
+    function test_Beta_turningOffReopensTrading() public {
+        address[] memory allow = new address[](1);
+        allow[0] = alice;
+        vm.startPrank(protocolMultisig);
+        factory.setBetaMode(true);
+        factory.setBetaAllowed(allow, true);
+        vm.stopPrank();
+
+        vm.deal(alice, 10 ether);
+        vm.prank(alice);
+        (, address c) = factory.createToken{value: DEPLOY_FEE}(_params());
+        BondingCurve curve = BondingCurve(payable(c));
+
+        // bob blocked while beta on...
+        vm.deal(bob, 10 ether);
+        vm.prank(bob);
+        vm.expectRevert(BondingCurve.NotAllowed.selector);
+        curve.buy{value: 0.01 ether}(0, block.timestamp);
+
+        // ...then allowed once the owner flips beta off.
+        vm.prank(protocolMultisig);
+        factory.setBetaMode(false);
+        vm.prank(bob);
+        curve.buy{value: 0.01 ether}(0, block.timestamp); // no revert
+    }
+
     // ================================================================ BETA CAP
     /// @dev Beta safety cap: with graduationEth = 0.05 ETH, a curve provably
     ///      never holds more than 0.05 ETH — a whale dumping 100 ETH is capped
