@@ -1474,6 +1474,9 @@ const CURVE_ABI = [
   'function quoteSell(uint256 tokensIn) view returns (uint256 gross, uint256 fee, uint256 levy, uint256 net)',
   'event Buy(address indexed trader, address indexed recipient, uint256 grossEth, uint256 curveFeeEth, uint256 levyEth, uint256 netEth, uint256 tokensOut, uint256 virtualEthReserve, uint256 virtualTokenReserve)',
   'event Sell(address indexed trader, uint256 tokensIn, uint256 grossEth, uint256 curveFeeEth, uint256 levyEth, uint256 netEth, uint256 virtualEthReserve, uint256 virtualTokenReserve)',
+  // custom errors — so reverts decode to a clear reason instead of "missing revert data"
+  'error AlreadyGraduatedErr()','error DeadlineExpired()','error ZeroAmount()','error ZeroAddress()',
+  'error SlippageExceeded()','error EthTransferFailed()','error NotAllowed()','error UnexpectedEth()',
 ];
 const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
@@ -2398,6 +2401,12 @@ async function doTradeReal(t){
     const SLIP = 920n;   // keep ≥92% (8% slippage tolerance) — fine on testnet
     btn.disabled = true;
     if(buy){
+      // You must hold the full amount up front even though the curve refunds
+      // any excess above the graduation cap — check before sending.
+      if(t._ethBal!=null && amt > t._ethBal - 0.0002){
+        toast('Not enough ETH — you have '+(t._ethBal||0).toFixed(4)+'. Try the graduation amount or Max.','seal');
+        btn.disabled=false; setSide(side); return;
+      }
       const val = ethers.parseEther(String(amt));
       const q = await curveR.quoteBuy(val);
       const minOut = q.tokensOut * SLIP / 1000n;
@@ -2439,13 +2448,17 @@ function quoteReal(t){
   if(!amt || !t.vEth){ el.innerHTML = '<div class="fl"><span>Enter an amount to preview.</span></div>'; return; }
   const rate = side==='buy' ? t.buyTax : t.sellTax;
   if(side==='buy'){
-    const fee=amt*0.01, levy=amt*rate/100, net=amt-fee-levy;
+    let fee=amt*0.01, levy=amt*rate/100, net=amt-fee-levy, refunded=0;
+    // Cap at the graduation room — the curve refunds anything above it.
+    const room = (realToken(t) && t.gradTargetEth) ? Math.max(0, t.gradTargetEth - (t.reserveEth||0)) : Infinity;
+    if(net > room){ refunded = amt - room/(1-0.01-rate/100); net = room; fee = amt*0.01; levy = amt*rate/100; }
     const tokens = t.vTok*net/(t.vEth+net);
     el.innerHTML =
       `<div class="fl"><span>Curve fee · 1%</span><b>${fee.toFixed(5)} Ξ</b></div>`+
       `<div class="fl levy-fl"><span>Creator fee · ${rate}% → dev wallet</span><b>${levy.toFixed(5)} Ξ</b></div>`+
       `<div class="fl"><span>To the curve</span><b>${net.toFixed(5)} Ξ</b></div>`+
-      `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(tokens)} $${t.ticker}</b></div>`;
+      (refunded>1e-9? `<div class="fl"><span>Refunded (past graduation cap)</span><b>${refunded.toFixed(5)} Ξ</b></div>`:'')+
+      `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(tokens)} $${t.ticker}${refunded>1e-9?' · graduates ◆':''}</b></div>`;
   }else{
     const gross = t.vEth*amt/(t.vTok+amt);
     const fee=gross*0.01, levy=gross*rate/100, net=gross-fee-levy;
@@ -2521,14 +2534,42 @@ function setSide(s){
     ? (s==='buy'? ((t._ethBal||0).toFixed(4)+' ETH') : (fmtNum(t._tokBal||0)+' $'+t.ticker))
     : (s==='buy'? '2.4810 ETH' : (t? fmtNum(rnd(1e6,4e7))+' $'+t.ticker : '—'));
   const qr = document.getElementById('quickRow');
-  qr.innerHTML = (s==='buy'? ['0.05','0.1','0.5','1.0'].map(v=>`<button onclick="setAmt(${v})">${v} Ξ</button>`)
-                           : ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`)).join('');
+  if(s!=='buy'){
+    qr.innerHTML = ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`).join('');
+  }else{
+    const g = gradBuyEth(t);   // gross ETH to graduate this curve (null for sim/graduated)
+    if(g && g>0){
+      // Buttons scale to the graduation cap so you never overpay (excess just refunds).
+      const q = x => `<button onclick="setAmt(${x.toPrecision(3)})">${(+x.toPrecision(2))} Ξ</button>`;
+      qr.innerHTML = q(g*0.25) + q(g*0.5) + q(g) + `<button onclick="setAmtMax()">Max</button>`;
+    }else{
+      qr.innerHTML = ['0.05','0.1','0.5','1.0'].map(v=>`<button onclick="setAmt(${v})">${v} Ξ</button>`).join('');
+    }
+  }
   if(t) document.getElementById('fee-note').textContent = s==='buy'
     ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
     : (t.sellTax>0? t.sellTax+'% sell fee → creator' : 'no sell fee');
   quote();
 }
+/* Gross ETH needed to graduate a real curve from its current reserve (incl.
+   the 1% curve fee + buy levy). Buying more than this just gets refunded, so
+   the quick buttons cap here. */
+function gradBuyEth(t){
+  if(!(realToken(t) && t.gradTargetEth)) return null;
+  const cut = 1 - 0.01 - (t.buyTax||0)/100;
+  const room = Math.max(0, t.gradTargetEth - (t.reserveEth||0));
+  return cut>0 ? room/cut*1.02 : room;   // small buffer so it lands past the cap
+}
 function setAmt(v){ document.getElementById('amt').value=v; quote(); }
+/* Max = as much as you can afford (leaving gas), never more than needed to graduate. */
+function setAmtMax(){
+  const t = tok();
+  let v = Math.max(0, (t&&t._ethBal||0) - 0.0003);   // leave a little for gas
+  const g = gradBuyEth(t);
+  if(g && g>0) v = Math.min(v, g);
+  document.getElementById('amt').value = v>0 ? +v.toPrecision(4) : 0;
+  quote();
+}
 function setAmtPct(p){
   const t = tok();
   const bal = realToken(t) ? (t._tokBal||0) : 38_400_000;
