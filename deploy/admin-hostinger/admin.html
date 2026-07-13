@@ -60,6 +60,7 @@ input:focus-visible,textarea:focus-visible,button:focus-visible,a:focus-visible{
 .net.ok .led{background:var(--gilt);box-shadow:0 0 8px var(--gilt)}
 .net.bad .led{background:var(--seal);box-shadow:0 0 8px var(--seal)}
 .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:9px 16px;border-radius:var(--r-sm);font-weight:600;font-size:14px;border:1px solid var(--rule-2);background:var(--ledger-2);transition:transform .1s ease,border-color .12s,background .12s,opacity .12s}
+.btn[hidden]{display:none}
 .btn:hover{border-color:var(--gilt);transform:translateY(-1px)}
 .btn:active{transform:translateY(0)}
 .btn.primary{background:var(--gilt);color:#0B0F04;border-color:var(--gilt)}
@@ -75,6 +76,7 @@ h1.page-t{font-family:var(--font-display);font-size:26px;font-weight:700;letter-
 .page-sub{color:var(--cream-dim);font-size:14px;margin-bottom:22px;max-width:640px}
 
 .gate{border:1px solid var(--rule-2);border-radius:var(--r-md);padding:14px 16px;margin-bottom:22px;display:flex;align-items:center;gap:12px;font-size:14px}
+.gate[hidden]{display:none}
 .gate.ok{border-color:rgba(198,242,60,.4);background:var(--gilt-dim)}
 .gate.warn{border-color:rgba(242,179,60,.45);background:var(--amber-dim)}
 .gate.bad{border-color:rgba(255,91,74,.45);background:var(--seal-dim)}
@@ -151,6 +153,27 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
 .lock-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
 .lock-err{font-family:var(--font-mono);font-size:12px;color:var(--seal-bright);margin-top:10px;min-height:16px}
 .lock-sub{font-size:11px;color:var(--cream-mute);margin-top:14px;line-height:1.55}
+/* ---- new: gas chip, stats line, auto-refresh, modal ---- */
+.gaschip{font-family:var(--font-mono);font-size:12px;color:var(--cream-dim);padding:5px 10px;border:1px solid var(--rule-2);border-radius:20px}
+.gaschip b{color:var(--cream)}
+.gaschip[hidden]{display:none}
+.statsline{display:flex;flex-wrap:wrap;gap:8px 20px;font-family:var(--font-mono);font-size:12px;color:var(--cream-dim);padding:11px 15px;background:var(--ledger);border:1px solid var(--rule);border-radius:var(--r-md);margin-bottom:12px}
+.statsline b{color:var(--cream)}
+.autoref{font-family:var(--font-mono);font-size:12px;color:var(--cream-dim);display:inline-flex;align-items:center;gap:6px;cursor:pointer;user-select:none}
+.autoref input{accent-color:var(--gilt);cursor:pointer}
+.ttab tr.clk{cursor:pointer}
+.modal{position:fixed;inset:0;z-index:90;background:rgba(4,6,5,.78);backdrop-filter:blur(3px);display:flex;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto}
+.modal[hidden]{display:none}
+.modal-box{width:100%;max-width:560px;background:var(--ledger);border:1px solid var(--rule-2);border-radius:var(--r-lg);box-shadow:var(--shadow-card)}
+.modal-head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:18px 20px;border-bottom:1px solid var(--rule)}
+.modal-head h3{font-family:var(--font-display);font-size:18px;font-weight:600}
+.modal-body{padding:18px 20px}
+.kv{display:flex;justify-content:space-between;gap:14px;padding:8px 0;border-bottom:1px solid var(--rule);font-size:13px}
+.kv:last-of-type{border-bottom:none}
+.kv .kk{color:var(--cream-mute);font-family:var(--font-mono);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+.kv .kvv{font-family:var(--font-mono);font-size:13px;text-align:right;word-break:break-all}
+.prog{height:8px;border-radius:6px;background:var(--ink-2);border:1px solid var(--rule);overflow:hidden;margin:4px 0 2px}
+.prog>i{display:block;height:100%;background:linear-gradient(90deg,#A6D62E,#C6F23C)}
 </style>
 </head>
 <body>
@@ -191,6 +214,7 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
   <span class="badge adm">Admin</span>
   <div class="spacer"></div>
   <div class="net" id="netStat"><span class="led"></span><span id="netTxt">Not connected</span></div>
+  <span class="gaschip" id="gasChip" hidden title="Connected wallet ETH — for gas">Ξ <b id="gasBal">—</b></span>
   <button class="btn sm" id="lockBtn" onclick="lockNow('manual')" hidden>🔒 Lock</button>
   <button class="btn primary" id="connectBtn" onclick="connect()">Connect wallet</button>
 </div></div>
@@ -200,6 +224,11 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
   <div class="page-sub">Owner-only controls for the Robinfun launchpad on Robinhood Chain. Every action below is a real on-chain transaction signed by your connected wallet — this page never sees a private key. Non-owner wallets can read everything but every write will revert.</div>
 
   <div class="gate warn" id="gate"><span id="gateTxt">Connect the owner wallet to unlock controls.</span></div>
+
+  <!-- owner-key-exposed warning: shown while ownership still sits on the leaked deployer key -->
+  <div class="gate bad" id="rotWarn" hidden>
+    <span>⚠️ <b>Owner key was exposed</b> during setup. Before public launch, rotate ownership of the factory <b>and</b> fee router to a fresh multisig/hardware wallet. <a class="gatelink" onclick="scrollToOwnership();return false">Go to Transfer ownership →</a></span>
+  </div>
 
   <!-- ============ DASHBOARD ============ -->
   <div class="sec-label">Overview</div>
@@ -215,7 +244,16 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
     <div class="stat"><div class="k">Graduation cap</div><div class="v" id="s-cap">—</div><div class="sub" id="s-cap-usd"></div></div>
     <div class="stat"><div class="k">ETH price</div><div class="v" id="s-eth">—</div><div class="sub">live · CoinGecko</div></div>
   </div>
-  <div style="text-align:right;margin-bottom:8px"><button class="btn sm" onclick="refreshAll()">↻ Refresh</button></div>
+  <div class="statsline" id="launchStats">
+    <span>Launches: <b id="ls-total">—</b></span>
+    <span>Graduated: <b class="gold" id="ls-grad">—</b></span>
+    <span>Bonding: <b id="ls-bond">—</b></span>
+    <span>Creator earned (all): <b id="ls-earned">—</b></span>
+  </div>
+  <div style="display:flex;justify-content:flex-end;align-items:center;gap:14px;margin-bottom:8px">
+    <label class="autoref"><input type="checkbox" id="autoRef" checked onchange="toggleAutoRefresh()"> auto-refresh 30s</label>
+    <button class="btn sm" onclick="refreshAll()">↻ Refresh</button>
+  </div>
 
   <!-- ============ BETA GATE ============ -->
   <div class="sec-label">Access control</div>
@@ -246,6 +284,13 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
         <button class="btn sm" onclick="doCheckAccess()">Check</button>
       </div>
       <div class="hint" id="al-check-out"></div>
+    </div>
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--rule)">
+      <div class="row" style="align-items:center">
+        <div style="flex:1"><b style="font-size:13px">Currently allow-listed wallets</b> <span class="small">(reconstructed from on-chain events)</span></div>
+        <button class="btn sm" id="alViewBtn" onclick="loadAllowlist()">Show list</button>
+      </div>
+      <div id="al-view" class="hint"></div>
     </div>
   </div>
 
@@ -317,7 +362,7 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
     </div>
   </div>
 
-  <div class="card danger">
+  <div class="card danger" id="ownershipCard">
     <h2>⚠️ Ownership (danger zone)</h2>
     <div class="desc">The factory and fee router use <b>2-step</b> ownership: <code>transferOwnership</code> names a pending owner, then that wallet must call <code>acceptOwnership</code> — so a typo can't lock you out. Transfer moves the factory; remember to transfer the fee router too if you're rotating keys. <b>Renounce is irreversible</b> and permanently freezes all controls above.</div>
     <div class="cur">Factory owner: <b id="c-fowner">—</b> · pending: <span id="c-fpending">—</span><br>FeeRouter owner: <b id="c-rowner">—</b> · pending: <span id="c-rpending">—</span></div>
@@ -345,14 +390,39 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
     </div>
   </div>
 
-  <!-- ============ LOG ============ -->
-  <div class="sec-label">Activity</div>
+  <!-- ============ ON-CHAIN HISTORY / AUDIT TRAIL ============ -->
+  <div class="sec-label">On-chain history</div>
+  <div class="card">
+    <h2>🧾 Admin audit trail <span class="small" id="hist-count"></span></h2>
+    <div class="desc">Every config change and launch, read straight from chain events — a tamper-proof record of who changed what and when (not just this browser session). <code>BetaModeSet · DeployFeeSet · CurveParamsSet · DexSet · Treasury/Vault/Harvester · Flush · Sweep · Harvest · TokenCreated</code></div>
+    <div style="text-align:right;margin-bottom:10px"><button class="btn sm" id="histBtn" onclick="loadHistory()">↻ Load history</button></div>
+    <div class="tscroll">
+      <table class="ttab">
+        <thead><tr><th>Block</th><th>Event</th><th>Detail</th><th></th></tr></thead>
+        <tbody id="histBody"><tr><td colspan="4" class="small" style="padding:16px">Click “Load history”.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ SESSION LOG ============ -->
+  <div class="sec-label">This session</div>
   <div class="log" id="log"><div class="li"><span class="t">—</span><span class="m">Actions you take will appear here with their transaction hashes.</span></div></div>
 
   <div class="footer">
     Robinfun Admin · Robinhood Chain (4663)<br>
     Factory <span class="mono" id="f-addr">—</span> · FeeRouter <span class="mono" id="r-addr">—</span><br>
     <a href="https://robinfun.io/">← Back to the app</a>
+  </div>
+</div>
+
+<!-- ============ TOKEN DETAIL MODAL ============ -->
+<div id="tokModal" class="modal" hidden onclick="if(event.target===this)closeTokModal()">
+  <div class="modal-box">
+    <div class="modal-head">
+      <div><h3 id="tm-title">Token</h3><div class="small mono" id="tm-ca"></div></div>
+      <button class="btn sm" onclick="closeTokModal()">✕ Close</button>
+    </div>
+    <div id="tm-body" class="modal-body"><div class="small">Loading…</div></div>
   </div>
 </div>
 
@@ -417,7 +487,15 @@ const FACTORY_ABI = [
   'function setDex(address dexFactory_, address weth_)',
   'function allTokensLength() view returns (uint256)',
   'function allTokens(uint256) view returns (address)',
+  'function curveOf(address) view returns (address)',
   'function feeRouter() view returns (address)',
+  // events — for the on-chain audit trail + allow-list viewer
+  'event BetaModeSet(bool on)',
+  'event DeployFeeSet(uint256 deployFee)',
+  'event CurveParamsSet(uint128 virtualEth, uint128 virtualToken, uint128 graduationEth)',
+  'event DexSet(address indexed dexFactory, address indexed weth)',
+  'event BetaAllowedSet(address indexed who, bool allowed)',
+  'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
   'error NotAllowed()','error ZeroAddress()','error BadCurveParams()',
 ];
 const FEEROUTER_ABI = [
@@ -439,13 +517,33 @@ const FEEROUTER_ABI = [
   'function creatorOwed(address) view returns (uint256)',
   'function flushProtocol()',
   'function sweepUnaccounted()',
-  'error NothingToDo()','error NoSink()','error EthTransferFailed()',
+  'function harvest(address token, uint256 minEthOut, uint256 deadline)',
+  // events — audit trail
+  'event TreasurySet(address indexed treasury)',
+  'event StakingVaultSet(address indexed vault)',
+  'event HarvesterSet(address indexed harvester)',
+  'event ProtocolFlushed(address indexed sink, uint256 amount)',
+  'event UnaccountedSwept(address indexed to, uint256 amount)',
+  'event LevyHarvested(address indexed token, uint256 tokensIn, uint256 ethOut)',
+  'error NothingToDo()','error NoSink()','error EthTransferFailed()','error NotHarvester()','error UnknownToken()',
 ];
 const TOKEN_ABI = [
   'function name() view returns (string)',
   'function symbol() view returns (string)',
   'function creator() view returns (address)',
 ];
+const CURVE_ABI = [
+  'function currentPrice() view returns (uint256)',
+  'function marketCapEth() view returns (uint256)',
+  'function graduationProgress() view returns (uint256 collected, uint256 target)',
+  'function virtualEthReserve() view returns (uint256)',
+  'function virtualTokenReserve() view returns (uint256)',
+  'function graduated() view returns (bool)',
+];
+const DEXFACTORY_ABI = [ 'function getPair(address,address) view returns (address)' ];
+/* The known-exposed deployer/owner key — surfaces a rotate-to-multisig banner
+   until ownership is moved off it. */
+const EXPOSED_OWNER = '0xa49dc277a65ccb35d94522cecda19ca340ae991c';
 
 /* ---- provider / wallet ---- */
 let _ro=null, provider=null, signer=null, wallet=null;
@@ -548,6 +646,7 @@ function applyGate(){
     if(b.id==='acceptFacBtn'||b.id==='acceptRtrBtn'){ b.disabled=!wallet; return; }  // pending owner ≠ current owner
     b.disabled=!enable;
   });
+  const hb=document.getElementById('tm-harvestBtn'); if(hb) hb.disabled=!enable;   // modal harvest, if open
 }
 
 /* ---- refresh dashboard ---- */
@@ -603,20 +702,40 @@ async function refreshAll(){
   setT('c-fowner', fo===undefined?'—':fo); setT('c-fpending', fpend===undefined?'—':(fpend===ADDR0?'none':fpend));
   setT('c-rowner', ro===undefined?'—':ro); setT('c-rpending', rpend===undefined?'—':(rpend===ADDR0?'none':rpend));
 
+  // owner-key-exposed banner: show while either contract's owner is still the leaked key
+  const exposed = (fo!==undefined && eq(fo,EXPOSED_OWNER)) || (ro!==undefined && eq(ro,EXPOSED_OWNER));
+  const rw=document.getElementById('rotWarn'); if(rw) rw.hidden = !exposed;
+
   // footer
   setT('f-addr', shortAddr(FACTORY_ADDR)); setT('r-addr', shortAddr(FEEROUTER_ADDR));
 
+  updateGas();
   applyGate();
   if(tokLen!==undefined) loadTokens(Number(tokLen));
 }
+/* connected wallet's ETH balance (for gas) */
+async function updateGas(){
+  const chip=document.getElementById('gasChip');
+  if(!wallet || !chip){ if(chip) chip.hidden=true; return; }
+  try{
+    const bal = await roProvider().getBalance(wallet);
+    const n = Number(ethers.formatEther(bal));
+    setV('gasBal', (n<1e-4 && n>0 ? n.toExponential(2) : n.toFixed(4)));
+    chip.hidden=false;
+    chip.title = 'Wallet '+shortAddr(wallet)+' — '+fmtUsd(n*ETH_USD)+' for gas';
+  }catch(_){ chip.hidden=true; }
+}
+function scrollToOwnership(){ const el=document.getElementById('ownershipCard'); if(el) el.scrollIntoView({behavior:'smooth',block:'center'}); const inp=document.getElementById('own-in'); if(inp) setTimeout(()=>inp.focus(),350); }
 function setV(id,v){ const e=document.getElementById(id); if(e) e.textContent=v; }
 function setT(id,v){ const e=document.getElementById(id); if(e) e.textContent=v; }
 
 /* ---- token table ---- */
+let TOKROWS = {};   // ca(lower) -> {name,sym,curve,...} for the detail modal
 async function loadTokens(len){
   const body=document.getElementById('tokBody');
   document.getElementById('tok-count').textContent = len? '('+len+')' : '';
-  if(!len){ body.innerHTML='<tr><td colspan="6" class="small" style="padding:16px">No tokens launched yet.</td></tr>'; return; }
+  const setLS=(id,v)=>setV(id, v);
+  if(!len){ body.innerHTML='<tr><td colspan="6" class="small" style="padding:16px">No tokens launched yet.</td></tr>'; setLS('ls-total','0'); setLS('ls-grad','0'); setLS('ls-bond','0'); setLS('ls-earned','0 Ξ'); return; }
   const ro=roProvider();
   const N=Math.min(len,60);   // cap the read fan-out
   const idx=[]; for(let i=len-1;i>=Math.max(0,len-N);i--) idx.push(i);
@@ -626,24 +745,103 @@ async function loadTokens(len){
     try{
       const ca = await facR.allTokens(i);
       const tk = new ethers.Contract(ca, TOKEN_ABI, ro);
-      const [name,sym,creator,earned,owed] = await Promise.all([
+      const [name,sym,creator,earned,owed,curve] = await Promise.all([
         tk.name().catch(()=>'?'), tk.symbol().catch(()=>'?'), tk.creator().catch(()=>ADDR0),
         rtrR.creatorEarnedLifetime(ca).catch(()=>0n), rtrR.creatorOwed(ca).catch(()=>0n),
+        facR.curveOf(ca).catch(()=>ADDR0),
       ]);
-      return { i, ca, name, sym, creator, earned, owed };
+      let graduated=null;
+      if(curve && curve!==ADDR0){ try{ graduated = await new ethers.Contract(curve, CURVE_ABI, ro).graduated(); }catch(_){} }
+      return { i, ca, name, sym, creator, earned, owed, curve, graduated };
     }catch(_){ return null; }
   }));
   const good=rows.filter(Boolean);
   if(!good.length){ body.innerHTML='<tr><td colspan="6" class="small" style="padding:16px">Could not load tokens.</td></tr>'; return; }
-  body.innerHTML = good.map(r=>`
-    <tr>
+  // launch stats (over the loaded window)
+  let grad=0, bond=0, earnedSum=0n;
+  TOKROWS={};
+  for(const r of good){ if(r.graduated===true) grad++; else if(r.graduated===false) bond++; earnedSum+=r.earned; TOKROWS[r.ca.toLowerCase()]={name:r.name,sym:r.sym,curve:r.curve,creator:r.creator}; }
+  setLS('ls-total', String(len)); setLS('ls-grad', String(grad)); setLS('ls-bond', String(bond)); setLS('ls-earned', fmtEth(earnedSum));
+  body.innerHTML = good.map(r=>{
+    const badge = r.graduated===true ? '<span class="gold">◆ grad</span>' : (r.graduated===false ? '◈ bonding' : '');
+    return `<tr class="clk" onclick="openTokenDetail('${esc(r.ca)}')">
       <td class="small">${r.i}</td>
-      <td><a href="${EXPLORER}/address/${esc(r.ca)}" target="_blank" rel="noopener">${esc(r.name)} <span class="gold">$${esc(r.sym)}</span></a></td>
-      <td>${r.creator&&r.creator!==ADDR0?`<a href="${APP}profile/${esc(r.creator)}" title="${esc(r.creator)}">${shortAddr(r.creator)}</a>`:'—'}</td>
+      <td><a href="${EXPLORER}/address/${esc(r.ca)}" target="_blank" rel="noopener" onclick="event.stopPropagation()">${esc(r.name)} <span class="gold">$${esc(r.sym)}</span></a> <span class="small">${badge}</span></td>
+      <td>${r.creator&&r.creator!==ADDR0?`<a href="${APP}profile/${esc(r.creator)}" title="${esc(r.creator)}" onclick="event.stopPropagation()">${shortAddr(r.creator)}</a>`:'—'}</td>
       <td class="r gold">${fmtEth(r.earned)}</td>
       <td class="r">${fmtEth(r.owed)}</td>
-      <td class="r"><a href="${EXPLORER}/address/${r.ca}" target="_blank" rel="noopener" class="small">explorer ↗</a></td>
-    </tr>`).join('');
+      <td class="r"><button class="btn sm" onclick="event.stopPropagation();openTokenDetail('${esc(r.ca)}')">Details</button></td>
+    </tr>`;
+  }).join('');
+}
+
+/* ---- token detail modal ---- */
+let TM_CA = null;
+function closeTokModal(){ document.getElementById('tokModal').hidden=true; TM_CA=null; }
+async function openTokenDetail(ca){
+  const meta = TOKROWS[(ca||'').toLowerCase()] || {};
+  TM_CA = ca;
+  document.getElementById('tokModal').hidden=false;
+  document.getElementById('tm-title').textContent = (meta.name||'Token')+(meta.sym?(' $'+meta.sym):'');
+  document.getElementById('tm-ca').textContent = ca;
+  const box=document.getElementById('tm-body');
+  box.innerHTML='<div class="small">Loading on-chain state…</div>';
+  try{
+    const ro=roProvider();
+    let curve = meta.curve;
+    if(!curve || curve===ADDR0){ curve = await facR.curveOf(ca).catch(()=>ADDR0); }
+    const c = new ethers.Contract(curve, CURVE_ABI, ro);
+    const dexf = new ethers.Contract(DEX_FACTORY_ADDR, DEXFACTORY_ABI, ro);
+    const [graduated, price, mcap, prog, vE, vT, earned, owed, pair] = await Promise.all([
+      c.graduated().catch(()=>null),
+      c.currentPrice().catch(()=>null),
+      c.marketCapEth().catch(()=>null),
+      c.graduationProgress().catch(()=>null),
+      c.virtualEthReserve().catch(()=>null),
+      c.virtualTokenReserve().catch(()=>null),
+      rtrR.creatorEarnedLifetime(ca).catch(()=>null),
+      rtrR.creatorOwed(ca).catch(()=>null),
+      dexf.getPair(ca, WETH_ADDR).catch(()=>ADDR0),
+    ]);
+    const priceUsd = price!=null ? Number(ethers.formatEther(price))*ETH_USD : null;
+    const mcapUsd = mcap!=null ? Number(ethers.formatEther(mcap))*ETH_USD : null;
+    let progPct=null;
+    if(prog && prog.target && prog.target>0n){ progPct = Number(prog.collected*10000n/prog.target)/100; }
+    const kv=(k,v)=>`<div class="kv"><span class="kk">${k}</span><span class="kvv">${v}</span></div>`;
+    const hasPair = pair && pair!==ADDR0;
+    box.innerHTML =
+      (graduated===true
+        ? '<div class="kv"><span class="kk">Status</span><span class="kvv gold">◆ Graduated to Uniswap</span></div>'
+        : '<div class="kv"><span class="kk">Status</span><span class="kvv">◈ Bonding'+(progPct!=null?(' · '+progPct.toFixed(1)+'%'):'')+'</span></div>'
+          +(progPct!=null?('<div class="prog"><i style="width:'+Math.max(0,Math.min(100,progPct))+'%"></i></div>'):'')
+          +(prog?('<div class="kv"><span class="kk">Raised / cap</span><span class="kvv">'+fmtEth(prog.collected)+' / '+fmtEth(prog.target)+'</span></div>'):''))
+      + kv('Price', priceUsd!=null ? (fmtUsd(priceUsd)+' · '+fmtEth(price)) : '—')
+      + kv('Market cap', mcapUsd!=null ? (fmtUsd(mcapUsd)+' · '+fmtEth(mcap)) : '—')
+      + kv('Creator earned', earned!=null ? (fmtEth(earned)+' · '+fmtUsd(usdOf(earned))) : '—')
+      + kv('Creator owed now', owed!=null ? fmtEth(owed) : '—')
+      + kv('Virtual reserves', (vE!=null?fmtEth(vE):'—')+' / '+(vT!=null?(Number(ethers.formatEther(vT)).toLocaleString('en-US',{maximumFractionDigits:0})+' tok'):'—'))
+      + kv('Token', '<a href="'+EXPLORER+'/address/'+esc(ca)+'" target="_blank" rel="noopener">'+shortAddr(ca)+' ↗</a>')
+      + kv('Bonding curve', curve&&curve!==ADDR0 ? '<a href="'+EXPLORER+'/address/'+esc(curve)+'" target="_blank" rel="noopener">'+shortAddr(curve)+' ↗</a>' : '—')
+      + kv('Uniswap pair', hasPair ? '<a href="'+EXPLORER+'/address/'+esc(pair)+'" target="_blank" rel="noopener">'+shortAddr(pair)+' ↗</a>' : 'none yet')
+      + '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--rule)">'
+      +   '<div class="desc" style="margin-bottom:10px">Harvest swaps this token\'s accrued fee-on-transfer levy (post-graduation) to ETH and splits it 90% creator / 10% protocol. Only works once there is levy inventory; if a harvester keeper is set, only that wallet may call it.</div>'
+      +   '<div class="row">'
+      +     '<div class="field" style="max-width:180px"><label>Min ETH out (slippage floor)</label><input type="number" id="tm-minout" step="0.0001" min="0" value="0"></div>'
+      +     '<button class="btn primary" id="tm-harvestBtn" onclick="doHarvest()">Harvest levies → ETH</button>'
+      +   '</div>'
+      +   '<div class="hint warn" id="tm-harvest-note">Tip: for anything but dust, set a Min ETH out (quote off-chain) so the swap can\'t be sandwiched.</div>'
+      + '</div>';
+    // gate the harvest button like any other write
+    const hb=document.getElementById('tm-harvestBtn'); if(hb) hb.disabled = !(isOwner && isProven);
+  }catch(e){ box.innerHTML='<div class="small">Could not load token state: '+esc(errMsg(e))+'</div>'; }
+}
+async function doHarvest(){
+  if(!TM_CA) return;
+  if(!requireOwner()) return;
+  const v=(document.getElementById('tm-minout')||{}).value || '0';
+  let minWei; try{ minWei=ethers.parseEther(String(v||'0')); }catch(_){ toast('Bad min-out','err'); return; }
+  const deadline = BigInt(Math.floor(Date.now()/1000) + 600);
+  await send('Harvest levies', ()=>rtrW.harvest(TM_CA, minWei, deadline));
 }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c])); }
 
@@ -798,6 +996,90 @@ async function refreshEthPrice(){
   for(const s of srcs){ try{ const r=await fetch(s.u); if(!r.ok) continue; const v=parseFloat(s.p(await r.json())); if(v>0){ ETH_USD=v; setV('s-eth','$'+ETH_USD.toLocaleString('en-US',{maximumFractionDigits:2})); return; } }catch(_){} }
 }
 
+/* ---- auto-refresh (pauses while locked, tab hidden, or a modal is open) ---- */
+let autoRefTimer=null;
+function toggleAutoRefresh(){ armAutoRefresh(); }
+function armAutoRefresh(){
+  clearInterval(autoRefTimer); autoRefTimer=null;
+  const cb=document.getElementById('autoRef');
+  if(cb && cb.checked){
+    autoRefTimer=setInterval(()=>{
+      const locked = !document.getElementById('lockScreen').hidden;
+      const modalOpen = !document.getElementById('tokModal').hidden;
+      if(!locked && !document.hidden && !modalOpen && typeof ethers!=='undefined') refreshAll();
+    }, 30000);
+  }
+}
+
+/* ---- explorer link helper ---- */
+function addrLink(a){ if(!a||!isAddr(a)) return '—'; return '<a href="'+EXPLORER+'/address/'+esc(a)+'" target="_blank" rel="noopener">'+shortAddr(a)+'</a>'; }
+
+/* ---- on-chain audit trail (config changes + launches, from events) ---- */
+async function loadHistory(){
+  const body=document.getElementById('histBody'), btn=document.getElementById('histBtn');
+  body.innerHTML='<tr><td colspan="4" class="small" style="padding:16px">Reading events…</td></tr>';
+  if(btn) btn.disabled=true;
+  try{
+    const ro=roProvider();
+    const fac=new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro);
+    const rtr=new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, ro);
+    async function q(c,name){
+      try{ return await c.queryFilter(c.filters[name](), 0, 'latest'); }
+      catch(_){ try{ const head=await ro.getBlockNumber(); return await c.queryFilter(c.filters[name](), Math.max(0,head-600000), head); }catch(__){ return []; } }
+    }
+    const groups = await Promise.all([
+      q(fac,'BetaModeSet'), q(fac,'DeployFeeSet'), q(fac,'CurveParamsSet'), q(fac,'DexSet'), q(fac,'TokenCreated'),
+      q(rtr,'TreasurySet'), q(rtr,'StakingVaultSet'), q(rtr,'HarvesterSet'), q(rtr,'ProtocolFlushed'), q(rtr,'UnaccountedSwept'), q(rtr,'LevyHarvested'),
+    ]);
+    const evs=[].concat(...groups).map(e=>({ block:e.blockNumber, li:(e.index!=null?e.index:0), txh:e.transactionHash, name:(e.eventName||(e.fragment&&e.fragment.name)), args:e.args }));
+    evs.sort((a,b)=> b.block-a.block || b.li-a.li);
+    document.getElementById('hist-count').textContent='('+evs.length+')';
+    if(!evs.length){ body.innerHTML='<tr><td colspan="4" class="small" style="padding:16px">No events found.</td></tr>'; return; }
+    body.innerHTML = evs.slice(0,120).map(r=>
+      '<tr><td class="small">'+r.block+'</td><td>'+esc(histLabel(r.name))+'</td><td>'+histDetail(r.name,r.args)+'</td>'+
+      '<td class="r"><a class="small" href="'+EXPLORER+'/tx/'+esc(r.txh)+'" target="_blank" rel="noopener">tx ↗</a></td></tr>'
+    ).join('');
+  }catch(e){ body.innerHTML='<tr><td colspan="4" class="small" style="padding:16px">Could not read events: '+esc(errMsg(e))+'</td></tr>'; }
+  finally{ if(btn) btn.disabled=false; }
+}
+function histLabel(n){ return ({BetaModeSet:'Beta mode',DeployFeeSet:'Deploy fee',CurveParamsSet:'Curve params',DexSet:'DEX wiring',TokenCreated:'Token created',TreasurySet:'Treasury',StakingVaultSet:'Staking vault',HarvesterSet:'Harvester',ProtocolFlushed:'Protocol flush',UnaccountedSwept:'Sweep',LevyHarvested:'Harvest'})[n]||n||'event'; }
+function histDetail(n,a){
+  try{ switch(n){
+    case 'BetaModeSet': return a.on ? '<span class="gold">turned ON</span>' : 'turned OFF';
+    case 'DeployFeeSet': return 'set to '+fmtEth(a.deployFee);
+    case 'CurveParamsSet': return 'grad cap '+fmtEth(a.graduationEth);
+    case 'DexSet': return 'factory '+addrLink(a.dexFactory)+' · WETH '+addrLink(a.weth);
+    case 'TokenCreated': return esc(a.name)+' <span class="gold">$'+esc(a.symbol)+'</span> by '+addrLink(a.creator);
+    case 'TreasurySet': return '→ '+addrLink(a.treasury);
+    case 'StakingVaultSet': return '→ '+addrLink(a.vault);
+    case 'HarvesterSet': return '→ '+(a.harvester===ADDR0?'cleared':addrLink(a.harvester));
+    case 'ProtocolFlushed': return fmtEth(a.amount)+' → '+addrLink(a.sink);
+    case 'UnaccountedSwept': return fmtEth(a.amount)+' → '+addrLink(a.to);
+    case 'LevyHarvested': return 'token '+addrLink(a.token)+' → '+fmtEth(a.ethOut);
+    default: return '';
+  } }catch(_){ return ''; }
+}
+
+/* ---- current allow-list, reconstructed from BetaAllowedSet events ---- */
+async function loadAllowlist(){
+  const out=document.getElementById('al-view'), btn=document.getElementById('alViewBtn');
+  out.textContent='Reading events…'; if(btn) btn.disabled=true;
+  try{
+    const ro=roProvider();
+    const fac=new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro);
+    let evs;
+    try{ evs=await fac.queryFilter(fac.filters.BetaAllowedSet(), 0, 'latest'); }
+    catch(_){ const head=await ro.getBlockNumber(); evs=await fac.queryFilter(fac.filters.BetaAllowedSet(), Math.max(0,head-600000), head); }
+    evs.sort((a,b)=> a.blockNumber-b.blockNumber || (a.index||0)-(b.index||0));
+    const state={};
+    for(const e of evs){ state[e.args.who.toLowerCase()] = e.args.allowed; }   // last write wins
+    const allowed=Object.keys(state).filter(k=>state[k]);
+    if(!allowed.length){ out.innerHTML='<span class="small">No wallets currently allow-listed.</span>'; return; }
+    out.innerHTML = '<span class="small">'+allowed.length+' allow-listed:</span> ' + allowed.map(addrLink).join(' &nbsp;·&nbsp; ');
+  }catch(e){ out.textContent='Could not read: '+errMsg(e); }
+  finally{ if(btn) btn.disabled=false; }
+}
+
 /* ================================================================
    SECURITY GATE — convenience lock, ownership proof, auto-lock.
    NB: none of this is a substitute for the on-chain onlyOwner check or for
@@ -912,8 +1194,10 @@ function armAutoLock(){
 function lockNow(){
   signer=provider=facW=rtrW=null; wallet=null; isOwner=false; ownerAddr=null; isProven=false;   // wipe in-memory session
   try{ sessionStorage.removeItem(PROOF_KEY); }catch(_){}
-  clearTimeout(idleTimer); clearTimeout(hiddenTimer);
+  clearTimeout(idleTimer); clearTimeout(hiddenTimer); clearInterval(autoRefTimer); autoRefTimer=null;
   const cb=document.getElementById('connectBtn'); if(cb) cb.textContent='Connect wallet';
+  const gc=document.getElementById('gasChip'); if(gc) gc.hidden=true;
+  closeTokModal();
   setNet('','Locked');
   applyGate();
   showUnlock();
@@ -926,6 +1210,7 @@ function enterConsole(){
   const lb=document.getElementById('lockBtn'); if(lb) lb.hidden=!lockActive();
   armAutoLock();
   if(!capInputWired){ capInputWired=true; const ci=document.getElementById('cap-in'); if(ci) ci.addEventListener('input', previewCap); }
+  armAutoRefresh();
   const wait=setInterval(()=>{ if(typeof ethers!=='undefined'){ clearInterval(wait); boot(); } }, 60);
   setTimeout(()=>{ if(typeof ethers==='undefined'){ toast('ethers.js failed to load','err'); setNet('bad','ethers.js failed'); } }, 6000);
 }
@@ -942,6 +1227,7 @@ function initGate(){
   if(cfg.skip){ enterConsole(); return; } // operator opted out (recommend nginx auth)
   showUnlock();                           // a passphrase is configured
 }
+window.addEventListener('keydown', e=>{ if(e.key==='Escape'){ const m=document.getElementById('tokModal'); if(m && !m.hidden) closeTokModal(); } });
 if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', initGate); else initGate();
 </script>
 </body>
