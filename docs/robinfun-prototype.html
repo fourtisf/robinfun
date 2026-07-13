@@ -77,6 +77,9 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 }
 .mono{font-family:var(--font-mono)}
 .up{color:var(--jade)} .down{color:var(--seal)} .gold{color:var(--gilt)}
+/* clickable wallet address → its profile page */
+.wlink{color:inherit;text-decoration:none;border-bottom:1px dotted rgba(198,242,60,.28);transition:color .12s ease,border-color .12s ease;cursor:pointer}
+.wlink:hover{color:var(--gilt-bright);border-bottom-color:var(--gilt-bright)}
 .wrap{max-width:var(--maxw);margin:0 auto;padding:0 24px;position:relative;z-index:1}
 
 /* ---------------- top bar ---------------- */
@@ -2053,7 +2056,12 @@ function renderTape(){
    ================================================================ */
 function viewProfile(addr){
   PROFILE_ADDR = (addr && /^0x[0-9a-fA-F]{40}$/.test(addr)) ? addr : null;
-  go('profile');
+  if(PROFILE_ADDR){
+    go('profile', false);   // render without go()'s own /profile push…
+    setRoute('/profile/'+PROFILE_ADDR, 'Profile '+shortAddr(PROFILE_ADDR)+' · Robinfun');  // …then deep-link the address
+  }else{
+    go('profile');
+  }
 }
 function profileAddr(){ return PROFILE_ADDR || wallet; }
 function copyProfileAddr(){
@@ -2888,6 +2896,15 @@ function quoteReal(t){
 }
 
 /* ---------------- trades / holders / thread ---------------- */
+/* A wallet address rendered as a link to its profile page. `full` is the full
+   0x… address; `label` is the (usually shortened) text shown. Clicking opens
+   /profile/<addr>. stopPropagation so it doesn't also fire a parent row's
+   onclick (holder / holdings / created rows). Falls back to plain text when
+   there is no real address (e.g. the "Bonding curve (contract)" pseudo-row). */
+function walletLink(full, label){
+  if(!full || !/^0x[0-9a-f]{40}$/i.test(full)) return label;
+  return '<a class="wlink" href="/profile/'+full+'" onclick="event.preventDefault();event.stopPropagation();viewProfile(\''+full+'\')">'+label+'</a>';
+}
 function tradeRow(t,tr,isNew){
   const usd = (tr.eth||0)*ETH_USD;
   const isDev = tr.full && t._creatorAddr && tr.full===t._creatorAddr;
@@ -2899,7 +2916,7 @@ function tradeRow(t,tr,isNew){
     <td>${tr.eth.toFixed(4)} <span style="color:var(--cream-mute)">· ${fmtUsd(usd)}</span></td>
     <td>${fmtNum(tr.tokens)}</td>
     <td class="gold">${tr.levyEth>0? tr.levyEth.toFixed(5)+' Ξ':'—'}</td>
-    <td>${tr.wallet}${tag}</td>
+    <td>${walletLink(tr.full, tr.wallet)}${tag}</td>
   </tr>`;
 }
 function renderTrades(t){
@@ -2939,7 +2956,7 @@ function renderRealHolders(t){
     list.push({who:'Bonding curve (contract)', pct:curveHeld/SUPPLY*100, tag:'curve'});
   }
   for(const r of rows){
-    list.push({who:r.who, pct:r.pct, tag:(me && r.full===me)?'you':''});
+    list.push({who:r.who, full:r.full, pct:r.pct, tag:(me && r.full===me)?'you':''});
   }
   if(!list.length){
     box.innerHTML = '<div style="padding:16px;color:var(--cream-mute)">No holders yet — be the first to buy.</div>';
@@ -2948,7 +2965,7 @@ function renderRealHolders(t){
   box.innerHTML = list.slice(0,12).map((r,i)=>`
     <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rule)">
       <span class="mono" style="font-size:11px;color:var(--cream-mute);width:18px">${i+1}</span>
-      <span class="mono" style="font-size:12px;flex:1">${r.who} ${r.tag?'<span class="gold">· '+r.tag+'</span>':''}</span>
+      <span class="mono" style="font-size:12px;flex:1">${walletLink(r.full, r.who)} ${r.tag?'<span class="gold">· '+r.tag+'</span>':''}</span>
       <div style="width:120px"><div class="holder-bar"><div class="holder-fill" style="width:${Math.min(100,r.pct)}%"></div></div></div>
       <span class="mono" style="font-size:12px;font-weight:600;width:56px;text-align:right">${r.pct.toFixed(2)}%</span>
     </div>`).join('');
