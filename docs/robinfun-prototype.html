@@ -12,6 +12,9 @@
 <!-- ethers.js — used to send the real on-chain createToken() launch. If it fails
      to load, the Launch button falls back to the local simulation. -->
 <script defer src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
+<!-- TradingView Lightweight Charts — the same engine pump.fun uses. If it fails
+     to load, the chart falls back to the built-in canvas renderer. -->
+<script defer src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.2.3/dist/lightweight-charts.standalone.production.js"></script>
 <style>
 /* ================================================================
    Robinfun — design tokens
@@ -1104,9 +1107,10 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
         <div class="panel chart-panel">
           <div class="chart-tools">
             <button class="tf" data-tf="1" onclick="setChartTf(1,this)">1s</button><button class="tf" data-tf="15" onclick="setChartTf(15,this)">15s</button><button class="tf active" data-tf="60" onclick="setChartTf(60,this)">1m</button><button class="tf" data-tf="300" onclick="setChartTf(300,this)">5m</button><button class="tf" data-tf="900" onclick="setChartTf(900,this)">15m</button><button class="tf" data-tf="3600" onclick="setChartTf(3600,this)">1h</button><button class="tf" data-tf="14400" onclick="setChartTf(14400,this)">4h</button><button class="tf" data-tf="86400" onclick="setChartTf(86400,this)">1d</button>
+            <button class="tf" id="tfMcapBtn" onclick="toggleMcap(this)" style="margin-left:8px">MCap</button>
             <span style="margin-left:auto" class="section-note"><span class="live-dot"></span>live</span>
           </div>
-          <div class="chart-wrap"><canvas id="chart"></canvas></div>
+          <div class="chart-wrap"><div id="lwchart" style="position:absolute;inset:0"></div><canvas id="chart"></canvas></div>
           <div class="stat-strip">
             <div class="stat-cell"><div class="k">Market cap</div><div class="v" id="ts-mcap">—</div></div>
             <div class="stat-cell"><div class="k">24h volume</div><div class="v" id="ts-vol">—</div></div>
@@ -1145,8 +1149,9 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
               <div class="amt-top"><span id="amt-label">You pay</span><span>Balance: <span id="amt-bal">2.4810 ETH</span></span></div>
               <div class="amt-row">
                 <input type="number" id="amt" placeholder="0.0" min="0" step="0.01" oninput="quote()">
-                <span class="amt-unit" id="amt-unit">ETH</span>
+                <span class="amt-unit" id="amt-unit" onclick="togglePayCcy()" title="Switch between ETH and USD" style="cursor:pointer;user-select:none">ETH ⇄</span>
               </div>
+              <div id="amt-equiv" style="font-family:var(--font-mono);font-size:11px;color:var(--cream-mute);margin-top:6px;min-height:14px"></div>
             </div>
             <div class="quick-row" id="quickRow"></div>
             <div class="fee-lines" id="feeLines"></div>
@@ -2170,6 +2175,28 @@ async function loadCreatedCoins(addr){
    ================================================================ */
 function tok(){ return TOKENS.find(t=>t.id===currentTokenId); }
 let side = 'buy';
+/* Buy input can be denominated in USD (still paid in ETH). buyEth() returns the
+   ETH the user is spending, converting from USD when the toggle is on. */
+let payUsd = false;
+function rawAmt(){ return parseFloat(document.getElementById('amt').value)||0; }
+function buyEth(){ const v = rawAmt(); return payUsd ? v/(ETH_USD||1) : v; }
+function togglePayCcy(){
+  if(side!=='buy') return;                 // USD toggle only applies to the pay side
+  const cur = rawAmt();
+  payUsd = !payUsd;
+  if(cur>0){
+    const inp = document.getElementById('amt');
+    inp.value = payUsd ? (cur*ETH_USD).toFixed(2) : +(cur/ETH_USD).toFixed(6);
+  }
+  setSide(side);
+}
+function updateEquiv(){
+  const el = document.getElementById('amt-equiv'); if(!el) return;
+  if(side!=='buy'){ el.textContent=''; return; }
+  const v = rawAmt();
+  if(!v){ el.textContent = payUsd ? 'Paying in USD — settled in ETH' : ''; return; }
+  el.textContent = payUsd ? ('≈ '+(+ (v/ETH_USD).toFixed(6))+' ETH') : ('≈ '+fmtUsdFull(v*ETH_USD));
+}
 
 function renderToken(fresh){
   const t = tok(); if(!t) return;
@@ -2273,7 +2300,63 @@ function buildCandles(t){
   out[n-1].c = t.price;
   t.candles = out;
 }
+/* Chart renderer. Prefers TradingView Lightweight Charts (pump.fun-style:
+   zoom/pan, crosshair, volume bars, MCap or price axis); falls back to the
+   built-in canvas if the library didn't load. */
+let chartMcap = true;   // default to Market Cap axis, like pump.fun
+let _lwChart=null, _lwCandle=null, _lwVol=null, _lwRO=null;
+function chartAxisFmt(p){ return chartMcap ? (p>=1000 ? fmtUsd(p) : '$'+(+Number(p).toPrecision(3))) : fmtPrice(p); }
+function ensureLwChart(){
+  if(_lwChart) return true;
+  if(typeof LightweightCharts==='undefined') return false;
+  const el = document.getElementById('lwchart'); if(!el) return false;
+  const light = document.body.classList.contains('light');
+  const grid = light?'rgba(20,32,10,.06)':'rgba(41,50,31,.35)';
+  _lwChart = LightweightCharts.createChart(el, {
+    width: el.clientWidth||600, height: el.clientHeight||360,
+    layout:{ background:{ type:'solid', color:'transparent' }, textColor: light?'#5b6b3a':'#8a936f', fontFamily:'"IBM Plex Mono",monospace', fontSize:11 },
+    grid:{ vertLines:{ color:grid }, horzLines:{ color:grid } },
+    timeScale:{ timeVisible:true, secondsVisible:true, borderColor:'rgba(41,50,31,.5)' },
+    rightPriceScale:{ borderColor:'rgba(41,50,31,.5)' },
+    crosshair:{ mode: LightweightCharts.CrosshairMode.Normal },
+    localization:{ priceFormatter: chartAxisFmt },
+  });
+  _lwCandle = _lwChart.addCandlestickSeries({ upColor:'#C6F23C', downColor:'#FF5B4A', borderUpColor:'#C6F23C', borderDownColor:'#FF5B4A', wickUpColor:'#C6F23C', wickDownColor:'#FF5B4A' });
+  _lwVol = _lwChart.addHistogramSeries({ priceScaleId:'', priceFormat:{ type:'volume' } });
+  _lwVol.priceScale().applyOptions({ scaleMargins:{ top:0.82, bottom:0 } });
+  _lwRO = new ResizeObserver(()=>{ if(_lwChart && el.clientWidth) _lwChart.applyOptions({ width:el.clientWidth, height:el.clientHeight }); });
+  _lwRO.observe(el);
+  return true;
+}
 function drawChart(t){
+  if(!t || !t.candles || !t.candles.length) return;
+  const cvEl = document.getElementById('chart');
+  if(ensureLwChart()){
+    if(cvEl) cvEl.style.display='none';
+    const mul = chartMcap ? SUPPLY : 1;                 // mcap = price/token × supply (price already USD)
+    const cd=[], vd=[]; let lastT=0;
+    const tf = Math.max(1, chartTf);
+    const baseT = Math.floor(Date.now()/1000) - t.candles.length*tf;
+    t.candles.forEach((c,i)=>{
+      let tm = c.t? Math.floor(c.t/1000) : (baseT + i*tf);
+      if(tm<=lastT) tm=lastT+1; lastT=tm;               // strictly increasing, unique
+      cd.push({ time:tm, open:c.o*mul, high:c.h*mul, low:c.l*mul, close:c.c*mul });
+      vd.push({ time:tm, value:(c.vol||0), color: c.c>=c.o? 'rgba(198,242,60,.45)':'rgba(255,91,74,.45)' });
+    });
+    try{ _lwCandle.setData(cd); _lwVol.setData(vd); _lwChart.timeScale().fitContent(); }catch(e){ console.error('lwchart', e); }
+    return;
+  }
+  const lw = document.getElementById('lwchart'); if(lw) lw.style.display='none';
+  if(cvEl) cvEl.style.display='';
+  return drawChartCanvas(t);
+}
+function toggleMcap(btn){
+  chartMcap = !chartMcap;
+  if(btn) btn.textContent = chartMcap ? 'MCap' : 'Price';
+  if(_lwChart){ _lwChart.applyOptions({ localization:{ priceFormatter: chartAxisFmt } }); }
+  const t = tok(); if(t) drawChart(t);
+}
+function drawChartCanvas(t){
   const cv = document.getElementById('chart');
   if(!cv || !t.candles) return;
   const dpr = window.devicePixelRatio||1;
@@ -2415,7 +2498,7 @@ async function loadCurveTrades(t){
     evs.forEach(e=> e.ts = times[e.block] || Date.now());
     t.trades = evs.slice().reverse().map(e=>({ts:e.ts, buy:e.buy, eth:e.eth, tokens:e.tokens, levyEth:e.levyEth, wallet:e.wallet, full:e.full}));
     t._series = evs.map(e=> e.priceEth*ETH_USD);
-    t._priceSeries = evs.map(e=> ({ts:e.ts, px:e.priceEth*ETH_USD}));   // timestamped for time-bucketed candles
+    t._priceSeries = evs.map(e=> ({ts:e.ts, px:e.priceEth*ETH_USD, vol:(e.eth||0)*ETH_USD}));   // timestamped + volume for candles
     t.vol24 = evs.filter(e=> Date.now()-e.ts < 864e5).reduce((s,e)=> s+e.eth, 0)*ETH_USD;
 
     /* real holder distribution — net token flow per wallet from curve trades
@@ -2467,8 +2550,8 @@ function buildCandlesFromTrades(t){
   for(const p of series){
     const key = Math.floor(p.ts/tf)*tf;
     let b = map.get(key);
-    if(!b){ b = {t:key, o:p.px, h:p.px, l:p.px, c:p.px, v:0}; map.set(key, b); }
-    b.h=Math.max(b.h,p.px); b.l=Math.min(b.l,p.px); b.c=p.px; b.v++;
+    if(!b){ b = {t:key, o:p.px, h:p.px, l:p.px, c:p.px, v:0, vol:0}; map.set(key, b); }
+    b.h=Math.max(b.h,p.px); b.l=Math.min(b.l,p.px); b.c=p.px; b.v++; b.vol+=(p.vol||0);
   }
   const keys = [...map.keys()].sort((a,b)=>a-b);
   const first = keys[0], last = keys[keys.length-1];
@@ -2565,14 +2648,17 @@ function quoteDex(t){
   if(!t._dexREth){ el.innerHTML = '<div class="fl"><span>◆ Graduated — trades on the DEX. Loading pool…</span></div>'; return; }
   if(!amt){ el.innerHTML = '<div class="fl"><span>◆ Graduated — trades on the DEX. Enter an amount.</span></div>'; return; }
   if(side==='buy'){
-    const inFee = amt*0.997;                            // 0.3% DEX fee
+    const ethIn = buyEth();                             // ETH spent (from USD if toggled)
+    const inFee = ethIn*0.997;                          // 0.3% DEX fee
     let out = (inFee*t._dexRTok)/(t._dexREth+inFee);    // constant product
     out = out*(1-(t.buyTax||0)/100);                    // token levy on receipt
-    el.innerHTML = `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(out)} $${t.ticker}</b></div>`;
+    el.innerHTML =
+      `<div class="fl"><span>You pay</span><b>${fmtUsdFull(ethIn*ETH_USD)} · ${(+ethIn.toFixed(6))} Ξ</b></div>`+
+      `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(out)} $${t.ticker}</b></div>`;
   }else{
     const inFee = amt*(1-(t.sellTax||0)/100)*0.997;     // levy on send + 0.3% DEX fee
     const out = (inFee*t._dexREth)/(t._dexRTok+inFee);
-    el.innerHTML = `<div class="fl big"><span>You receive</span><b>≈ ${out.toFixed(6)} ETH</b></div>`;
+    el.innerHTML = `<div class="fl big"><span>You receive</span><b>≈ ${out.toFixed(6)} ETH · ${fmtUsdFull(out*ETH_USD)}</b></div>`;
   }
 }
 async function doTradeDex(t){
@@ -2592,9 +2678,10 @@ async function doTradeDex(t){
     // risk). Set a real slippage floor before opening trading to the public.
     btn.disabled = true;
     if(buy){
-      if(t._ethBal!=null && amt > t._ethBal-0.0002){ toast('Not enough ETH — you have '+(t._ethBal||0).toFixed(4),'seal'); btn.disabled=false; setSide(side); return; }
+      const ethIn = buyEth();   // ETH to spend (converted from USD if toggled)
+      if(t._ethBal!=null && ethIn > t._ethBal-0.0002){ toast('Not enough ETH — you have '+(t._ethBal||0).toFixed(4),'seal'); btn.disabled=false; setSide(side); return; }
       btn.textContent='Confirm in wallet…';
-      const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(0n, [WETH_ADDR, t.ca], owner, deadline, {value: ethers.parseEther(String(amt))});
+      const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(0n, [WETH_ADDR, t.ca], owner, deadline, {value: ethers.parseEther(ethIn.toFixed(12))});
       toast('Buy sent — waiting…','jade'); btn.textContent='Buying…';
       await tx.wait(); toast('Bought $'+t.ticker+' ✓','jade');
     }else{
@@ -2667,13 +2754,14 @@ async function doTradeReal(t){
     const SLIP = 920n;   // keep ≥92% (8% slippage tolerance) — fine on testnet
     btn.disabled = true;
     if(buy){
+      const ethIn = buyEth();   // ETH to spend (converted from USD if toggled)
       // You must hold the full amount up front even though the curve refunds
       // any excess above the graduation cap — check before sending.
-      if(t._ethBal!=null && amt > t._ethBal - 0.0002){
+      if(t._ethBal!=null && ethIn > t._ethBal - 0.0002){
         toast('Not enough ETH — you have '+(t._ethBal||0).toFixed(4)+'. Try the graduation amount or Max.','seal');
         btn.disabled=false; setSide(side); return;
       }
-      const val = ethers.parseEther(String(amt));
+      const val = ethers.parseEther(ethIn.toFixed(12));
       const q = await curveR.quoteBuy(val);
       const minOut = q.tokensOut * SLIP / 1000n;
       btn.textContent = 'Confirm in wallet…';
@@ -2716,21 +2804,21 @@ function quoteReal(t){
   if(!amt || !t.vEth){ el.innerHTML = '<div class="fl"><span>Enter an amount to preview.</span></div>'; return; }
   const rate = side==='buy' ? t.buyTax : t.sellTax;
   if(side==='buy'){
-    let fee=amt*0.01, levy=amt*rate/100, net=amt-fee-levy, refunded=0;
+    const ethIn = buyEth();     // ETH being spent (converted from USD if the toggle is on)
+    let fee=ethIn*0.01, levy=ethIn*rate/100, net=ethIn-fee-levy, refunded=0;
     // Cap at the graduation room — the curve refunds anything above it.
     const room = (realToken(t) && t.gradTargetEth) ? Math.max(0, t.gradTargetEth - (t.reserveEth||0)) : Infinity;
-    if(net > room){ refunded = amt - room/(1-0.01-rate/100); net = room; fee = amt*0.01; levy = amt*rate/100; }
+    if(net > room){ refunded = ethIn - room/(1-0.01-rate/100); net = room; fee = ethIn*0.01; levy = ethIn*rate/100; }
     const tokens = t.vTok*net/(t.vEth+net);
-    // Clean quote: just what you get. (Fees are still shown once, statically,
-    // under the button and in the fee record — no need to itemize every keystroke.)
     el.innerHTML =
+      `<div class="fl"><span>You pay</span><b>${fmtUsdFull(ethIn*ETH_USD)} · ${(+ethIn.toFixed(6))} Ξ</b></div>`+
       (refunded>1e-9? `<div class="fl"><span>Refunded (past graduation cap)</span><b>${refunded.toFixed(5)} Ξ</b></div>`:'')+
       `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(tokens)} $${t.ticker}${refunded>1e-9?' · graduates ◆':''}</b></div>`;
   }else{
     const gross = t.vEth*amt/(t.vTok+amt);
     const fee=gross*0.01, levy=gross*rate/100, net=gross-fee-levy;
     el.innerHTML =
-      `<div class="fl big"><span>You receive</span><b>≈ ${net.toFixed(5)} ETH</b></div>`;
+      `<div class="fl big"><span>You receive</span><b>≈ ${net.toFixed(5)} ETH · ${fmtUsdFull(net*ETH_USD)}</b></div>`;
   }
 }
 
@@ -2840,29 +2928,33 @@ function setSide(s){
   btn.disabled = false;
   if(amtInput) amtInput.disabled = false;
   document.getElementById('amt-label').textContent = s==='buy'?'You pay':'You sell';
-  document.getElementById('amt-unit').textContent = s==='buy'?'ETH':'$'+(t?t.ticker:'');
+  document.getElementById('amt-unit').textContent = s==='buy'? (payUsd?'USD ⇄':'ETH ⇄') : '$'+(t?t.ticker:'');
   document.getElementById('amt-bal').textContent = realToken(t)
     ? (s==='buy'? ((t._ethBal||0).toFixed(4)+' ETH') : (fmtNum(t._tokBal||0)+' $'+t.ticker))
     : (s==='buy'? '2.4810 ETH' : (t? fmtNum(rnd(1e6,4e7))+' $'+t.ticker : '—'));
   const qr = document.getElementById('quickRow');
+  // Buy chips render in whatever currency the pay input is set to (USD or ETH).
+  const chip = eth => {
+    const val = payUsd ? +(eth*ETH_USD).toFixed(2) : +(+eth).toPrecision(3);
+    const lbl = payUsd ? '$'+(+(eth*ETH_USD).toFixed(2)) : (+(+eth).toPrecision(2))+' Ξ';
+    return `<button onclick="setAmt(${val})">${lbl}</button>`;
+  };
   if(s!=='buy'){
     qr.innerHTML = ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`).join('');
   }else if(grad){
-    // Post-graduation DEX buy — small ETH chips (no curve cap anymore).
-    qr.innerHTML = ['0.0005','0.001','0.005','0.01'].map(v=>`<button onclick="setAmt(${v})">${v} Ξ</button>`).join('');
+    qr.innerHTML = [0.0005,0.001,0.005,0.01].map(chip).join('');   // post-grad DEX buy
   }else{
     const g = gradBuyEth(t);   // gross ETH to graduate this curve (null for sim)
     if(g && g>0){
-      // Buttons scale to the graduation cap so you never overpay (excess just refunds).
-      const q = x => `<button onclick="setAmt(${x.toPrecision(3)})">${(+x.toPrecision(2))} Ξ</button>`;
-      qr.innerHTML = q(g*0.25) + q(g*0.5) + q(g) + `<button onclick="setAmtMax()">Max</button>`;
+      qr.innerHTML = chip(g*0.25) + chip(g*0.5) + chip(g) + `<button onclick="setAmtMax()">Max</button>`;
     }else{
-      qr.innerHTML = ['0.05','0.1','0.5','1.0'].map(v=>`<button onclick="setAmt(${v})">${v} Ξ</button>`).join('');
+      qr.innerHTML = [0.05,0.1,0.5,1.0].map(chip).join('');
     }
   }
   if(t) document.getElementById('fee-note').textContent = s==='buy'
     ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
     : (t.sellTax>0? t.sellTax+'% sell fee → creator' : 'no sell fee');
+  updateEquiv();
   quote();
 }
 /* Gross ETH needed to graduate a real curve from its current reserve (incl.
@@ -2878,10 +2970,11 @@ function setAmt(v){ document.getElementById('amt').value=v; quote(); }
 /* Max = as much as you can afford (leaving gas), never more than needed to graduate. */
 function setAmtMax(){
   const t = tok();
-  let v = Math.max(0, (t&&t._ethBal||0) - 0.0003);   // leave a little for gas
+  let v = Math.max(0, (t&&t._ethBal||0) - 0.0003);   // leave a little for gas (ETH)
   const g = gradBuyEth(t);
   if(g && g>0) v = Math.min(v, g);
-  document.getElementById('amt').value = v>0 ? +v.toPrecision(4) : 0;
+  // v is ETH; convert to the input's currency (USD when the toggle is on).
+  document.getElementById('amt').value = v>0 ? (payUsd ? +(v*ETH_USD).toFixed(2) : +v.toPrecision(4)) : 0;
   quote();
 }
 function setAmtPct(p){
@@ -2895,6 +2988,7 @@ function setAmtPct(p){
 }
 function quote(){
   const t = tok(); if(!t) return;
+  updateEquiv();
   if(realToken(t)) return t.graduated ? quoteDex(t) : quoteReal(t);
   const amt = parseFloat(document.getElementById('amt').value)||0;
   const el = document.getElementById('feeLines');
@@ -2925,7 +3019,7 @@ function doTrade(){
   const amt = parseFloat(document.getElementById('amt').value)||0;
   if(!amt){ toast('Enter an amount','seal'); return; }
   const buy = side==='buy';
-  const eth = buy? amt : amt*t.price/ETH_USD;
+  const eth = buy? buyEth() : amt*t.price/ETH_USD;
   applyTrade(t, {ts:Date.now(), buy, eth, tokens: buy? eth*ETH_USD/t.price : amt, levyEth: eth*(buy?t.buyTax:t.sellTax)/100, wallet: MY_ADDR}, true);
   toast((buy?'Bought':'Sold')+' — <b>'+eth.toFixed(4)+' Ξ</b>'+((buy?t.buyTax:t.sellTax)>0?' · fee paid to creator':''), buy?'jade':'seal');
   document.getElementById('amt').value=''; quote();
