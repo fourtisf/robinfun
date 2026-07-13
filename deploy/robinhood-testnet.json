@@ -3,16 +3,20 @@
   "chainId": 46630,
   "rpc": "https://rpc.testnet.chain.robinhood.com",
   "explorer": "https://explorer.testnet.chain.robinhood.com",
-  "deployedAt": "2026-07-12",
-  "deployFeeWei": "500000000000000",
+  "deployedAt": "2026-07-13",
+  "build": "audit-fixed (internal audit 2026-07-13, 7 findings fixed, 158 tests) + private beta + 0.001 ETH cap",
+  "deployFeeWei": "200000000000000",
+  "graduationEthWei": "1000000000000000",
+  "betaMode": true,
+  "allowlisted": ["0xA49dc277A65CCb35D94522cecDa19CA340AE991C"],
   "contracts": {
-    "factory": "0x1B57C272F120c7A907324751A544661f1b6Fbf59",
-    "feeRouter": "0xD2e21B0241d35a3b5742d39aDb0Cb86B59D56678",
-    "weth": "0x27532e12515b8AEe9EaA620BDad63bB204E0365e",
-    "dexFactory": "0x2b86777103646529f91c42D9BacdEfBDd9AD37d0",
-    "dexRouter": "0xe3D8B694bCe637555ed053f1b6a812661f2D31E4",
-    "tokenImpl": "0x1C319faCDe66B447D30d94085644869253c5fBa5",
-    "treasury": "0xd8AF6bB736BB3C8c1C8417288963cD1e9832Ba0b"
+    "factory": "0xD975d8F2d5447312810347C9c2D75548738D4E11",
+    "feeRouter": "0x87b452A906B4904D2Aa2A38A500961131F975553",
+    "weth": "0x12d684D8f76A18ea815E1BFa0A121cff18213DF0",
+    "dexFactory": "0x150e1aBBe0e7d9DAc6568B2e5A95611a2CDcD41e",
+    "dexRouter": "0x46561649524Ab7a18d2A6977Ae32C8537fAf4C23",
+    "tokenImpl": "0xA9d5adbead994662c66E38Ce10F0c7281431a500",
+    "treasury": "0xA49dc277A65CCb35D94522cecDa19CA340AE991C"
   },
-  "notes": "Testnet only (unaudited). The treasury must call feeRouter.acceptOwnership() to finalize FeeRouter ownership. A second, earlier deploy also exists (factory 0xFA5c740Aec9D91CeBDC9844e5CA6591f309A5dD2); this file is the canonical one the frontend uses."
+  "notes": "Beta deploy. betaMode ON — only allowlisted wallets create/trade. Cap: each curve holds <=0.001 ETH before graduating (LP burned). Owner+treasury+allowlisted = the deployer 0xA49dc277A65CCb35D94522cecDa19CA340AE991C. Add wallets: factory.setBetaAllowed([addr], true). Go public: factory.setBetaMode(false). Supersedes the pre-audit factory 0x1B57C272F120c7A907324751A544661f1b6Fbf59."
 }

@@ -1402,7 +1402,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
    Robinfun prototype engine — all data simulated client-side
    ================================================================ */
 let ETH_USD = 1800;                                    // refreshed live from a price API on load
-const START_ETH = 4000/3850, GRAD_ETH = 44000/3850;   // ETH-denominated caps (curve was sized at ETH=$3850)
+const START_ETH = 0.0004, GRAD_ETH = 0.0044;   // beta curve mcap (ETH): ~0.001-ETH graduation cap, same 11x shape
 let START_CAP = Math.round(START_ETH*ETH_USD), GRAD_CAP = Math.round(GRAD_ETH*ETH_USD);
 const fmtUsd = n => n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n>=1e3 ? '$'+(n/1e3).toFixed(1)+'k' : '$'+n.toFixed(0);
 const fmtUsdFull = n => '$'+Math.round(n).toLocaleString('en-US');
@@ -1448,9 +1448,9 @@ const CHAIN = {
   blockExplorerUrls: ['https://explorer.testnet.chain.robinhood.com'],
 };
 /* Deployed RobinfunFactory (testnet). Launch calls createToken() here. */
-const FACTORY_ADDR = '0x1B57C272F120c7A907324751A544661f1b6Fbf59';
-let DEPLOY_FEE_WEI = 1000000000000000n;     // 0.001 ETH — refreshed live from the chain
-let deployFeeEth = 0.001;
+const FACTORY_ADDR = '0xD975d8F2d5447312810347C9c2D75548738D4E11';   // beta (audit-fixed, capped 0.001, allowlist)
+let DEPLOY_FEE_WEI = 200000000000000n;     // 0.0002 ETH — refreshed live from the chain
+let deployFeeEth = 0.0002;
 const MIN_DEV_BUY = 0.01;                  // dev buy is mandatory — creator must hold a launch position
 const EXPLORER = 'https://explorer.testnet.chain.robinhood.com';
 const FACTORY_ABI = [
