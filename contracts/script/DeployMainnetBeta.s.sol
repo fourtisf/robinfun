@@ -60,22 +60,43 @@ contract DeployMainnetBeta is Script {
 
         require(tester != address(0), "BETA_TESTER cannot be zero");
 
+        // Real DEX addresses (Uniswap V2 on Robinhood Chain). When all three are
+        // supplied, graduation deposits LP into the REAL Uniswap so tokens show
+        // on DexScreener + are bot-trackable. If omitted, fall back to deploying
+        // our own faithful v2 clone (isolated test). We VERIFY the real
+        // addresses have code so a typo can't route graduation ETH into a void.
+        address dexFactoryAddr = vm.envOr("DEX_FACTORY", address(0));
+        address dexRouterAddr = vm.envOr("DEX_ROUTER", address(0));
+        address wethAddr = vm.envOr("WETH", address(0));
+        bool useRealDex = dexFactoryAddr != address(0) && dexRouterAddr != address(0) && wethAddr != address(0);
+        if (useRealDex) {
+            require(dexFactoryAddr.code.length > 0, "DEX_FACTORY has no code on this chain");
+            require(dexRouterAddr.code.length > 0, "DEX_ROUTER has no code on this chain");
+            require(wethAddr.code.length > 0, "WETH has no code on this chain");
+        }
+
         vm.startBroadcast(pk);
 
-        // Our own DEX (faithful Uniswap-v2 clone) + WETH.
-        MockWETH weth = new MockWETH();
-        MockUniswapV2Factory dexFactory = new MockUniswapV2Factory();
-        MockUniswapV2Router dexRouter = new MockUniswapV2Router(address(dexFactory), address(weth));
+        if (!useRealDex) {
+            // Fallback: our own faithful Uniswap-v2 clone + WETH (isolated, not
+            // indexed by DexScreener). Only used when real addresses aren't given.
+            MockWETH w = new MockWETH();
+            MockUniswapV2Factory f = new MockUniswapV2Factory();
+            MockUniswapV2Router r = new MockUniswapV2Router(address(f), address(w));
+            dexFactoryAddr = address(f);
+            dexRouterAddr = address(r);
+            wethAddr = address(w);
+        }
 
         // Protocol. Deployer owns both during wiring so it can seed the beta
         // allowlist; ownership is handed to the treasury only if that is a
         // different wallet (two-step accept).
         FeeRouter feeRouter = new FeeRouter(deployer);
         RobinfunFactory factory =
-            new RobinfunFactory(deployer, address(feeRouter), address(dexFactory), address(weth), params, deployFee);
+            new RobinfunFactory(deployer, address(feeRouter), dexFactoryAddr, wethAddr, params, deployFee);
 
         feeRouter.setFactory(address(factory));
-        feeRouter.setDexRouter(address(dexRouter));
+        feeRouter.setDexRouter(dexRouterAddr);
         feeRouter.setTreasury(treasury);
 
         // PRIVATE BETA: allowlist ONLY the tester wallet. Nobody else — not even
@@ -97,9 +118,10 @@ contract DeployMainnetBeta is Script {
         console.log("deployer (admin)  ", deployer);
         console.log("treasury/owner    ", treasury);
         console.log("beta tester (only)", tester);
-        console.log("WETH              ", address(weth));
-        console.log("DEX factory       ", address(dexFactory));
-        console.log("DEX router        ", address(dexRouter));
+        console.log("DEX               ", useRealDex ? "REAL Uniswap V2" : "mock clone (not indexed)");
+        console.log("WETH              ", wethAddr);
+        console.log("DEX factory       ", dexFactoryAddr);
+        console.log("DEX router        ", dexRouterAddr);
         console.log("FeeRouter         ", address(feeRouter));
         console.log("Factory           ", address(factory));
         console.log("  tokenImpl       ", factory.tokenImplementation());

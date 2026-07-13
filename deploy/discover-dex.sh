@@ -19,9 +19,9 @@ set -euo pipefail
 export PATH="$HOME/.foundry/bin:$PATH"
 RPC="${RPC:-https://rpc.mainnet.chain.robinhood.com}"
 
-# Uniswap's canonical deterministic V2 addresses (Base/Blast/newer chains).
-FACTORY="${FACTORY:-0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6}"
-ROUTER="${ROUTER:-0x4752ba5DBc23f44D87826276BF6Fd6b1C372aD24}"
+# Uniswap V2 on Robinhood Chain (from Uniswap's deployments/4663 file).
+FACTORY="${FACTORY:-0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f}"
+ROUTER="${ROUTER:-0x89e5db8b5aa49aa85ac63f691524311aeb649eba}"
 
 command -v cast >/dev/null 2>&1 || { echo "cast not found — install Foundry first (see bootstrap-deploy-testnet.sh)"; exit 1; }
 

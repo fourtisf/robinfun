@@ -90,6 +90,22 @@ TREASURY="${TREASURY:-$DEPLOYER}"; export TREASURY
 BETA_TESTER="${BETA_TESTER:-0xA49dc277A65CCb35D94522cecDa19CA340AE991C}"; export BETA_TESTER
 DEPLOY_FEE="${DEPLOY_FEE:-1000000000000000}"; export DEPLOY_FEE
 
+# Real Uniswap V2 on Robinhood Chain (from Uniswap's deployments/4663 file) —
+# graduation deposits LP here so tokens appear on DexScreener + are bot-trackable.
+DEX_FACTORY="${DEX_FACTORY:-0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f}"; export DEX_FACTORY
+DEX_ROUTER="${DEX_ROUTER:-0x89e5db8b5aa49aa85ac63f691524311aeb649eba}"; export DEX_ROUTER
+WETH="${WETH:-0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73}"; export WETH
+# Verify they exist on THIS chain before spending real ETH (typo → abort).
+for pair in "DEX_FACTORY:$DEX_FACTORY" "DEX_ROUTER:$DEX_ROUTER" "WETH:$WETH"; do
+  name="${pair%%:*}"; addr="${pair#*:}"
+  code="$(cast code "$addr" --rpc-url "$RPC" 2>/dev/null || echo 0x)"
+  [ "${#code}" -gt 4 ] || die "${name} ${addr} has NO CODE on this RPC. Wrong address — check developers.uniswap.org/docs/protocols/v2/deployments (chain 4663) and pass ${name}=0x..."
+done
+RW="$(cast call "$DEX_ROUTER" 'WETH()(address)' --rpc-url "$RPC" 2>/dev/null || echo '')"
+log "Uniswap V2 factory : ${DEX_FACTORY}"
+log "Uniswap V2 router  : ${DEX_ROUTER}  (router.WETH()=${RW})"
+log "WETH               : ${WETH}"
+
 BAL="$(cast balance "$DEPLOYER" --rpc-url "$RPC" 2>/dev/null || echo 0)"
 log "Admin/deployer : ${DEPLOYER}  (balance ${BAL} wei)"
 log "Treasury/owner : ${TREASURY}"
