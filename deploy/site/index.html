@@ -973,14 +973,14 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <span class="devbuy-title">Snipe your own launch first</span>
             <span class="devbuy-req">REQUIRED</span>
           </div>
-          <label for="c-buyin" class="devbuy-label">Amount to buy in the deploy tx <span>(required — min <span id="devMinLbl">0.01</span> ETH)</span></label>
+          <label for="c-buyin" class="devbuy-label">Amount to buy in the deploy tx <span>(required — min <span id="devMinLbl">0.0001</span> ETH)</span></label>
           <div class="devbuy-input">
-            <input type="number" id="c-buyin" min="0.01" step="0.01" value="0.05" placeholder="0.05" oninput="syncCost()">
+            <input type="number" id="c-buyin" min="0.0001" step="0.0001" value="0.0003" placeholder="0.0003" oninput="syncCost()">
             <div class="devbuy-chips">
-              <button type="button" class="devchip" onclick="setDevBuy(0.05)">0.05</button>
-              <button type="button" class="devchip" onclick="setDevBuy(0.1)">0.1</button>
-              <button type="button" class="devchip" onclick="setDevBuy(0.25)">0.25</button>
-              <button type="button" class="devchip" onclick="setDevBuy(0.5)">0.5</button>
+              <button type="button" class="devchip" onclick="setDevBuy(0.0002)">0.0002</button>
+              <button type="button" class="devchip" onclick="setDevBuy(0.0003)">0.0003</button>
+              <button type="button" class="devchip" onclick="setDevBuy(0.0005)">0.0005</button>
+              <button type="button" class="devchip" onclick="setDevBuy(0.0008)">0.0008</button>
             </div>
           </div>
           <div class="hint">Every creator must take a launch position — it lands in the <b>same transaction</b> as the deploy, before anyone else can trade, and is shown publicly. No zero-buy launches: skin in the game is mandatory, so you can't dump on your own holders from an empty bag.</div>
@@ -1462,7 +1462,7 @@ const FEEROUTER_ADDR = '0x2894A7E9728dcA83DD60cEdD29Bce8054b96a4cF';
 const FEEROUTER_ABI = [ 'function creatorEarnedLifetime(address) view returns (uint256)' ];
 let DEPLOY_FEE_WEI = 1000000000000000n;     // 0.001 ETH — refreshed live from the chain
 let deployFeeEth = 0.001;
-const MIN_DEV_BUY = 0.01;                  // dev buy is mandatory — creator must hold a launch position
+const MIN_DEV_BUY = 0.0001;                // dev buy is mandatory — creator must hold a launch position (sized to the 0.001 ETH beta cap so a launch stays on the curve)
 const EXPLORER = 'https://robinhoodchain.blockscout.com';
 const FACTORY_ABI = [
   'function createToken((string name,string symbol,string metadataURI,uint16 buyLevyBps,uint16 sellLevyBps,bool decayAtGraduation,bool renounceRateControl,uint256 devBuyMinTokensOut,bytes32 vanitySalt,uint256 maxDeployFee)) payable returns (address token, address curve)',
