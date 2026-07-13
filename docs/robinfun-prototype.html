@@ -1030,7 +1030,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
               <div class="sw-t">Vanity address — ends in <span class="mono" style="color:var(--gold)">…feed</span></div>
               <div class="sw-d">Robinfun's signature. Your browser grinds a salt (a few seconds) so the token's contract address ends in <span class="mono">feed</span> — no extra gas, no extra fee.</div>
             </div>
-            <label class="switch"><input type="checkbox" id="c-vanity"><span class="track"></span></label>
+            <label class="switch"><input type="checkbox" id="c-vanity" checked><span class="track"></span></label>
           </div>
         </div>
 
@@ -1103,7 +1103,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <div>
         <div class="panel chart-panel">
           <div class="chart-tools">
-            <button class="tf active">5m</button><button class="tf">1h</button><button class="tf">4h</button><button class="tf">1d</button>
+            <button class="tf" data-tf="1" onclick="setChartTf(1,this)">1s</button><button class="tf" data-tf="15" onclick="setChartTf(15,this)">15s</button><button class="tf active" data-tf="60" onclick="setChartTf(60,this)">1m</button><button class="tf" data-tf="300" onclick="setChartTf(300,this)">5m</button><button class="tf" data-tf="900" onclick="setChartTf(900,this)">15m</button><button class="tf" data-tf="3600" onclick="setChartTf(3600,this)">1h</button><button class="tf" data-tf="14400" onclick="setChartTf(14400,this)">4h</button><button class="tf" data-tf="86400" onclick="setChartTf(86400,this)">1d</button>
             <span style="margin-left:auto" class="section-note"><span class="live-dot"></span>live</span>
           </div>
           <div class="chart-wrap"><canvas id="chart"></canvas></div>
@@ -2415,6 +2415,7 @@ async function loadCurveTrades(t){
     evs.forEach(e=> e.ts = times[e.block] || Date.now());
     t.trades = evs.slice().reverse().map(e=>({ts:e.ts, buy:e.buy, eth:e.eth, tokens:e.tokens, levyEth:e.levyEth, wallet:e.wallet, full:e.full}));
     t._series = evs.map(e=> e.priceEth*ETH_USD);
+    t._priceSeries = evs.map(e=> ({ts:e.ts, px:e.priceEth*ETH_USD}));   // timestamped for time-bucketed candles
     t.vol24 = evs.filter(e=> Date.now()-e.ts < 864e5).reduce((s,e)=> s+e.eth, 0)*ETH_USD;
 
     /* real holder distribution — net token flow per wallet from curve trades
@@ -2445,34 +2446,49 @@ async function loadCurveTrades(t){
     }catch(_){}
   }catch(e){ console.error('loadCurveTrades', e); }
 }
+let chartTf = 60;   // candle interval in SECONDS (1m default, pump.fun-style)
+function setChartTf(sec, btn){
+  chartTf = sec;
+  document.querySelectorAll('.chart-tools .tf').forEach(b=>b.classList.remove('active'));
+  if(btn) btn.classList.add('active');
+  const t = tok();
+  if(t){ if(realToken(t)){ buildCandlesFromTrades(t); } else { buildCandles(t); } drawChart(t); }
+}
 function buildCandlesFromTrades(t){
-  // Build OHLC from the real post-trade price walk. We prepend the curve's
-  // launch price (mcap START_ETH over the fixed supply) as the opening
-  // reference and bucket with SHARED endpoints (each candle opens where the
-  // previous closed), so even a single trade renders a real body instead of a
-  // flat dash. The last close is pinned to the live price.
-  const series = (t._series && t._series.length) ? t._series.slice() : [];
+  // TIME-bucketed OHLC (pump.fun-style): group the real timestamped price walk
+  // into candles of `chartTf` seconds. Empty intervals between trades become
+  // flat doji candles at the last close, so the timeline is continuous.
   const launchPx = (START_ETH/SUPPLY)*ETH_USD || (t.price||0);
-  // With ≥2 real trades use the trade price-walk directly (tight, honest
-  // range). Only prepend the launch price for a single trade, so one buy still
-  // shows a candle body — never for many, or the launch→first-trade jump would
-  // dominate the whole pane as one giant candle.
-  let prices;
-  if(series.length >= 2) prices = series.slice();
-  else if(series.length === 1) prices = [launchPx, series[0]];
-  else { t.candles = [{o:launchPx, h:launchPx, l:launchPx, c:launchPx, v:0}]; return; }
-  if(t.price) prices[prices.length-1] = t.price;
-  const steps = prices.length - 1;
-  if(steps < 1){ t.candles = [{o:launchPx, h:launchPx, l:launchPx, c:launchPx, v:0}]; return; }
-  const N = Math.min(60, steps);
-  const out = [];
-  for(let k=0;k<N;k++){
-    const a = Math.floor(k*steps/N);
-    const b = Math.max(a+1, Math.floor((k+1)*steps/N));
-    const sl = prices.slice(a, b+1);              // shared endpoint → continuous bodies
-    out.push({o:sl[0], c:sl[sl.length-1], h:Math.max(...sl), l:Math.min(...sl), v:sl.length-1});
+  const series = (t._priceSeries && t._priceSeries.length) ? t._priceSeries.slice().sort((a,b)=>a.ts-b.ts) : [];
+  if(!series.length){ t.candles = [{o:launchPx, h:launchPx, l:launchPx, c:launchPx, v:0}]; return; }
+  const tf = Math.max(1, chartTf)*1000;   // ms
+  // Bucket trades by floor(ts/tf).
+  const map = new Map();
+  for(const p of series){
+    const key = Math.floor(p.ts/tf)*tf;
+    let b = map.get(key);
+    if(!b){ b = {t:key, o:p.px, h:p.px, l:p.px, c:p.px, v:0}; map.set(key, b); }
+    b.h=Math.max(b.h,p.px); b.l=Math.min(b.l,p.px); b.c=p.px; b.v++;
   }
-  t.candles = out;
+  const keys = [...map.keys()].sort((a,b)=>a-b);
+  const first = keys[0], last = keys[keys.length-1];
+  const span = (last-first)/tf;
+  const out = [];
+  let carry = map.get(first).o;
+  if(span <= 400){
+    // Fill gaps with flat candles so the axis is continuous (like a real chart).
+    for(let k=first; k<=last; k+=tf){
+      const b = map.get(k);
+      if(b){ b.o = carry; out.push(b); carry = b.c; }
+      else { out.push({t:k, o:carry, h:carry, l:carry, c:carry, v:0}); }
+    }
+  }else{
+    // Too many empty intervals for this timeframe — just the traded buckets,
+    // opened continuously (avoids generating thousands of flat candles).
+    for(const k of keys){ const b = map.get(k); b.o = carry; out.push(b); carry = b.c; }
+  }
+  if(t.price && out.length) out[out.length-1].c = t.price;   // pin last close to live price
+  t.candles = out.slice(-140);   // keep the most recent
 }
 async function refreshReal(t, withTrades){
   const ok = await loadCurveState(t);
