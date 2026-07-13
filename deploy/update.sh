@@ -33,6 +33,8 @@ log "Republishing the frontend to ${WEBROOT}"
 [ -f "$SRC_DIR/deploy/site/index.html" ] || die "deploy/site/index.html missing in the repo"
 mkdir -p "$WEBROOT"
 cp "$SRC_DIR/deploy/site/index.html" "$WEBROOT/index.html"
+# Owner-only admin console (served at /admin.html — noindex, gated on-chain).
+[ -f "$SRC_DIR/deploy/site/admin.html" ] && cp "$SRC_DIR/deploy/site/admin.html" "$WEBROOT/admin.html"
 chown -R www-data:www-data "$WEBROOT"
 chmod -R a+rX "$WEBROOT"
 

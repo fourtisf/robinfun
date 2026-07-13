@@ -47,6 +47,8 @@ elif [ -f "$WEBROOT/index.html" ]; then
 else
     die "No site found. Put the page at $SCRIPT_DIR/site/index.html, or set SITE_URL=..., then re-run."
 fi
+# Owner-only admin console (served at /admin.html and /admin — gated on-chain).
+[ -f "$SCRIPT_DIR/site/admin.html" ] && cp "$SCRIPT_DIR/site/admin.html" "$WEBROOT/admin.html"
 chown -R www-data:www-data "$WEBROOT"
 chmod -R a+rX "$WEBROOT"
 
@@ -67,13 +69,23 @@ server {
     root ${WEBROOT};
     index index.html;
 
+    location = /admin {
+        # Owner-only console — clean URL /admin → admin.html.
+        try_files /admin.html =404;
+        add_header Cache-Control "no-cache";
+    }
+
     location / {
-        # SPA fallback: /create, /staking, /whitepaper, /token/<id> all serve
-        # index.html so client-side routing + refresh/deep-links work.
+        # SPA fallback: /create, /staking, /whitepaper, /token/<id>,
+        # /profile/<addr> all serve index.html so client-side routing +
+        # refresh/deep-links work.
         try_files \$uri \$uri/ /index.html;
     }
 
     location = /index.html {
+        add_header Cache-Control "no-cache";
+    }
+    location = /admin.html {
         add_header Cache-Control "no-cache";
     }
     location ~* \.(?:css|js|png|jpg|jpeg|gif|svg|ico|webp|woff2?)\$ {

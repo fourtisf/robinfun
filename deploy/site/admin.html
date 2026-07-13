@@ -1,0 +1,693 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex,nofollow">
+<title>Robinfun — Admin Console</title>
+<meta name="description" content="Owner-only control panel for the Robinfun launchpad on Robinhood Chain.">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%230B0F0A%22%2F%3E%3Cpath%20fill%3D%22%23C6F23C%22%20d%3D%22M32%2012l16%209v18l-16%209-16-9V21z%22%20opacity%3D%22.9%22%2F%3E%3C%2Fsvg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+<!-- ethers.js — every action here is a real on-chain owner transaction sent via
+     your connected wallet. No private keys ever touch this page. -->
+<script defer src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
+<style>
+:root{
+  --ink:#080B0A; --ink-2:#0B0F0C; --ledger:#0F140F; --ledger-2:#161C13;
+  --rule:#1C231A; --rule-2:#29321F;
+  --cream:#F2F5EA; --cream-dim:#9AA18F; --cream-mute:#5F6653;
+  --gilt:#C6F23C; --gilt-bright:#D8FB5C; --gilt-dim:rgba(198,242,60,.13);
+  --seal:#FF5B4A; --seal-bright:#FF7A6A; --seal-dim:rgba(255,91,74,.12);
+  --amber:#F2B33C; --amber-dim:rgba(242,179,60,.13);
+  --jade:#C6F23C;
+  --font-display:"Space Grotesk",system-ui,sans-serif;
+  --font-body:"Instrument Sans",system-ui,sans-serif;
+  --font-mono:"IBM Plex Mono",ui-monospace,monospace;
+  --r-sm:8px; --r-md:12px; --r-lg:16px;
+  --shadow-card:0 1px 0 rgba(0,0,0,.5),0 16px 40px -20px rgba(0,0,0,.75);
+  --maxw:1100px;
+}
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:var(--ink);color:var(--cream);font-family:var(--font-body);font-size:15px;line-height:1.55;-webkit-font-smoothing:antialiased;overflow-x:hidden}
+body::after{content:"";position:fixed;left:50%;top:-340px;transform:translateX(-50%);width:1100px;height:620px;pointer-events:none;z-index:0;background:radial-gradient(closest-side,rgba(198,242,60,.08),rgba(198,242,60,.02) 55%,transparent 75%);filter:blur(8px)}
+a{color:inherit;text-decoration:none}
+button{font-family:inherit;cursor:pointer;border:none;background:none;color:inherit}
+input,select,textarea{font-family:inherit;color:var(--cream)}
+input:focus-visible,textarea:focus-visible,button:focus-visible,a:focus-visible{outline:2px solid var(--gilt);outline-offset:2px;border-radius:4px}
+.mono{font-family:var(--font-mono)}
+.wrap{max-width:var(--maxw);margin:0 auto;padding:0 20px;position:relative;z-index:1}
+
+/* ---- top bar ---- */
+.top{border-bottom:1px solid var(--rule);background:rgba(8,11,10,.82);backdrop-filter:blur(10px);position:sticky;top:0;z-index:20}
+.top .wrap{display:flex;align-items:center;gap:14px;height:64px}
+.brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-weight:700;font-size:18px;letter-spacing:-.01em}
+.brand .dot{width:26px;height:26px;border-radius:7px;background:linear-gradient(135deg,#A6D62E,#C6F23C 55%,#E4FF7A);box-shadow:var(--glow)}
+.badge{font-family:var(--font-mono);font-size:10px;font-weight:600;letter-spacing:.14em;text-transform:uppercase;padding:3px 8px;border-radius:5px;border:1px solid var(--rule-2);color:var(--cream-dim)}
+.badge.adm{color:var(--gilt);border-color:rgba(198,242,60,.4);background:var(--gilt-dim)}
+.spacer{flex:1}
+.net{display:flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:12px;color:var(--cream-dim)}
+.net .led{width:8px;height:8px;border-radius:50%;background:var(--cream-mute)}
+.net.ok .led{background:var(--gilt);box-shadow:0 0 8px var(--gilt)}
+.net.bad .led{background:var(--seal);box-shadow:0 0 8px var(--seal)}
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:9px 16px;border-radius:var(--r-sm);font-weight:600;font-size:14px;border:1px solid var(--rule-2);background:var(--ledger-2);transition:transform .1s ease,border-color .12s,background .12s,opacity .12s}
+.btn:hover{border-color:var(--gilt);transform:translateY(-1px)}
+.btn:active{transform:translateY(0)}
+.btn.primary{background:var(--gilt);color:#0B0F04;border-color:var(--gilt)}
+.btn.primary:hover{background:var(--gilt-bright);border-color:var(--gilt-bright)}
+.btn.danger{border-color:rgba(255,91,74,.5);color:var(--seal-bright)}
+.btn.danger:hover{border-color:var(--seal);background:var(--seal-dim)}
+.btn.sm{padding:6px 11px;font-size:12.5px}
+.btn:disabled{opacity:.4;cursor:not-allowed;transform:none}
+.btn:disabled:hover{border-color:var(--rule-2);transform:none}
+
+/* ---- page ---- */
+h1.page-t{font-family:var(--font-display);font-size:26px;font-weight:700;letter-spacing:-.02em;margin:28px 0 4px}
+.page-sub{color:var(--cream-dim);font-size:14px;margin-bottom:22px;max-width:640px}
+
+.gate{border:1px solid var(--rule-2);border-radius:var(--r-md);padding:14px 16px;margin-bottom:22px;display:flex;align-items:center;gap:12px;font-size:14px}
+.gate.ok{border-color:rgba(198,242,60,.4);background:var(--gilt-dim)}
+.gate.warn{border-color:rgba(242,179,60,.45);background:var(--amber-dim)}
+.gate.bad{border-color:rgba(255,91,74,.45);background:var(--seal-dim)}
+.gate b{font-weight:600}
+
+/* ---- stat grid ---- */
+.stats{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-bottom:14px}
+.stat{background:var(--ledger);border:1px solid var(--rule);border-radius:var(--r-md);padding:14px 15px}
+.stat .k{font-family:var(--font-mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--cream-mute);margin-bottom:7px}
+.stat .v{font-family:var(--font-mono);font-size:19px;font-weight:600;letter-spacing:-.01em}
+.stat .v.gold{color:var(--gilt-bright)}
+.stat .sub{font-family:var(--font-mono);font-size:11px;color:var(--cream-dim);margin-top:3px}
+@media(max-width:820px){.stats{grid-template-columns:repeat(2,1fr)}}
+
+/* ---- cards ---- */
+.card{background:var(--ledger);border:1px solid var(--rule);border-radius:var(--r-lg);padding:20px 20px 18px;margin-bottom:16px;box-shadow:var(--shadow-card)}
+.card.danger{border-color:rgba(255,91,74,.35)}
+.card h2{font-family:var(--font-display);font-size:16px;font-weight:600;letter-spacing:-.01em;display:flex;align-items:center;gap:9px;margin-bottom:5px}
+.card .desc{color:var(--cream-dim);font-size:13.5px;line-height:1.6;margin-bottom:15px;max-width:680px}
+.card .desc code{font-family:var(--font-mono);font-size:12px;background:var(--ledger-2);padding:1px 5px;border-radius:4px;color:var(--gilt)}
+.cur{font-family:var(--font-mono);font-size:12.5px;color:var(--cream-dim);margin-bottom:14px;padding:9px 12px;background:var(--ink-2);border:1px solid var(--rule);border-radius:var(--r-sm);word-break:break-all}
+.cur b{color:var(--cream)}
+.row{display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end}
+.field{flex:1;min-width:180px}
+.field label{display:block;font-family:var(--font-mono);font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--cream-mute);margin-bottom:6px}
+input[type=text],input[type=number],textarea{width:100%;background:var(--ink-2);border:1px solid var(--rule-2);border-radius:var(--r-sm);padding:10px 12px;font-size:14px;font-family:var(--font-mono)}
+input[type=text]:focus,input[type=number]:focus,textarea:focus{border-color:var(--gilt);outline:none}
+textarea{resize:vertical;min-height:74px;line-height:1.5}
+.hint{font-family:var(--font-mono);font-size:11px;color:var(--cream-mute);margin-top:7px}
+.hint.warn{color:var(--amber)}
+.pill{display:inline-flex;align-items:center;gap:6px;font-family:var(--font-mono);font-size:11px;font-weight:600;padding:3px 9px;border-radius:20px;border:1px solid var(--rule-2)}
+.pill.on{color:var(--gilt);border-color:rgba(198,242,60,.4);background:var(--gilt-dim)}
+.pill.off{color:var(--cream-dim)}
+.pill.red{color:var(--seal-bright);border-color:rgba(255,91,74,.4);background:var(--seal-dim)}
+
+/* ---- token table ---- */
+.ttab{width:100%;border-collapse:collapse;font-size:13px}
+.ttab th{font-family:var(--font-mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--cream-mute);text-align:left;padding:8px 10px;border-bottom:1px solid var(--rule-2);font-weight:600}
+.ttab td{padding:9px 10px;border-bottom:1px solid var(--rule);font-family:var(--font-mono);font-size:12.5px;vertical-align:middle}
+.ttab tr:hover td{background:var(--ledger-2)}
+.ttab .r{text-align:right}
+.tscroll{overflow-x:auto}
+
+/* ---- activity log ---- */
+.log{background:var(--ink-2);border:1px solid var(--rule);border-radius:var(--r-md);padding:12px 14px;font-family:var(--font-mono);font-size:12px;max-height:220px;overflow-y:auto}
+.log .li{padding:5px 0;border-bottom:1px solid var(--rule);color:var(--cream-dim);display:flex;gap:8px;align-items:baseline}
+.log .li:last-child{border-bottom:none}
+.log .li .t{color:var(--cream-mute);flex-shrink:0}
+.log .li.ok .m{color:var(--gilt)}
+.log .li.err .m{color:var(--seal-bright)}
+.log .li a{color:var(--gilt);text-decoration:underline}
+
+/* ---- toast ---- */
+#toast{position:fixed;left:50%;bottom:26px;transform:translateX(-50%) translateY(20px);background:var(--ledger-2);border:1px solid var(--rule-2);border-radius:var(--r-sm);padding:11px 18px;font-size:14px;font-weight:500;opacity:0;pointer-events:none;transition:all .25s ease;z-index:50;box-shadow:0 10px 30px rgba(0,0,0,.5);max-width:90vw}
+#toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+#toast.ok{border-color:rgba(198,242,60,.5)}
+#toast.err{border-color:rgba(255,91,74,.5)}
+.small{font-size:12px;color:var(--cream-mute)}
+.sec-label{font-family:var(--font-mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--cream-mute);margin:30px 0 12px;display:flex;align-items:center;gap:10px}
+.sec-label::after{content:"";flex:1;height:1px;background:var(--rule)}
+.footer{color:var(--cream-mute);font-size:12px;text-align:center;padding:34px 0 40px;line-height:1.7}
+.footer a{color:var(--cream-dim);text-decoration:underline}
+</style>
+</head>
+<body>
+
+<div class="top"><div class="wrap">
+  <a class="brand" href="/"><span class="dot"></span>Robinfun</a>
+  <span class="badge adm">Admin</span>
+  <div class="spacer"></div>
+  <div class="net" id="netStat"><span class="led"></span><span id="netTxt">Not connected</span></div>
+  <button class="btn primary" id="connectBtn" onclick="connect()">Connect wallet</button>
+</div></div>
+
+<div class="wrap">
+  <h1 class="page-t">Admin Console</h1>
+  <div class="page-sub">Owner-only controls for the Robinfun launchpad on Robinhood Chain. Every action below is a real on-chain transaction signed by your connected wallet — this page never sees a private key. Non-owner wallets can read everything but every write will revert.</div>
+
+  <div class="gate warn" id="gate"><span id="gateTxt">Connect the owner wallet to unlock controls.</span></div>
+
+  <!-- ============ DASHBOARD ============ -->
+  <div class="sec-label">Overview</div>
+  <div class="stats">
+    <div class="stat"><div class="k">Protocol revenue (lifetime)</div><div class="v gold" id="s-rev">—</div><div class="sub" id="s-rev-usd"></div></div>
+    <div class="stat"><div class="k">Pending (flushable)</div><div class="v" id="s-pend">—</div><div class="sub" id="s-pend-usd"></div></div>
+    <div class="stat"><div class="k">Creator ETH owed (all)</div><div class="v" id="s-owed">—</div><div class="sub" id="s-owed-usd"></div></div>
+    <div class="stat"><div class="k">Tokens launched</div><div class="v" id="s-tok">—</div><div class="sub">on this factory</div></div>
+  </div>
+  <div class="stats">
+    <div class="stat"><div class="k">Beta mode</div><div class="v" id="s-beta">—</div><div class="sub">allowlist gate</div></div>
+    <div class="stat"><div class="k">Deploy fee</div><div class="v" id="s-fee">—</div><div class="sub" id="s-fee-usd"></div></div>
+    <div class="stat"><div class="k">Graduation cap</div><div class="v" id="s-cap">—</div><div class="sub" id="s-cap-usd"></div></div>
+    <div class="stat"><div class="k">ETH price</div><div class="v" id="s-eth">—</div><div class="sub">live · CoinGecko</div></div>
+  </div>
+  <div style="text-align:right;margin-bottom:8px"><button class="btn sm" onclick="refreshAll()">↻ Refresh</button></div>
+
+  <!-- ============ BETA GATE ============ -->
+  <div class="sec-label">Access control</div>
+  <div class="card">
+    <h2>🔒 Private-beta gate <span class="pill" id="betaPill">—</span></h2>
+    <div class="desc">While beta mode is <b>ON</b>, only allow-listed wallets can create tokens or trade on any curve. Turning it <b>OFF</b> makes the whole protocol permissionless — that is the public-launch state. One flip changes both create <em>and</em> trade for every curve at once. <code>setBetaMode(bool)</code></div>
+    <div class="cur">Current: <b id="c-beta">—</b></div>
+    <div class="row">
+      <button class="btn primary" id="betaOnBtn" onclick="doSetBeta(true)">Turn beta ON</button>
+      <button class="btn" id="betaOffBtn" onclick="confirmPublicLaunch()">Go public (beta OFF)</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>👥 Allow-list</h2>
+    <div class="desc">Grant or revoke the wallets permitted to create/trade during the beta. One transaction can update many addresses at once. <code>setBetaAllowed(address[], bool)</code></div>
+    <div class="row" style="margin-bottom:14px">
+      <div class="field" style="flex:2"><label>Addresses (one per line, or comma-separated)</label>
+        <textarea id="al-list" placeholder="0xA49dc277A65CCb35D94522cecDa19CA340AE991C&#10;0x…"></textarea></div>
+    </div>
+    <div class="row">
+      <button class="btn primary" id="alAllowBtn" onclick="doAllowlist(true)">✓ Allow these</button>
+      <button class="btn danger" id="alDenyBtn" onclick="doAllowlist(false)">✕ Revoke these</button>
+    </div>
+    <div style="margin-top:16px;padding-top:16px;border-top:1px solid var(--rule)">
+      <div class="row">
+        <div class="field"><label>Check a wallet's access</label><input type="text" id="al-check" placeholder="0x…"></div>
+        <button class="btn sm" onclick="doCheckAccess()">Check</button>
+      </div>
+      <div class="hint" id="al-check-out"></div>
+    </div>
+  </div>
+
+  <!-- ============ ECONOMICS ============ -->
+  <div class="sec-label">Economics (future launches)</div>
+  <div class="card">
+    <h2>💸 Deploy fee</h2>
+    <div class="desc">Flat ETH fee charged per token launch. Applies to <b>new</b> launches only. <code>setDeployFee(uint256)</code></div>
+    <div class="cur">Current: <b id="c-fee">—</b></div>
+    <div class="row">
+      <div class="field"><label>New fee (ETH)</label><input type="number" id="fee-in" step="0.0001" min="0" placeholder="0.001"></div>
+      <button class="btn primary" id="feeBtn" onclick="doSetFee()">Set deploy fee</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>🎓 Graduation cap</h2>
+    <div class="desc">The ETH a bonding curve collects before it graduates to Uniswap — and roughly the DEX liquidity each token launches with. A bigger cap = thicker pool, better on DexScreener, less slippage. The virtual reserves are rescaled with the cap (<code>virtualEth = cap × 1122 ⁄ 2600</code>) so the curve shape — price multiple and % of supply sold — stays identical; only the ETH denomination changes. Applies to <b>new</b> launches only. <code>setCurveParams((uint128,uint128,uint128))</code></div>
+    <div class="cur">Current cap: <b id="c-cap">—</b> · virtualEth <span id="c-veth">—</span> · virtualToken <span id="c-vtok">—</span></div>
+    <div class="row">
+      <div class="field"><label>New cap (ETH)</label><input type="number" id="cap-in" step="0.001" min="0" placeholder="0.05"></div>
+      <button class="btn primary" id="capBtn" onclick="doSetCap()">Set graduation cap</button>
+    </div>
+    <div class="hint" id="cap-preview"></div>
+  </div>
+
+  <!-- ============ TREASURY / REVENUE ============ -->
+  <div class="sec-label">Treasury &amp; revenue (FeeRouter)</div>
+  <div class="card">
+    <h2>🏦 Treasury &amp; sinks</h2>
+    <div class="desc">The treasury receives protocol revenue (before staking launches) and is the target of sweeps. The staking vault, once set, becomes the protocol-revenue sink instead. The harvester, if set, is the only wallet allowed to run <code>harvest()</code> (keeper).</div>
+    <div class="cur">Treasury: <b id="c-treas">—</b><br>Staking vault: <b id="c-vault">—</b><br>Harvester: <b id="c-harv">—</b><br>DEX router (locked): <b id="c-router">—</b></div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="field"><label>Set treasury</label><input type="text" id="treas-in" placeholder="0x…"></div>
+      <button class="btn" id="treasBtn" onclick="doSetTreasury()">Set treasury</button>
+    </div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="field"><label>Set staking vault</label><input type="text" id="vault-in" placeholder="0x…"></div>
+      <button class="btn" id="vaultBtn" onclick="doSetVault()">Set vault</button>
+    </div>
+    <div class="row">
+      <div class="field"><label>Set harvester keeper (0x0 to clear)</label><input type="text" id="harv-in" placeholder="0x…"></div>
+      <button class="btn" id="harvBtn" onclick="doSetHarvester()">Set harvester</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>💠 Move revenue</h2>
+    <div class="desc"><b>Flush</b> pushes pending protocol revenue to the staking vault (or the treasury, pre-staking). <b>Sweep</b> collects any stray ETH that arrived outside the accounted flows to the treasury — it can never touch creator balances or pending protocol revenue. Both are safe to run anytime. <code>flushProtocol()</code> · <code>sweepUnaccounted()</code></div>
+    <div class="row">
+      <button class="btn primary" id="flushBtn" onclick="doFlush()">Flush protocol revenue</button>
+      <button class="btn" id="sweepBtn" onclick="doSweep()">Sweep unaccounted ETH</button>
+    </div>
+    <div class="hint">Flush needs at least <b>0.001 ETH</b> pending (dust-flush guard).</div>
+  </div>
+
+  <!-- ============ ADVANCED ============ -->
+  <div class="sec-label">Advanced</div>
+  <div class="card">
+    <h2>🔀 DEX wiring</h2>
+    <div class="desc">The Uniswap-v2 factory + WETH that <b>new</b> curves graduate into. Rarely changed — only for a DEX migration. Wrong values will strand graduation liquidity, so both are code-checked before sending. <code>setDex(address dexFactory, address weth)</code></div>
+    <div class="cur">dexFactory: <b id="c-dexf">—</b><br>WETH: <b id="c-weth">—</b></div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="field"><label>DEX factory</label><input type="text" id="dexf-in" placeholder="0x…"></div>
+    </div>
+    <div class="row">
+      <div class="field"><label>WETH</label><input type="text" id="weth-in" placeholder="0x…"></div>
+      <button class="btn" id="dexBtn" onclick="doSetDex()">Set DEX</button>
+    </div>
+  </div>
+
+  <div class="card danger">
+    <h2>⚠️ Ownership (danger zone)</h2>
+    <div class="desc">The factory and fee router use <b>2-step</b> ownership: <code>transferOwnership</code> names a pending owner, then that wallet must call <code>acceptOwnership</code> — so a typo can't lock you out. Transfer moves the factory; remember to transfer the fee router too if you're rotating keys. <b>Renounce is irreversible</b> and permanently freezes all controls above.</div>
+    <div class="cur">Factory owner: <b id="c-fowner">—</b> · pending: <span id="c-fpending">—</span><br>FeeRouter owner: <b id="c-rowner">—</b> · pending: <span id="c-rpending">—</span></div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="field"><label>Transfer to (new owner)</label><input type="text" id="own-in" placeholder="0x…"></div>
+      <button class="btn danger" id="ownFacBtn" onclick="doTransfer('factory')">Transfer factory</button>
+      <button class="btn danger" id="ownRtrBtn" onclick="doTransfer('router')">Transfer fee router</button>
+    </div>
+    <div class="row">
+      <button class="btn sm" id="acceptFacBtn" onclick="doAccept('factory')">Accept factory ownership</button>
+      <button class="btn sm" id="acceptRtrBtn" onclick="doAccept('router')">Accept fee-router ownership</button>
+    </div>
+  </div>
+
+  <!-- ============ TOKENS ============ -->
+  <div class="sec-label">Launched tokens</div>
+  <div class="card">
+    <h2>🪙 All tokens <span class="small" id="tok-count"></span></h2>
+    <div class="desc">Every token launched on this factory, newest first, with the creator earnings the fee router has accrued for it.</div>
+    <div class="tscroll">
+      <table class="ttab">
+        <thead><tr><th>#</th><th>Token</th><th>Creator</th><th class="r">Earned (lifetime)</th><th class="r">Owed now</th><th></th></tr></thead>
+        <tbody id="tokBody"><tr><td colspan="6" class="small" style="padding:16px">Connect to load on-chain tokens.</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============ LOG ============ -->
+  <div class="sec-label">Activity</div>
+  <div class="log" id="log"><div class="li"><span class="t">—</span><span class="m">Actions you take will appear here with their transaction hashes.</span></div></div>
+
+  <div class="footer">
+    Robinfun Admin · Robinhood Chain (4663)<br>
+    Factory <span class="mono" id="f-addr">—</span> · FeeRouter <span class="mono" id="r-addr">—</span><br>
+    <a href="/">← Back to the app</a>
+  </div>
+</div>
+
+<div id="toast"></div>
+
+<script>
+/* ================================================================
+   Robinfun Admin — pure client. Reads via a batch-free RPC provider;
+   writes via the connected wallet (owner). No secrets on this page.
+   ================================================================ */
+const CHAIN = {
+  chainId:'0x1237', chainName:'Robinhood Chain',
+  nativeCurrency:{ name:'Ether', symbol:'ETH', decimals:18 },
+  rpcUrls:['https://rpc.mainnet.chain.robinhood.com'],
+  blockExplorerUrls:['https://robinhoodchain.blockscout.com'],
+};
+const EXPLORER = 'https://robinhoodchain.blockscout.com';
+const APP = '/';   // main app (for profile deep-links)
+const FACTORY_ADDR = '0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2';
+const FEEROUTER_ADDR = '0x630216d06a54581e04c452892f69137e75ea45da';
+const DEX_ROUTER_ADDR = '0x89e5db8b5aa49aa85ac63f691524311aeb649eba';
+const DEX_FACTORY_ADDR = '0x8bceaa40b9acdfaedf85adf4ff01f5ad6517937f';
+const WETH_ADDR = '0x0bd7d308f8e1639fab988df18a8011f41eacad73';
+const VTOK_WEI = 1080000000000000000000000000n;   // 1.08e27 — held constant across caps
+let ETH_USD = 1800;
+
+const FACTORY_ABI = [
+  'function owner() view returns (address)',
+  'function pendingOwner() view returns (address)',
+  'function transferOwnership(address newOwner)',
+  'function acceptOwnership()',
+  'function betaMode() view returns (bool)',
+  'function setBetaMode(bool on)',
+  'function betaAllowed(address) view returns (bool)',
+  'function tradeAllowed(address who) view returns (bool)',
+  'function setBetaAllowed(address[] who, bool allowed)',
+  'function deployFee() view returns (uint256)',
+  'function setDeployFee(uint256 fee)',
+  'function curveParams() view returns (uint128 virtualEth, uint128 virtualToken, uint128 graduationEth)',
+  'function setCurveParams((uint128 virtualEth, uint128 virtualToken, uint128 graduationEth) p)',
+  'function dexFactory() view returns (address)',
+  'function weth() view returns (address)',
+  'function setDex(address dexFactory_, address weth_)',
+  'function allTokensLength() view returns (uint256)',
+  'function allTokens(uint256) view returns (address)',
+  'function feeRouter() view returns (address)',
+  'error NotAllowed()','error ZeroAddress()','error BadCurveParams()',
+];
+const FEEROUTER_ABI = [
+  'function owner() view returns (address)',
+  'function pendingOwner() view returns (address)',
+  'function transferOwnership(address newOwner)',
+  'function acceptOwnership()',
+  'function treasury() view returns (address)',
+  'function setTreasury(address treasury_)',
+  'function stakingVault() view returns (address)',
+  'function setStakingVault(address vault_)',
+  'function harvester() view returns (address)',
+  'function setHarvester(address harvester_)',
+  'function dexRouter() view returns (address)',
+  'function protocolPending() view returns (uint256)',
+  'function protocolEarnedLifetime() view returns (uint256)',
+  'function totalCreatorOwed() view returns (uint256)',
+  'function creatorEarnedLifetime(address) view returns (uint256)',
+  'function creatorOwed(address) view returns (uint256)',
+  'function flushProtocol()',
+  'function sweepUnaccounted()',
+  'error NothingToDo()','error NoSink()','error EthTransferFailed()',
+];
+const TOKEN_ABI = [
+  'function name() view returns (string)',
+  'function symbol() view returns (string)',
+  'function creator() view returns (address)',
+];
+
+/* ---- provider / wallet ---- */
+let _ro=null, provider=null, signer=null, wallet=null;
+let facR=null, rtrR=null, facW=null, rtrW=null;
+let ownerAddr=null, isOwner=false;
+
+function roProvider(){
+  if(_ro) return _ro;
+  try{
+    const net = new ethers.Network('robinhood-mainnet', 4663);
+    _ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0], net, { batchMaxCount:1, staticNetwork:net });
+  }catch(_){
+    _ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0], undefined, { batchMaxCount:1, staticNetwork:true });
+  }
+  return _ro;
+}
+function roContracts(){
+  const ro = roProvider();
+  facR = new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro);
+  rtrR = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, ro);
+}
+
+/* ---- helpers ---- */
+const shortAddr = a => a ? a.slice(0,6)+'…'+a.slice(-4) : '—';
+const isAddr = a => /^0x[0-9a-fA-F]{40}$/.test((a||'').trim());
+const eq = (a,b) => a && b && a.toLowerCase()===b.toLowerCase();
+function fmtEth(wei){ const n=Number(ethers.formatEther(wei)); if(n===0) return '0 Ξ'; if(n<1e-5) return n.toExponential(2)+' Ξ'; return n.toFixed(n<1?5:4).replace(/0+$/,'').replace(/\.$/,'')+' Ξ'; }
+function usdOf(wei){ return Number(ethers.formatEther(wei))*ETH_USD; }
+function fmtUsd(v){ if(!isFinite(v)) return ''; if(v>=1000) return '$'+Math.round(v).toLocaleString('en-US'); if(v>=1) return '$'+v.toFixed(2); return '$'+v.toFixed(4); }
+const ADDR0 = '0x0000000000000000000000000000000000000000';
+function addrOrNone(a){ return (!a || a===ADDR0) ? 'not set' : a; }
+
+let _tid=null;
+function toast(msg,kind){ const t=document.getElementById('toast'); t.textContent=msg; t.className='show'+(kind?' '+kind:''); clearTimeout(_tid); _tid=setTimeout(()=>t.className='',3400); }
+function nowT(){ const d=new Date(); return d.toTimeString().slice(0,8); }
+function logLine(msg,kind,txh){
+  const box=document.getElementById('log');
+  const li=document.createElement('div'); li.className='li'+(kind?' '+kind:'');
+  let m = '<span class="t">'+nowT()+'</span><span class="m">'+msg;
+  if(txh) m += ' · <a href="'+EXPLORER+'/tx/'+txh+'" target="_blank" rel="noopener">'+shortAddr(txh)+'</a>';
+  m += '</span>';
+  li.innerHTML=m;
+  if(box.firstChild && box.firstChild.querySelector && box.firstChild.querySelector('.m') && box.firstChild.textContent.indexOf('will appear here')>=0) box.innerHTML='';
+  box.insertBefore(li, box.firstChild);
+}
+
+/* ---- connect ---- */
+const injected=new Map(); let activeInjected=null;
+window.addEventListener('eip6963:announceProvider', e=>{ const d=e.detail; if(d&&d.info&&d.provider) injected.set(d.info.uuid,d); });
+window.dispatchEvent(new Event('eip6963:requestProvider'));
+function pickInjected(){
+  const list=[...injected.values()];
+  if(list.length) return (list.find(d=>/metamask/i.test(d.info.name))||list[0]).provider;
+  return window.ethereum||null;
+}
+async function connect(){
+  const inj = activeInjected || pickInjected();
+  if(!inj){ toast('No wallet found — install MetaMask','err'); return; }
+  activeInjected = inj;
+  try{
+    await inj.request({ method:'eth_requestAccounts' });
+    // ensure the wallet is on Robinhood Chain
+    try{ await inj.request({ method:'wallet_switchEthereumChain', params:[{ chainId:CHAIN.chainId }] }); }
+    catch(sw){ if(sw && sw.code===4902){ await inj.request({ method:'wallet_addEthereumChain', params:[CHAIN] }); } }
+    provider = new ethers.BrowserProvider(inj);
+    signer = await provider.getSigner();
+    wallet = (await signer.getAddress()).toLowerCase();
+    facW = new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, signer);
+    rtrW = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, signer);
+    inj.on && inj.on('accountsChanged', ()=>location.reload());
+    inj.on && inj.on('chainChanged', ()=>location.reload());
+    document.getElementById('connectBtn').textContent = shortAddr(wallet);
+    logLine('Connected '+shortAddr(wallet),'ok');
+    await refreshAll();
+  }catch(e){ toast(errMsg(e),'err'); }
+}
+
+function setNet(state,txt){ const n=document.getElementById('netStat'); n.className='net '+(state||''); document.getElementById('netTxt').textContent=txt; }
+
+/* ---- owner gate ---- */
+function applyGate(){
+  const g=document.getElementById('gate'), gt=document.getElementById('gateTxt');
+  const writes=document.querySelectorAll('.btn.primary, .btn.danger, #treasBtn, #vaultBtn, #harvBtn, #dexBtn, #betaOffBtn, #acceptFacBtn, #acceptRtrBtn, #flushBtn, #sweepBtn');
+  if(!wallet){ g.className='gate warn'; gt.innerHTML='Connect the owner wallet to unlock controls.'; return; }
+  if(isOwner){ g.className='gate ok'; gt.innerHTML='✓ <b>Owner verified</b> — '+shortAddr(wallet)+'. All controls are live.'; }
+  else{ g.className='gate bad'; gt.innerHTML='✕ <b>'+shortAddr(wallet)+' is not the factory owner</b> ('+shortAddr(ownerAddr)+'). You can read everything, but every write will revert. Connect the owner wallet.'; }
+  writes.forEach(b=>{
+    if(b.id==='connectBtn') return;                                   // never disable connect
+    if(b.id==='acceptFacBtn'||b.id==='acceptRtrBtn'){ b.disabled=false; return; }  // pending owner ≠ current owner
+    b.disabled=!isOwner;
+  });
+}
+
+/* ---- refresh dashboard ---- */
+async function refreshAll(){
+  roContracts();
+  setNet('','Loading…');
+  try{
+    const [fo, fpend, beta, fee, cp, dexf, weth,
+           ro, rpend, treas, vault, harv, router, ppend, plife, towed, tokLen] = await Promise.all([
+      facR.owner(), facR.pendingOwner(), facR.betaMode(), facR.deployFee(), facR.curveParams(), facR.dexFactory(), facR.weth(),
+      rtrR.owner(), rtrR.pendingOwner(), rtrR.treasury(), rtrR.stakingVault(), rtrR.harvester(), rtrR.dexRouter(),
+      rtrR.protocolPending(), rtrR.protocolEarnedLifetime(), rtrR.totalCreatorOwed(), facR.allTokensLength(),
+    ]);
+    ownerAddr = fo;
+    isOwner = wallet && (eq(wallet,fo)||eq(wallet,ro));   // owner of either contract counts as admin
+    setNet('ok','Robinhood Chain · 4663');
+
+    // stat grid
+    setV('s-rev', fmtEth(plife)); setV('s-rev-usd', fmtUsd(usdOf(plife)));
+    setV('s-pend', fmtEth(ppend)); setV('s-pend-usd', fmtUsd(usdOf(ppend)));
+    setV('s-owed', fmtEth(towed)); setV('s-owed-usd', fmtUsd(usdOf(towed)));
+    setV('s-tok', tokLen.toString());
+    setV('s-beta', beta?'ON':'OFF');
+    setV('s-fee', fmtEth(fee)); setV('s-fee-usd', fmtUsd(usdOf(fee)));
+    setV('s-cap', fmtEth(cp.graduationEth)); setV('s-cap-usd', fmtUsd(usdOf(cp.graduationEth)));
+    setV('s-eth', '$'+ETH_USD.toLocaleString('en-US',{maximumFractionDigits:2}));
+
+    // beta card
+    const bp=document.getElementById('betaPill'); bp.textContent=beta?'ON':'OFF'; bp.className='pill '+(beta?'red':'off');
+    setT('c-beta', beta?'ON — allowlist only':'OFF — permissionless (public)');
+
+    // economics
+    setT('c-fee', fmtEth(fee)+' · '+fmtUsd(usdOf(fee)));
+    setT('c-cap', fmtEth(cp.graduationEth)+' · '+fmtUsd(usdOf(cp.graduationEth)));
+    setT('c-veth', cp.virtualEth.toString()); setT('c-vtok', cp.virtualToken.toString());
+
+    // treasury
+    setT('c-treas', addrOrNone(treas)); setT('c-vault', addrOrNone(vault));
+    setT('c-harv', harv===ADDR0?'not set (harvest is permissionless)':harv);
+    setT('c-router', addrOrNone(router));
+
+    // dex
+    setT('c-dexf', dexf); setT('c-weth', weth);
+
+    // ownership
+    setT('c-fowner', fo); setT('c-fpending', fpend===ADDR0?'none':fpend);
+    setT('c-rowner', ro); setT('c-rpending', rpend===ADDR0?'none':rpend);
+
+    // footer
+    setT('f-addr', shortAddr(FACTORY_ADDR)); setT('r-addr', shortAddr(FEEROUTER_ADDR));
+
+    applyGate();
+    loadTokens(Number(tokLen));
+  }catch(e){
+    setNet('bad','RPC error');
+    logLine('Refresh failed: '+errMsg(e),'err');
+    toast('Could not read chain — RPC may be down','err');
+  }
+}
+function setV(id,v){ const e=document.getElementById(id); if(e) e.textContent=v; }
+function setT(id,v){ const e=document.getElementById(id); if(e) e.textContent=v; }
+
+/* ---- token table ---- */
+async function loadTokens(len){
+  const body=document.getElementById('tokBody');
+  document.getElementById('tok-count').textContent = len? '('+len+')' : '';
+  if(!len){ body.innerHTML='<tr><td colspan="6" class="small" style="padding:16px">No tokens launched yet.</td></tr>'; return; }
+  const ro=roProvider();
+  const N=Math.min(len,60);   // cap the read fan-out
+  const idx=[]; for(let i=len-1;i>=Math.max(0,len-N);i--) idx.push(i);
+  if(len>N){ document.getElementById('tok-count').textContent='(showing newest '+N+' of '+len+')'; }
+  body.innerHTML='<tr><td colspan="6" class="small" style="padding:16px">Loading '+idx.length+' tokens…</td></tr>';
+  const rows = await Promise.all(idx.map(async i=>{
+    try{
+      const ca = await facR.allTokens(i);
+      const tk = new ethers.Contract(ca, TOKEN_ABI, ro);
+      const [name,sym,creator,earned,owed] = await Promise.all([
+        tk.name().catch(()=>'?'), tk.symbol().catch(()=>'?'), tk.creator().catch(()=>ADDR0),
+        rtrR.creatorEarnedLifetime(ca).catch(()=>0n), rtrR.creatorOwed(ca).catch(()=>0n),
+      ]);
+      return { i, ca, name, sym, creator, earned, owed };
+    }catch(_){ return null; }
+  }));
+  const good=rows.filter(Boolean);
+  if(!good.length){ body.innerHTML='<tr><td colspan="6" class="small" style="padding:16px">Could not load tokens.</td></tr>'; return; }
+  body.innerHTML = good.map(r=>`
+    <tr>
+      <td class="small">${r.i}</td>
+      <td><a href="${EXPLORER}/address/${r.ca}" target="_blank" rel="noopener">${esc(r.name)} <span class="gold">$${esc(r.sym)}</span></a></td>
+      <td>${r.creator&&r.creator!==ADDR0?`<a href="${APP}profile/${r.creator}" title="${r.creator}">${shortAddr(r.creator)}</a>`:'—'}</td>
+      <td class="r gold">${fmtEth(r.earned)}</td>
+      <td class="r">${fmtEth(r.owed)}</td>
+      <td class="r"><a href="${EXPLORER}/address/${r.ca}" target="_blank" rel="noopener" class="small">explorer ↗</a></td>
+    </tr>`).join('');
+}
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+/* ---- write actions ---- */
+function errMsg(e){
+  if(!e) return 'Unknown error';
+  if(e.code===4001||e.code==='ACTION_REJECTED') return 'Rejected in wallet';
+  const s = e.shortMessage || e.reason || (e.info&&e.info.error&&e.info.error.message) || e.message || String(e);
+  return s.length>120 ? s.slice(0,120)+'…' : s;
+}
+function requireOwner(){ if(!wallet){ toast('Connect your wallet first','err'); return false; } if(!isOwner){ toast('This wallet is not the owner','err'); return false; } return true; }
+async function send(label, fn){
+  try{
+    logLine(label+' — sending…');
+    const tx = await fn();
+    logLine(label+' — pending', null, tx.hash);
+    toast(label+' sent — waiting…');
+    await tx.wait();
+    logLine(label+' — confirmed ✓','ok',tx.hash);
+    toast(label+' confirmed','ok');
+    await refreshAll();
+    return true;
+  }catch(e){ logLine(label+' — failed: '+errMsg(e),'err'); toast(errMsg(e),'err'); return false; }
+}
+
+async function doSetBeta(on){ if(!requireOwner()) return; await send('Beta mode '+(on?'ON':'OFF'), ()=>facW.setBetaMode(on)); }
+function confirmPublicLaunch(){
+  if(!requireOwner()) return;
+  if(confirm('Go PUBLIC?\n\nThis turns beta mode OFF and makes the whole protocol permissionless — ANYONE can create tokens and trade. This is the public-launch state.\n\nProceed?')) doSetBeta(false);
+}
+async function doAllowlist(allow){
+  if(!requireOwner()) return;
+  const raw=document.getElementById('al-list').value.split(/[\s,]+/).map(s=>s.trim()).filter(Boolean);
+  const bad=raw.filter(a=>!isAddr(a));
+  if(bad.length){ toast('Invalid address: '+bad[0],'err'); return; }
+  if(!raw.length){ toast('Enter at least one address','err'); return; }
+  await send((allow?'Allow ':'Revoke ')+raw.length+' wallet(s)', ()=>facW.setBetaAllowed(raw, allow));
+}
+async function doCheckAccess(){
+  const a=document.getElementById('al-check').value.trim();
+  const out=document.getElementById('al-check-out');
+  if(!isAddr(a)){ out.textContent='Enter a valid 0x address.'; out.className='hint warn'; return; }
+  out.textContent='Checking…'; out.className='hint';
+  try{
+    const [allowed,canTrade] = await Promise.all([facR.betaAllowed(a), facR.tradeAllowed(a)]);
+    out.className='hint';
+    out.innerHTML = shortAddr(a)+' — allow-listed: <b style="color:'+(allowed?'var(--gilt)':'var(--seal)')+'">'+(allowed?'YES':'no')+
+      '</b> · can create/trade now: <b style="color:'+(canTrade?'var(--gilt)':'var(--seal)')+'">'+(canTrade?'YES':'no')+'</b>';
+  }catch(e){ out.textContent=errMsg(e); out.className='hint warn'; }
+}
+async function doSetFee(){
+  if(!requireOwner()) return;
+  const v=document.getElementById('fee-in').value.trim();
+  if(v===''||isNaN(v)||Number(v)<0){ toast('Enter a fee in ETH','err'); return; }
+  let wei; try{ wei=ethers.parseEther(v); }catch(_){ toast('Bad number','err'); return; }
+  await send('Set deploy fee '+v+' ETH', ()=>facW.setDeployFee(wei));
+}
+function capToParams(capEth){
+  const grad = ethers.parseEther(String(capEth));
+  const veth = (grad * 1122n) / 2600n;   // keep the audited curve shape
+  return { veth, vtok:VTOK_WEI, grad };
+}
+function previewCap(){
+  const v=document.getElementById('cap-in').value.trim();
+  const p=document.getElementById('cap-preview');
+  if(v===''||isNaN(v)||Number(v)<=0){ p.textContent=''; return; }
+  try{ const {veth,grad}=capToParams(v);
+    p.innerHTML='Will set graduationEth = <b>'+grad.toString()+'</b> wei ('+v+' ETH ≈ '+fmtUsd(Number(v)*ETH_USD)+') · virtualEth = <b>'+veth.toString()+'</b> · curve shape unchanged.';
+  }catch(_){ p.textContent=''; }
+}
+async function doSetCap(){
+  if(!requireOwner()) return;
+  const v=document.getElementById('cap-in').value.trim();
+  if(v===''||isNaN(v)||Number(v)<=0){ toast('Enter a cap in ETH','err'); return; }
+  let p; try{ p=capToParams(v); }catch(_){ toast('Bad number','err'); return; }
+  await send('Set graduation cap '+v+' ETH', ()=>facW.setCurveParams({ virtualEth:p.veth, virtualToken:p.vtok, graduationEth:p.grad }));
+}
+async function doSetTreasury(){ if(!requireOwner()) return; const a=document.getElementById('treas-in').value.trim(); if(!isAddr(a)){ toast('Invalid address','err'); return; } await send('Set treasury '+shortAddr(a), ()=>rtrW.setTreasury(a)); }
+async function doSetVault(){ if(!requireOwner()) return; const a=document.getElementById('vault-in').value.trim(); if(!isAddr(a)){ toast('Invalid address','err'); return; } await send('Set staking vault '+shortAddr(a), ()=>rtrW.setStakingVault(a)); }
+async function doSetHarvester(){ if(!requireOwner()) return; const a=document.getElementById('harv-in').value.trim(); if(!isAddr(a)){ toast('Invalid address','err'); return; } await send('Set harvester '+shortAddr(a), ()=>rtrW.setHarvester(a)); }
+async function doFlush(){ if(!requireOwner()) return; await send('Flush protocol revenue', ()=>rtrW.flushProtocol()); }
+async function doSweep(){ if(!requireOwner()) return; await send('Sweep unaccounted ETH', ()=>rtrW.sweepUnaccounted()); }
+async function doSetDex(){
+  if(!requireOwner()) return;
+  const f=document.getElementById('dexf-in').value.trim(), w=document.getElementById('weth-in').value.trim();
+  if(!isAddr(f)||!isAddr(w)){ toast('Invalid address','err'); return; }
+  // guard: both must have code on this chain
+  const ro=roProvider();
+  const [cf,cw]=await Promise.all([ro.getCode(f),ro.getCode(w)]);
+  if(cf==='0x'||cw==='0x'){ toast('One of those addresses has no code on this chain — aborting','err'); logLine('setDex aborted: no code at '+(cf==='0x'?f:w),'err'); return; }
+  if(!confirm('Re-point graduation DEX?\n\nFuture launches will graduate into:\nfactory '+f+'\nWETH '+w+'\n\nWrong values strand liquidity. Proceed?')) return;
+  await send('Set DEX wiring', ()=>facW.setDex(f,w));
+}
+async function doTransfer(which){
+  if(!requireOwner()) return;
+  const a=document.getElementById('own-in').value.trim();
+  if(!isAddr(a)){ toast('Invalid address','err'); return; }
+  const c = which==='factory'?facW:rtrW;
+  if(!confirm('Transfer '+which+' ownership to\n'+a+'?\n\nThis is step 1 of 2 — the new owner must then call "Accept" from that wallet. Nothing changes until they do.')) return;
+  await send('Transfer '+which+' → '+shortAddr(a), ()=>c.transferOwnership(a));
+}
+async function doAccept(which){
+  if(!wallet){ toast('Connect your wallet first','err'); return; }
+  const c = which==='factory'?facW:rtrW;
+  await send('Accept '+which+' ownership', ()=>c.acceptOwnership());
+}
+
+/* ---- ETH price ---- */
+async function refreshEthPrice(){
+  const srcs=[
+    {u:'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd',p:j=>j&&j.ethereum&&j.ethereum.usd},
+    {u:'https://api.coinbase.com/v2/prices/ETH-USD/spot',p:j=>j&&j.data&&parseFloat(j.data.amount)},
+  ];
+  for(const s of srcs){ try{ const r=await fetch(s.u); if(!r.ok) continue; const v=parseFloat(s.p(await r.json())); if(v>0){ ETH_USD=v; setV('s-eth','$'+ETH_USD.toLocaleString('en-US',{maximumFractionDigits:2})); return; } }catch(_){} }
+}
+
+/* ---- boot ---- */
+window.addEventListener('DOMContentLoaded', ()=>{
+  document.getElementById('cap-in').addEventListener('input', previewCap);
+  const wait=setInterval(()=>{ if(typeof ethers!=='undefined'){ clearInterval(wait); boot(); } },60);
+  setTimeout(()=>{ if(typeof ethers==='undefined'){ toast('ethers.js failed to load','err'); setNet('bad','ethers.js failed'); } },6000);
+});
+async function boot(){
+  setT('f-addr', shortAddr(FACTORY_ADDR)); setT('r-addr', shortAddr(FEEROUTER_ADDR));
+  refreshEthPrice();
+  await refreshAll();   // read-only view works before connecting
+  // auto-connect if a wallet is already authorized
+  const inj=pickInjected();
+  if(inj){ try{ const accs=await inj.request({method:'eth_accounts'}); if(accs&&accs.length){ activeInjected=inj; connect(); } }catch(_){} }
+}
+</script>
+</body>
+</html>
