@@ -2491,6 +2491,10 @@ async function refreshReal(t, withTrades){
   const cg = document.getElementById('tk-chg');
   if(cg){ cg.textContent = ((t.chg24||0)>=0?'+':'')+(t.chg24||0).toFixed(1)+'% · 24h'; cg.className = 'tok-chg '+((t.chg24||0)>=0?'up':'down'); }
   buildCandlesFromTrades(t); drawChart(t);
+  // renderToken()'s initial setSide() ran before the chain state loaded, so the
+  // trade panel wouldn't know the curve had graduated. Re-sync it here once we
+  // do — locks the button/input/chips and shows the "graduated" quote.
+  if(t.graduated) setSide(side);
   loadBalances(t);
 }
 function startRealPoll(t){
@@ -2563,6 +2567,8 @@ async function doTradeReal(t){
 function quoteReal(t){
   const amt = parseFloat(document.getElementById('amt').value)||0;
   const el = document.getElementById('feeLines');
+  // Graduated curve = closed. Don't show a misleading buy/sell quote.
+  if(t.graduated){ el.innerHTML = '<div class="fl"><span>◆ <b>Graduated.</b> The bonding curve is closed — this token now trades on the DEX (LP burned). On-DEX trading isn\'t in this beta build yet.</span></div>'; return; }
   if(!amt || !t.vEth){ el.innerHTML = '<div class="fl"><span>Enter an amount to preview.</span></div>'; return; }
   const rate = side==='buy' ? t.buyTax : t.sellTax;
   if(side==='buy'){
@@ -2683,15 +2689,19 @@ function setSide(s){
   document.getElementById('tab-sell').classList.toggle('active', s==='sell');
   const btn = document.getElementById('tradeBtn');
   const t = tok();
-  // Graduated curve = trading closed. Disable the button and say so.
-  if(t && realToken(t) && t.graduated){
+  const gradClosed = !!(t && realToken(t) && t.graduated);
+  // Graduated curve = trading closed. Disable the button + input and say so.
+  const amtInput = document.getElementById('amt');
+  if(gradClosed){
     btn.textContent = '◆ Graduated — curve closed';
     btn.className = 'btn btn-lg btn-block btn-line';
     btn.disabled = true;
+    if(amtInput){ amtInput.value=''; amtInput.disabled = true; }
   }else{
     btn.textContent = s==='buy'? 'Buy $'+(t?t.ticker:'') : 'Sell $'+(t?t.ticker:'');
     btn.className = 'btn btn-lg btn-block '+(s==='buy'?'btn-jade':'btn-seal');
     btn.disabled = false;
+    if(amtInput) amtInput.disabled = false;
   }
   document.getElementById('amt-label').textContent = s==='buy'?'You pay':'You sell';
   document.getElementById('amt-unit').textContent = s==='buy'?'ETH':'$'+(t?t.ticker:'');
@@ -2699,7 +2709,9 @@ function setSide(s){
     ? (s==='buy'? ((t._ethBal||0).toFixed(4)+' ETH') : (fmtNum(t._tokBal||0)+' $'+t.ticker))
     : (s==='buy'? '2.4810 ETH' : (t? fmtNum(rnd(1e6,4e7))+' $'+t.ticker : '—'));
   const qr = document.getElementById('quickRow');
-  if(s!=='buy'){
+  if(gradClosed){
+    qr.innerHTML = '';   // no quick-buy chips on a closed curve
+  }else if(s!=='buy'){
     qr.innerHTML = ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`).join('');
   }else{
     const g = gradBuyEth(t);   // gross ETH to graduate this curve (null for sim/graduated)
