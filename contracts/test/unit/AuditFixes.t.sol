@@ -6,6 +6,7 @@ import {RobinfunFactory} from "../../src/RobinfunFactory.sol";
 import {RobinfunToken} from "../../src/RobinfunToken.sol";
 import {BondingCurve} from "../../src/BondingCurve.sol";
 import {FeeRouter} from "../../src/FeeRouter.sol";
+import {IBondingCurve} from "../../src/interfaces/IRobinfun.sol";
 import {MockUniswapV2Pair} from "../mocks/MockUniswapV2.sol";
 
 /// @dev Regression tests for the 2026-07-13 internal security-audit fixes
@@ -60,6 +61,46 @@ contract AuditFixesTest is BaseSetup {
             vanitySalt: bytes32(0),
             maxDeployFee: 0
         });
+    }
+
+    // ================================================================ BETA CAP
+    /// @dev Beta safety cap: with graduationEth = 0.05 ETH, a curve provably
+    ///      never holds more than 0.05 ETH — a whale dumping 100 ETH is capped
+    ///      and refunded, and the token graduates at the cap. Bounds the
+    ///      blast radius of any residual bug during the mainnet beta.
+    function test_BetaCap_curveNeverHoldsMoreThanCap() public {
+        vm.deal(address(this), 1 ether);
+        uint128 vEth = uint128(uint256(1.122 ether) / 52); // same shape, 1/52 scale
+        uint128 gradEth = 0.05 ether;
+
+        FeeRouter fr = new FeeRouter(address(this));
+        RobinfunFactory betaFactory = new RobinfunFactory(
+            address(this),
+            address(fr),
+            address(dexFactory),
+            address(weth),
+            IBondingCurve.CurveParams(vEth, 1_080_000_000e18, gradEth),
+            0.001 ether
+        );
+        fr.setFactory(address(betaFactory));
+        fr.setDexRouter(address(dexRouter));
+        fr.setTreasury(treasury);
+
+        (, address c) = betaFactory.createToken{value: 0.001 ether}(_params());
+        BondingCurve curve = BondingCurve(payable(c));
+        (, uint256 target) = curve.graduationProgress();
+        assertEq(target, gradEth, "per-token cap = 0.05 ETH");
+
+        // A whale tries to sink 100 ETH: the buy is capped to the graduation
+        // target and the surplus refunded — the curve never holds >0.05 ETH.
+        vm.deal(alice, 100 ether);
+        uint256 before = alice.balance;
+        vm.prank(alice);
+        curve.buy{value: 100 ether}(0, block.timestamp);
+
+        assertTrue(curve.graduated(), "beta token graduates at the cap");
+        assertLt(before - alice.balance, 0.07 ether, "whale buy capped + refunded to ~the 0.05 cap");
+        assertEq(address(curve).balance, 0, "no stranded ETH");
     }
 
     // ================================================================ M-1

@@ -4,7 +4,17 @@
 # Installs Foundry, builds the contracts, and runs the self-contained testnet
 # deployment (protocol + a functional Uniswap-v2 DEX + WETH).
 #
-# TESTNET ONLY. The contracts are NOT audited — never point this at mainnet.
+# This deploys the AUDIT-FIXED build (internal audit 2026-07-13: 7 findings fixed,
+# 155/155 tests) with the BETA SAFETY CAP: each token's curve holds at most
+# GRADUATION_ETH (default 0.05 ETH) before graduating and burning 100% of the LP,
+# so the at-risk funds per token are bounded. Raise the cap as confidence grows:
+#   GRADUATION_ETH=100000000000000000 VIRTUAL_ETH=... ./bootstrap-deploy-testnet.sh
+#
+# Re-run this to redeploy after the audit fixes; the current live factory
+# (0x1B57...) is the PRE-audit build and must be replaced.
+#
+# TESTNET verification step. Verify the full flow here (launch → trade →
+# graduate at the cap → LP burn → post-grad fees) before any mainnet beta.
 #
 # Usage (root or a sudo user, on the VPS):
 #   PRIVATE_KEY=0xYOUR_FRESH_TESTNET_KEY TREASURY=0xYOUR_WALLET ./bootstrap-deploy-testnet.sh
