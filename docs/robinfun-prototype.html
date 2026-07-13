@@ -753,6 +753,12 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   letter-spacing:.08em;padding:2px 7px;border-radius:99px;background:var(--gilt-dim);
   color:var(--gilt-bright);border:1px solid rgba(198,242,60,.3);flex-shrink:0;
 }
+.bond-pill{
+  display:inline-flex;align-items:center;gap:4px;font-family:var(--font-mono);font-size:9px;font-weight:600;
+  letter-spacing:.08em;padding:2px 7px;border-radius:99px;background:rgba(255,193,86,.09);
+  color:#FFD98A;border:1px solid rgba(255,193,86,.45);flex-shrink:0;
+}
+.bond-pill::before{content:"";width:4px;height:4px;border-radius:50%;background:#FFC156;box-shadow:0 0 6px #FFC156;animation:bondpulse 1.4s ease-in-out infinite}
 
 /* ---------------- staking ---------------- */
 .stake-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:22px}
@@ -1963,7 +1969,7 @@ function cardHtml(t){
     <div class="tcard-top">
       <div class="tlogo">${tLogo(t)}</div>
       <div style="min-width:0;flex:1">
-        <div class="tname-row"><span class="tname">${t.name}</span><span class="tticker">$${t.ticker}</span>${t.graduated?'<span class="grad-pill">◆ GRAD</span>':''}</div>
+        <div class="tname-row"><span class="tname">${t.name}</span><span class="tticker">$${t.ticker}</span>${t.graduated?'<span class="grad-pill">◆ GRAD</span>':'<span class="bond-pill">◈ BONDING</span>'}</div>
         <div style="margin-top:5px">${stampHtml(t)}</div>
       </div>
     </div>
