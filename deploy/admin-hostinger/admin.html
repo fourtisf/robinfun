@@ -349,6 +349,16 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
   </div>
 
   <div class="card">
+    <h2>🎨 Claim your creator fees</h2>
+    <div class="desc">Different from launchpad revenue: this is the <b>90% creator share</b> of levies on tokens <b>your connected wallet created</b>. Only a token's current creator can claim it — this sweeps every token you created that has a balance, in one transaction, straight to your wallet. <code>claimMany(address[])</code></div>
+    <div class="cur">Wallet <b id="cc-wallet">—</b> · claimable now: <b class="gold" id="cc-amount">—</b> across <b id="cc-count">—</b> token(s)</div>
+    <div class="row">
+      <button class="btn primary" id="ccBtn" onclick="doClaimCreator()">Claim all my creator fees</button>
+    </div>
+    <div class="hint" id="cc-note">Connect the creator wallet — claimable tokens are detected from the launched-tokens list.</div>
+  </div>
+
+  <div class="card">
     <h2>📊 Fee model <span class="pill off">reference</span></h2>
     <div class="desc">How the launchpad earns — and what you can change. The split percentages are fixed in the contract as a fair-launch guarantee; only the deploy fee is tunable.</div>
     <div class="cur">
@@ -530,6 +540,8 @@ const FEEROUTER_ABI = [
   'function flushProtocol()',
   'function sweepUnaccounted()',
   'function harvest(address token, uint256 minEthOut, uint256 deadline)',
+  'function claim(address token)',
+  'function claimMany(address[] tokens)',
   // events — audit trail
   'event TreasurySet(address indexed treasury)',
   'event StakingVaultSet(address indexed vault)',
@@ -537,7 +549,7 @@ const FEEROUTER_ABI = [
   'event ProtocolFlushed(address indexed sink, uint256 amount)',
   'event UnaccountedSwept(address indexed to, uint256 amount)',
   'event LevyHarvested(address indexed token, uint256 tokensIn, uint256 ethOut)',
-  'error NothingToDo()','error NoSink()','error EthTransferFailed()','error NotHarvester()','error UnknownToken()',
+  'error NothingToDo()','error NoSink()','error EthTransferFailed()','error NotHarvester()','error UnknownToken()','error NotCreator()',
 ];
 const TOKEN_ABI = [
   'function name() view returns (string)',
@@ -781,8 +793,9 @@ async function loadTokens(len){
   // launch stats (over the loaded window)
   let grad=0, bond=0, earnedSum=0n;
   TOKROWS={};
-  for(const r of good){ if(r.graduated===true) grad++; else if(r.graduated===false) bond++; earnedSum+=r.earned; TOKROWS[r.ca.toLowerCase()]={name:r.name,sym:r.sym,curve:r.curve,creator:r.creator}; }
+  for(const r of good){ if(r.graduated===true) grad++; else if(r.graduated===false) bond++; earnedSum+=r.earned; TOKROWS[r.ca.toLowerCase()]={name:r.name,sym:r.sym,curve:r.curve,creator:r.creator,owed:r.owed}; }
   setLS('ls-total', String(len)); setLS('ls-grad', String(grad)); setLS('ls-bond', String(bond)); setLS('ls-earned', fmtEth(earnedSum));
+  updateCreatorClaim();
   body.innerHTML = good.map(r=>{
     const badge = r.graduated===true ? '<span class="gold">◆ grad</span>' : (r.graduated===false ? '◈ bonding' : '');
     return `<tr class="clk" onclick="openTokenDetail('${esc(r.ca)}')">
@@ -844,6 +857,12 @@ async function openTokenDetail(ca){
       + kv('Token', '<a href="'+EXPLORER+'/address/'+esc(ca)+'" target="_blank" rel="noopener">'+shortAddr(ca)+' ↗</a>')
       + kv('Bonding curve', curve&&curve!==ADDR0 ? '<a href="'+EXPLORER+'/address/'+esc(curve)+'" target="_blank" rel="noopener">'+shortAddr(curve)+' ↗</a>' : '—')
       + kv('Uniswap pair', hasPair ? '<a href="'+EXPLORER+'/address/'+esc(pair)+'" target="_blank" rel="noopener">'+shortAddr(pair)+' ↗</a>' : 'none yet')
+      // creator-fee claim — shown only if the connected wallet created this token AND has a balance owed
+      + (( wallet && meta.creator && eq(meta.creator, wallet) && owed!=null && owed>0n )
+          ? '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--rule)">'
+            + '<div class="desc" style="margin-bottom:10px">You created this token. Claim your accrued <b>creator fee</b> ('+fmtEth(owed)+') to your wallet.</div>'
+            + '<button class="btn primary" id="tm-claimBtn" onclick="doClaimOne()">Claim '+fmtEth(owed)+' creator fee</button></div>'
+          : '')
       + '<div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--rule)">'
       +   '<div class="desc" style="margin-bottom:10px">Harvest swaps this token\'s accrued fee-on-transfer levy (post-graduation) to ETH and splits it 90% creator / 10% protocol. Only works once there is levy inventory; if a harvester keeper is set, only that wallet may call it.</div>'
       +   '<div class="row">'
@@ -852,8 +871,10 @@ async function openTokenDetail(ca){
       +   '</div>'
       +   '<div class="hint warn" id="tm-harvest-note">Tip: for anything but dust, set a Min ETH out (quote off-chain) so the swap can\'t be sandwiched.</div>'
       + '</div>';
-    // gate the harvest button like any other write
-    const hb=document.getElementById('tm-harvestBtn'); if(hb) hb.disabled = !(isOwner && isProven);
+    // gate the write buttons like any other
+    const en = isOwner && isProven;
+    const hb=document.getElementById('tm-harvestBtn'); if(hb) hb.disabled = !en;
+    const clb=document.getElementById('tm-claimBtn'); if(clb) clb.disabled = !en;
   }catch(e){ box.innerHTML='<div class="small">Could not load token state: '+esc(errMsg(e))+'</div>'; }
 }
 async function doHarvest(){
@@ -863,6 +884,37 @@ async function doHarvest(){
   let minWei; try{ minWei=ethers.parseEther(String(v||'0')); }catch(_){ toast('Bad min-out','err'); return; }
   const deadline = BigInt(Math.floor(Date.now()/1000) + 600);
   await send('Harvest levies', ()=>rtrW.harvest(TM_CA, minWei, deadline));
+}
+
+/* ---- creator-fee claim (the 90% creator share on tokens THIS wallet created) ---- */
+let CC_LIST = [];
+function updateCreatorClaim(){
+  const me = wallet ? wallet.toLowerCase() : null;
+  let sum=0n; const list=[];
+  if(me){ for(const ca in TOKROWS){ const t=TOKROWS[ca]; if(t.creator && t.creator.toLowerCase()===me && t.owed && t.owed>0n){ sum+=t.owed; list.push(ethers.getAddress(ca)); } } }
+  CC_LIST=list;
+  setT('cc-wallet', wallet?shortAddr(wallet):'—');
+  setT('cc-amount', me ? (fmtEth(sum)+' · '+fmtUsd(usdOf(sum))) : '—');
+  setT('cc-count', me ? String(list.length) : '—');
+  const note=document.getElementById('cc-note');
+  if(note){ note.textContent = !me ? 'Connect the creator wallet — claimable tokens are detected from the launched-tokens list.'
+    : (list.length ? ('Ready to claim '+list.length+' token(s). Only the tokens listed above (newest '+Object.keys(TOKROWS).length+') are scanned.')
+    : 'Nothing claimable right now for this wallet.'); }
+  // reflect emptiness on the button label
+  const cb=document.getElementById('ccBtn'); if(cb) cb.textContent = (me && list.length) ? ('Claim '+fmtEth(sum)+' creator fees') : 'Claim all my creator fees';
+}
+async function doClaimCreator(){
+  if(!wallet){ toast('Connect your wallet first','err'); return; }
+  if(!isProven){ toast('Sign the login challenge first','err'); proveOwner(); return; }
+  if(!CC_LIST.length){ toast('Nothing claimable for this wallet','err'); return; }
+  // creator-guarded on-chain (not owner) → skipOwnerCheck so send() doesn't block a creator≠owner
+  await send('Claim creator fees ('+CC_LIST.length+' token'+(CC_LIST.length>1?'s':'')+')', ()=>rtrW.claimMany(CC_LIST), {skipOwnerCheck:true});
+}
+async function doClaimOne(){
+  if(!TM_CA) return;
+  if(!wallet){ toast('Connect your wallet first','err'); return; }
+  if(!isProven){ toast('Sign the login challenge first','err'); proveOwner(); return; }
+  await send('Claim creator fee', ()=>rtrW.claim(TM_CA), {skipOwnerCheck:true});
 }
 function esc(s){ return (s==null?'':String(s)).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c])); }
 
