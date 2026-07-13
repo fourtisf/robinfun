@@ -2177,7 +2177,7 @@ function renderToken(fresh){
   document.getElementById('ts-mcap').textContent = pending ? '—' : fmtUsd(t.mcap);
   document.getElementById('ts-vol').textContent = pending ? '—' : fmtUsd(t.vol24);
   document.getElementById('ts-holders').textContent = pending ? '—' : t.holders.toLocaleString();
-  document.getElementById('ts-earned').textContent = pending ? '—' : t.earnedEth.toFixed(3)+' ETH';
+  document.getElementById('ts-earned').textContent = pending ? '—' : (+t.earnedEth.toFixed(6))+' ETH';
   /* curve */
   const prog = Math.min(100, t.mcap/GRAD_CAP*100);
   const fill = document.getElementById('tk-fill');
@@ -2191,7 +2191,7 @@ function renderToken(fresh){
   document.getElementById('li-decay').textContent = t.decay? 'halves to '+(t.buyTax/2)+'/'+(t.sellTax/2) : 'unchanged';
   document.getElementById('li-ren').textContent = t.renounced? 'renounced — locked' : 'lower-only';
   document.getElementById('li-dest').textContent = t.mine? 'your wallet' : t.creator;
-  document.getElementById('li-earned').textContent = pending ? '—' : t.earnedEth.toFixed(3)+' ETH';
+  document.getElementById('li-earned').textContent = pending ? '—' : (+t.earnedEth.toFixed(6))+' ETH';
   document.getElementById('fee-note').textContent = side==='buy'
     ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
     : (t.sellTax>0? t.sellTax+'% sell fee → creator' : 'no sell fee');
@@ -2293,17 +2293,19 @@ function drawChart(t){
     x.beginPath(); x.moveTo(0,gy); x.lineTo(w-58,gy); x.stroke(); x.restore();
     x.fillStyle=C_GRADTXT; x.textAlign='left'; x.fillText('graduation', 6, gy-5); x.textAlign='right';
   }
-  /* candles */
-  const cw = (w-70)/cs.length;
+  /* candles — cap the slot width so a handful of trades render as thin candles
+     on the left, not giant blocks stretched across the whole pane. */
+  const slot = Math.min((w-70)/cs.length, 14);
+  const bodyW = Math.max(2, slot*0.6);
   cs.forEach((c,i)=>{
-    const cx = i*cw+cw/2;
+    const cx = i*slot + slot/2 + 2;
     const up = c.c>=c.o;
     x.strokeStyle = up? C_UP:C_DOWN;
     x.fillStyle = up? C_UP:C_DOWN;
     x.lineWidth = 1;
     x.beginPath(); x.moveTo(cx,py(c.h)); x.lineTo(cx,py(c.l)); x.stroke();
     const bh = Math.max(1, Math.abs(py(c.o)-py(c.c)));
-    x.fillRect(cx-cw*0.32, Math.min(py(c.o),py(c.c)), cw*0.64, bh);
+    x.fillRect(cx-bodyW/2, Math.min(py(c.o),py(c.c)), bodyW, bh);
   });
 }
 
@@ -2379,20 +2381,22 @@ async function loadCurveTrades(t){
       }catch(_){ /* range rejected — try a smaller window */ }
     }
     if(!got){ console.error('loadCurveTrades: all getLogs ranges rejected'); return; }
+    // Creator address (once) — used to tag the dev wallet in the trades table.
+    if(!t._creatorAddr){ try{ t._creatorAddr = (await new ethers.Contract(t.ca, ['function creator() view returns (address)'], ro).creator()).toLowerCase(); }catch(_){} }
     const px = a => Number(ethers.formatEther(a.virtualEthReserve)) / Number(ethers.formatUnits(a.virtualTokenReserve, 18));
     const evs = [];
     for(const e of buys){ const a=e.args; evs.push({block:e.blockNumber, li:e.index, buy:true,
       eth:Number(ethers.formatEther(a.grossEth)), tokens:Number(ethers.formatUnits(a.tokensOut,18)),
-      levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.recipient), priceEth:px(a)}); }
+      levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.recipient), full:a.recipient.toLowerCase(), priceEth:px(a)}); }
     for(const e of sells){ const a=e.args; evs.push({block:e.blockNumber, li:e.index, buy:false,
       eth:Number(ethers.formatEther(a.netEth)), tokens:Number(ethers.formatUnits(a.tokensIn,18)),
-      levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.trader), priceEth:px(a)}); }
+      levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.trader), full:a.trader.toLowerCase(), priceEth:px(a)}); }
     evs.sort((x,y)=> x.block-y.block || x.li-y.li);
     const uniq = [...new Set(evs.map(e=>e.block))].slice(-80);
     const times = {};
     await Promise.all(uniq.map(async b=>{ try{ const bl=await ro.getBlock(b); if(bl) times[b]=Number(bl.timestamp)*1000; }catch(_){} }));
     evs.forEach(e=> e.ts = times[e.block] || Date.now());
-    t.trades = evs.slice().reverse().map(e=>({ts:e.ts, buy:e.buy, eth:e.eth, tokens:e.tokens, levyEth:e.levyEth, wallet:e.wallet}));
+    t.trades = evs.slice().reverse().map(e=>({ts:e.ts, buy:e.buy, eth:e.eth, tokens:e.tokens, levyEth:e.levyEth, wallet:e.wallet, full:e.full}));
     t._series = evs.map(e=> e.priceEth*ETH_USD);
     t.vol24 = evs.filter(e=> Date.now()-e.ts < 864e5).reduce((s,e)=> s+e.eth, 0)*ETH_USD;
 
@@ -2432,7 +2436,14 @@ function buildCandlesFromTrades(t){
   // flat dash. The last close is pinned to the live price.
   const series = (t._series && t._series.length) ? t._series.slice() : [];
   const launchPx = (START_ETH/SUPPLY)*ETH_USD || (t.price||0);
-  const prices = [launchPx, ...series];
+  // With ≥2 real trades use the trade price-walk directly (tight, honest
+  // range). Only prepend the launch price for a single trade, so one buy still
+  // shows a candle body — never for many, or the launch→first-trade jump would
+  // dominate the whole pane as one giant candle.
+  let prices;
+  if(series.length >= 2) prices = series.slice();
+  else if(series.length === 1) prices = [launchPx, series[0]];
+  else { t.candles = [{o:launchPx, h:launchPx, l:launchPx, c:launchPx, v:0}]; return; }
   if(t.price) prices[prices.length-1] = t.price;
   const steps = prices.length - 1;
   if(steps < 1){ t.candles = [{o:launchPx, h:launchPx, l:launchPx, c:launchPx, v:0}]; return; }
@@ -2475,8 +2486,8 @@ async function refreshReal(t, withTrades){
      real on-chain history (volume, holders, 24h change, creator fees). */
   document.getElementById('ts-vol').textContent = fmtUsd(t.vol24||0);
   document.getElementById('ts-holders').textContent = (t.holders||1).toLocaleString();
-  document.getElementById('ts-earned').textContent = (t.earnedEth||0).toFixed(3)+' ETH';
-  const le = document.getElementById('li-earned'); if(le) le.textContent = (t.earnedEth||0).toFixed(3)+' ETH';
+  document.getElementById('ts-earned').textContent = (+(t.earnedEth||0).toFixed(6))+' ETH';
+  const le = document.getElementById('li-earned'); if(le) le.textContent = (+(t.earnedEth||0).toFixed(6))+' ETH';
   const cg = document.getElementById('tk-chg');
   if(cg){ cg.textContent = ((t.chg24||0)>=0?'+':'')+(t.chg24||0).toFixed(1)+'% · 24h'; cg.className = 'tok-chg '+((t.chg24||0)>=0?'up':'down'); }
   buildCandlesFromTrades(t); drawChart(t);
@@ -2498,6 +2509,9 @@ async function doTradeReal(t){
     if((await activeProvider.request({method:'eth_chainId'}))!==CHAIN.chainId){ toast('Switch to Robinhood Chain','seal'); return; }
     const amt = parseFloat(document.getElementById('amt').value)||0;
     if(!(amt>0)){ toast('Enter an amount','seal'); return; }
+    // Graduated curves are closed forever — a curve buy/sell would revert
+    // (AlreadyGraduatedErr). Stop here with a clear message instead.
+    if(t.graduated){ toast('$'+t.ticker+' has <b>graduated</b> — the bonding curve is closed. It now lives on the DEX (LP burned). On-DEX trading isn\'t in this beta build yet.','seal'); return; }
     const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
     const curveW = new ethers.Contract(t.curveAddr, CURVE_ABI, signer);
     const curveR = new ethers.Contract(t.curveAddr, CURVE_ABI, roProvider());
@@ -2557,32 +2571,32 @@ function quoteReal(t){
     const room = (realToken(t) && t.gradTargetEth) ? Math.max(0, t.gradTargetEth - (t.reserveEth||0)) : Infinity;
     if(net > room){ refunded = amt - room/(1-0.01-rate/100); net = room; fee = amt*0.01; levy = amt*rate/100; }
     const tokens = t.vTok*net/(t.vEth+net);
+    // Clean quote: just what you get. (Fees are still shown once, statically,
+    // under the button and in the fee record — no need to itemize every keystroke.)
     el.innerHTML =
-      `<div class="fl"><span>Curve fee · 1%</span><b>${fee.toFixed(5)} Ξ</b></div>`+
-      `<div class="fl levy-fl"><span>Creator fee · ${rate}% → dev wallet</span><b>${levy.toFixed(5)} Ξ</b></div>`+
-      `<div class="fl"><span>To the curve</span><b>${net.toFixed(5)} Ξ</b></div>`+
       (refunded>1e-9? `<div class="fl"><span>Refunded (past graduation cap)</span><b>${refunded.toFixed(5)} Ξ</b></div>`:'')+
       `<div class="fl big"><span>You receive</span><b>≈ ${fmtNum(tokens)} $${t.ticker}${refunded>1e-9?' · graduates ◆':''}</b></div>`;
   }else{
     const gross = t.vEth*amt/(t.vTok+amt);
     const fee=gross*0.01, levy=gross*rate/100, net=gross-fee-levy;
     el.innerHTML =
-      `<div class="fl"><span>Gross proceeds</span><b>${gross.toFixed(5)} Ξ</b></div>`+
-      `<div class="fl"><span>Curve fee · 1%</span><b>−${fee.toFixed(5)} Ξ</b></div>`+
-      `<div class="fl levy-fl"><span>Creator fee · ${rate}% → dev wallet</span><b>−${levy.toFixed(5)} Ξ</b></div>`+
       `<div class="fl big"><span>You receive</span><b>≈ ${net.toFixed(5)} ETH</b></div>`;
   }
 }
 
 /* ---------------- trades / holders / thread ---------------- */
 function tradeRow(t,tr,isNew){
+  const usd = (tr.eth||0)*ETH_USD;
+  const isDev = tr.full && t._creatorAddr && tr.full===t._creatorAddr;
+  const isYou = tr.full && wallet && tr.full===wallet.toLowerCase();
+  const tag = isDev ? ' <span class="gold">· dev</span>' : (isYou ? ' <span class="gold">· you</span>' : '');
   return `<tr class="${isNew?'new-row':''}">
     <td>${ago(tr.ts)} ago</td>
     <td class="${tr.buy?'side-b':'side-s'}">${tr.buy?'BUY':'SELL'}</td>
-    <td>${tr.eth.toFixed(4)}</td>
+    <td>${tr.eth.toFixed(4)} <span style="color:var(--cream-mute)">· ${fmtUsd(usd)}</span></td>
     <td>${fmtNum(tr.tokens)}</td>
     <td class="gold">${tr.levyEth>0? tr.levyEth.toFixed(5)+' Ξ':'—'}</td>
-    <td>${tr.wallet}</td>
+    <td>${tr.wallet}${tag}</td>
   </tr>`;
 }
 function renderTrades(t){
@@ -2669,8 +2683,16 @@ function setSide(s){
   document.getElementById('tab-sell').classList.toggle('active', s==='sell');
   const btn = document.getElementById('tradeBtn');
   const t = tok();
-  btn.textContent = s==='buy'? 'Buy $'+(t?t.ticker:'') : 'Sell $'+(t?t.ticker:'');
-  btn.className = 'btn btn-lg btn-block '+(s==='buy'?'btn-jade':'btn-seal');
+  // Graduated curve = trading closed. Disable the button and say so.
+  if(t && realToken(t) && t.graduated){
+    btn.textContent = '◆ Graduated — curve closed';
+    btn.className = 'btn btn-lg btn-block btn-line';
+    btn.disabled = true;
+  }else{
+    btn.textContent = s==='buy'? 'Buy $'+(t?t.ticker:'') : 'Sell $'+(t?t.ticker:'');
+    btn.className = 'btn btn-lg btn-block '+(s==='buy'?'btn-jade':'btn-seal');
+    btn.disabled = false;
+  }
   document.getElementById('amt-label').textContent = s==='buy'?'You pay':'You sell';
   document.getElementById('amt-unit').textContent = s==='buy'?'ETH':'$'+(t?t.ticker:'');
   document.getElementById('amt-bal').textContent = realToken(t)
@@ -3185,7 +3207,7 @@ function showLaunchReceipt(meta, t, opts){
     `<div class="r-line"><span>Supply</span><b>1,000,000,000 · all on curve</b></div>`+
     `<div class="r-line"><span>Fee</span><b>${meta.buyTax}% buy / ${meta.sellTax}% sell${meta.renounced?' · locked':''}</b></div>`+
     `<div class="r-line"><span>Fee destination</span><b>${shortAddr(MY_ADDR)}</b></div>`+
-    (meta.devBuy>0? `<div class="r-line"><span>Dev buy</span><b>${meta.devBuy.toFixed(3)} ETH</b></div>`:'')+
+    (meta.devBuy>0? `<div class="r-line"><span>Dev buy</span><b>${+meta.devBuy.toFixed(6)} ETH</b></div>`:'')+
     txLine +
     `<div class="r-line total"><span>Starting cap</span><b>${fmtUsdFull(t.mcap)}</b></div>`;
   document.getElementById('modalBack').classList.add('open');
