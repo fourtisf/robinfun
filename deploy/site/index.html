@@ -2978,7 +2978,7 @@ function setSide(s){
   if(s!=='buy'){
     qr.innerHTML = ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`).join('');
   }else if(grad){
-    qr.innerHTML = [0.0005,0.001,0.005,0.01].map(chip).join('');   // post-grad DEX buy
+    qr.innerHTML = [0.001,0.005,0.02,0.05].map(chip).join('');   // post-grad DEX buy
   }else{
     const g = gradBuyEth(t);   // gross ETH to graduate this curve (null for sim)
     if(g && g>0){
