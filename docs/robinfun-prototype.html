@@ -1115,7 +1115,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <div class="stat-cell"><div class="k">Market cap</div><div class="v" id="ts-mcap">—</div></div>
             <div class="stat-cell"><div class="k">24h volume</div><div class="v" id="ts-vol">—</div></div>
             <div class="stat-cell"><div class="k">Holders</div><div class="v" id="ts-holders">—</div></div>
-            <div class="stat-cell"><div class="k">Fee paid to creator</div><div class="v gold" id="ts-earned">—</div></div>
+            <div class="stat-cell"><div class="k">Creator rewards</div><div class="v gold" id="ts-earned">—</div></div>
           </div>
         </div>
 
@@ -1420,6 +1420,8 @@ const START_ETH = 0.0004, GRAD_ETH = 0.0044;   // beta curve mcap (ETH): ~0.001-
 let START_CAP = Math.round(START_ETH*ETH_USD), GRAD_CAP = Math.round(GRAD_ETH*ETH_USD);
 const fmtUsd = n => n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n>=1e3 ? '$'+(n/1e3).toFixed(1)+'k' : '$'+n.toFixed(0);
 const fmtUsdFull = n => '$'+Math.round(n).toLocaleString('en-US');
+const fmtUsdSmall = v => v>=1 ? fmtUsdFull(v) : '$'+v.toFixed(v>=0.01?2:4);   // keeps sub-dollar amounts visible
+const rewardStr = eth => (+(eth||0).toFixed(6))+' ETH · '+fmtUsdSmall((eth||0)*ETH_USD);
 const fmtEth = n => n.toFixed(n<0.01?5:n<1?4:3)+' ETH';
 const fmtNum = n => n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':n.toFixed(0);
 const fmtPrice = p => p>=0.01 ? '$'+p.toFixed(4) : '$'+p.toFixed(8).replace(/0+$/,'').padEnd(9,'0');
@@ -2221,7 +2223,7 @@ function renderToken(fresh){
   document.getElementById('ts-mcap').textContent = pending ? '—' : fmtUsd(t.mcap);
   document.getElementById('ts-vol').textContent = pending ? '—' : fmtUsd(t.vol24);
   document.getElementById('ts-holders').textContent = pending ? '—' : t.holders.toLocaleString();
-  document.getElementById('ts-earned').textContent = pending ? '—' : (+t.earnedEth.toFixed(6))+' ETH';
+  document.getElementById('ts-earned').textContent = pending ? '—' : rewardStr(t.earnedEth);
   /* curve */
   const prog = Math.min(100, t.mcap/GRAD_CAP*100);
   const fill = document.getElementById('tk-fill');
@@ -2235,7 +2237,7 @@ function renderToken(fresh){
   document.getElementById('li-decay').textContent = t.decay? 'halves to '+(t.buyTax/2)+'/'+(t.sellTax/2) : 'unchanged';
   document.getElementById('li-ren').textContent = t.renounced? 'renounced — locked' : 'lower-only';
   document.getElementById('li-dest').textContent = t.mine? 'your wallet' : t.creator;
-  document.getElementById('li-earned').textContent = pending ? '—' : (+t.earnedEth.toFixed(6))+' ETH';
+  document.getElementById('li-earned').textContent = pending ? '—' : rewardStr(t.earnedEth);
   document.getElementById('fee-note').textContent = side==='buy'
     ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
     : (t.sellTax>0? t.sellTax+'% sell fee → creator' : 'no sell fee');
@@ -2491,6 +2493,8 @@ async function loadCurveTrades(t){
     for(const e of sells){ const a=e.args; evs.push({block:e.blockNumber, li:e.index, buy:false,
       eth:Number(ethers.formatEther(a.netEth)), tokens:Number(ethers.formatUnits(a.tokensIn,18)),
       levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.trader), full:a.trader.toLowerCase(), priceEth:px(a)}); }
+    // Post-graduation: merge DEX swaps so the table, volume and chart keep going.
+    if(t.graduated){ const dex = await loadDexTrades(t); for(const d of dex) evs.push(d); }
     evs.sort((x,y)=> x.block-y.block || x.li-y.li);
     const uniq = [...new Set(evs.map(e=>e.block))].slice(-80);
     const times = {};
@@ -2501,12 +2505,10 @@ async function loadCurveTrades(t){
     t._priceSeries = evs.map(e=> ({ts:e.ts, px:e.priceEth*ETH_USD, vol:(e.eth||0)*ETH_USD}));   // timestamped + volume for candles
     t.vol24 = evs.filter(e=> Date.now()-e.ts < 864e5).reduce((s,e)=> s+e.eth, 0)*ETH_USD;
 
-    /* real holder distribution — net token flow per wallet from curve trades
-       (buys credit the recipient, sells debit the trader). This tracks who
-       actually holds, approximating current balances without an archive scan. */
+    /* real holder distribution — net token flow per wallet across curve + DEX
+       trades (buys credit, sells debit). Approximates current balances. */
     const net = {};
-    for(const e of buys){ const a=e.args; const w=a.recipient.toLowerCase(); net[w]=(net[w]||0)+Number(ethers.formatUnits(a.tokensOut,18)); }
-    for(const e of sells){ const a=e.args; const w=a.trader.toLowerCase(); net[w]=(net[w]||0)-Number(ethers.formatUnits(a.tokensIn,18)); }
+    for(const e of evs){ const w=e.full; if(!w) continue; net[w]=(net[w]||0)+(e.buy? e.tokens : -e.tokens); }
     t._holderRows = Object.entries(net).filter(([,v])=>v>1e-6)
       .map(([w,v])=>({who:shortAddr(w), full:w, tokens:v, pct:v/SUPPLY*100}))
       .sort((x,y)=> y.tokens-x.tokens);
@@ -2570,7 +2572,10 @@ function buildCandlesFromTrades(t){
     // opened continuously (avoids generating thousands of flat candles).
     for(const k of keys){ const b = map.get(k); b.o = carry; out.push(b); carry = b.c; }
   }
-  if(t.price && out.length) out[out.length-1].c = t.price;   // pin last close to live price
+  // Pin the last close to the live price — and widen high/low to include it,
+  // else close>high (or <low) violates the candlestick invariant and the chart
+  // renders a broken candle / negative axis.
+  if(t.price && out.length){ const L=out[out.length-1]; L.c=t.price; L.h=Math.max(L.h,t.price); L.l=Math.min(L.l,t.price); }
   t.candles = out.slice(-140);   // keep the most recent
 }
 async function refreshReal(t, withTrades){
@@ -2605,8 +2610,8 @@ async function refreshReal(t, withTrades){
      real on-chain history (volume, holders, 24h change, creator fees). */
   document.getElementById('ts-vol').textContent = fmtUsd(t.vol24||0);
   document.getElementById('ts-holders').textContent = (t.holders||1).toLocaleString();
-  document.getElementById('ts-earned').textContent = (+(t.earnedEth||0).toFixed(6))+' ETH';
-  const le = document.getElementById('li-earned'); if(le) le.textContent = (+(t.earnedEth||0).toFixed(6))+' ETH';
+  document.getElementById('ts-earned').textContent = rewardStr(t.earnedEth);
+  const le = document.getElementById('li-earned'); if(le) le.textContent = rewardStr(t.earnedEth);
   const cg = document.getElementById('tk-chg');
   if(cg){ cg.textContent = ((t.chg24||0)>=0?'+':'')+(t.chg24||0).toFixed(1)+'% · 24h'; cg.className = 'tok-chg '+((t.chg24||0)>=0?'up':'down'); }
   buildCandlesFromTrades(t); drawChart(t);
@@ -2635,12 +2640,43 @@ async function loadDexState(t){
     }
     const pair = new ethers.Contract(t._pair, PAIR_ABI, ro);
     const [r, tok0] = await Promise.all([pair.getReserves(), pair.token0()]);
-    const tokenIs0 = tok0.toLowerCase()===t.ca.toLowerCase();
+    t._tok0 = tok0.toLowerCase();
+    const tokenIs0 = t._tok0===t.ca.toLowerCase();
     t._dexRTok = Number(ethers.formatUnits(tokenIs0? r[0]:r[1], 18));
     t._dexREth = Number(ethers.formatEther(tokenIs0? r[1]:r[0]));
     if(t._dexRTok>0){ t.priceEth = t._dexREth/t._dexRTok; t.price = t.priceEth*ETH_USD; t.mcap = t.priceEth*SUPPLY*ETH_USD; }
     return true;
   }catch(e){ console.error('loadDexState', e); return false; }
+}
+/* Post-graduation DEX swaps → trade rows + price/volume points, so the Trades
+   table, 24h volume and chart keep updating after a token leaves the curve. */
+async function loadDexTrades(t){
+  try{
+    if(!t._pair) return [];
+    const ro = roProvider();
+    const pair = new ethers.Contract(t._pair, ['event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)'], ro);
+    const head = await ro.getBlockNumber();
+    let swaps=[], got=false;
+    for(const span of [200000,45000,9000,2000,500]){
+      try{ swaps = await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-span), head); got=true; break; }catch(_){}
+    }
+    if(!got) return [];
+    const tokenIs0 = t._tok0===t.ca.toLowerCase();
+    const out=[];
+    for(const e of swaps){
+      const a=e.args;
+      const a0i=Number(ethers.formatUnits(a.amount0In,18)), a1i=Number(ethers.formatUnits(a.amount1In,18));
+      const a0o=Number(ethers.formatUnits(a.amount0Out,18)), a1o=Number(ethers.formatUnits(a.amount1Out,18));
+      const tokIn = tokenIs0? a0i : a1i, tokOut = tokenIs0? a0o : a1o;
+      const ethIn = tokenIs0? a1i : a0i, ethOut = tokenIs0? a1o : a0o;
+      const buy = tokOut>0;                       // tokens leaving the pool = a buy
+      const eth = buy? ethIn : ethOut;
+      const tokens = buy? tokOut : tokIn;
+      if(!(eth>0) || !(tokens>0)) continue;
+      out.push({block:e.blockNumber, li:e.index, buy, eth, tokens, levyEth:0, wallet:shortAddr(a.to), full:a.to.toLowerCase(), priceEth:(eth/tokens), dex:true});
+    }
+    return out;
+  }catch(e){ console.error('loadDexTrades', e); return []; }
 }
 function quoteDex(t){
   const amt = parseFloat(document.getElementById('amt').value)||0;
@@ -2710,7 +2746,7 @@ async function updateClaimUI(t){
   let owed = 0;
   try{ owed = Number(ethers.formatEther(await new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, roProvider()).creatorOwed(t.ca))); }catch(_){}
   if(currentTokenId!==t.id) return;
-  if(amtEl) amtEl.textContent = (+owed.toFixed(6))+' ETH';
+  if(amtEl) amtEl.textContent = rewardStr(owed);
   if(row) row.style.display = '';
   btn.style.display = owed>1e-12 ? '' : 'none';
 }
