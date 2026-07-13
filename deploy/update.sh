@@ -33,10 +33,6 @@ log "Republishing the frontend to ${WEBROOT}"
 [ -f "$SRC_DIR/deploy/site/index.html" ] || die "deploy/site/index.html missing in the repo"
 mkdir -p "$WEBROOT"
 cp "$SRC_DIR/deploy/site/index.html" "$WEBROOT/index.html"
-# Owner-only admin console (served at /admin — noindex, gated on-chain + in-page
-# lock). Ships a self-hosted, SRI-pinned ethers under vendor/ (no CDN).
-[ -f "$SRC_DIR/deploy/site/admin.html" ] && cp "$SRC_DIR/deploy/site/admin.html" "$WEBROOT/admin.html"
-[ -d "$SRC_DIR/deploy/site/vendor" ] && { mkdir -p "$WEBROOT/vendor"; cp -f "$SRC_DIR"/deploy/site/vendor/* "$WEBROOT/vendor/"; }
 chown -R www-data:www-data "$WEBROOT"
 chmod -R a+rX "$WEBROOT"
 

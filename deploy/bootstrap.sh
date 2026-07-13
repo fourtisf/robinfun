@@ -47,10 +47,6 @@ elif [ -f "$WEBROOT/index.html" ]; then
 else
     die "No site found. Put the page at $SCRIPT_DIR/site/index.html, or set SITE_URL=..., then re-run."
 fi
-# Owner-only admin console (served at /admin — gated on-chain + in-page lock).
-# Ships a self-hosted, SRI-pinned ethers under vendor/ (no CDN dependency).
-[ -f "$SCRIPT_DIR/site/admin.html" ] && cp "$SCRIPT_DIR/site/admin.html" "$WEBROOT/admin.html"
-[ -d "$SCRIPT_DIR/site/vendor" ] && { mkdir -p "$WEBROOT/vendor"; cp -f "$SCRIPT_DIR"/site/vendor/* "$WEBROOT/vendor/"; }
 chown -R www-data:www-data "$WEBROOT"
 chmod -R a+rX "$WEBROOT"
 
@@ -71,38 +67,14 @@ server {
     root ${WEBROOT};
     index index.html;
 
-    location = /admin {
-        # Owner-only console — clean URL /admin → admin.html. Security headers
-        # here are the server-side half of the hardening (CSP frame-ancestors /
-        # X-Frame-Options / Referrer-Policy cannot be enforced from a meta tag).
-        # OPTIONAL real gate: uncomment to require a server password before load:
-        #   auth_basic "Robinfun Admin";
-        #   auth_basic_user_file /etc/nginx/.robinfun_admin;   # create with htpasswd
-        try_files /admin.html =404;
-        add_header Cache-Control "no-cache" always;
-        add_header Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src https://rpc.mainnet.chain.robinhood.com https://api.coingecko.com https://api.coinbase.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'" always;
-        add_header X-Frame-Options "DENY" always;
-        add_header X-Content-Type-Options "nosniff" always;
-        add_header Referrer-Policy "no-referrer" always;
-        add_header Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()" always;
-        add_header X-Robots-Tag "noindex, nofollow" always;
-    }
-
     location / {
-        # SPA fallback: /create, /staking, /whitepaper, /token/<id>,
-        # /profile/<addr> all serve index.html so client-side routing +
-        # refresh/deep-links work.
+        # SPA fallback: /create, /staking, /whitepaper, /token/<id> all serve
+        # index.html so client-side routing + refresh/deep-links work.
         try_files \$uri \$uri/ /index.html;
     }
 
     location = /index.html {
         add_header Cache-Control "no-cache";
-    }
-    # Force the console through the hardened /admin location — the raw /admin.html
-    # URL would otherwise be served WITHOUT the CSP / X-Frame-Options headers set
-    # on /admin (nginx does not merge add_header across levels).
-    location = /admin.html {
-        return 301 /admin;
     }
     location ~* \.(?:css|js|png|jpg|jpeg|gif|svg|ico|webp|woff2?)\$ {
         expires 7d;

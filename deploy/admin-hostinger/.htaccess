@@ -1,0 +1,62 @@
+# ==========================================================================
+# Robinfun Admin — robinfun.tech (dedicated admin domain on Hostinger)
+# ==========================================================================
+# This is the SERVER-SIDE half of the console's hardening. The security headers
+# below (frame-ancestors / X-Frame-Options / Referrer-Policy) CANNOT be enforced
+# from an in-page <meta> tag, so they must live here. Hostinger runs LiteSpeed,
+# which honours Apache .htaccess + mod_headers.
+#
+# Upload this file (named exactly ".htaccess") into the document root of
+# robinfun.tech, next to admin.html and the vendor/ folder. See README.md.
+# --------------------------------------------------------------------------
+
+# Serve the console at the domain root: robinfun.tech/ -> admin.html
+DirectoryIndex admin.html
+
+# Never index the admin panel.
+<IfModule mod_headers.c>
+  Header always set Content-Security-Policy "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src https://rpc.mainnet.chain.robinhood.com https://api.coingecko.com https://api.coinbase.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'"
+  Header always set X-Frame-Options "DENY"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set Referrer-Policy "no-referrer"
+  Header always set Permissions-Policy "geolocation=(), microphone=(), camera=(), payment=()"
+  Header always set X-Robots-Tag "noindex, nofollow"
+  # Enable ONLY after HTTPS/SSL is active on robinfun.tech:
+  # Header always set Strict-Transport-Security "max-age=31536000"
+</IfModule>
+
+# Keep the admin HTML fresh; long-cache the fingerprinted vendored library.
+<FilesMatch "\.html$">
+  <IfModule mod_headers.c>
+    Header set Cache-Control "no-cache"
+  </IfModule>
+</FilesMatch>
+<FilesMatch "\.js$">
+  <IfModule mod_headers.c>
+    Header set Cache-Control "public, max-age=604800"
+  </IfModule>
+</FilesMatch>
+
+# Force HTTPS once SSL is installed (Hostinger installs a free cert automatically).
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteCond %{HTTPS} off
+  RewriteRule ^(.*)$ https://%{HTTP_HOST}/$1 [R=301,L]
+</IfModule>
+
+# ==========================================================================
+# OPTIONAL — but STRONGLY recommended: a real server-side password BEFORE the
+# page loads at all. This is the one gate that stops visitors/bots before any
+# byte of the console ships.
+#
+# Easiest (no file editing): Hostinger hPanel -> Advanced ->
+#   "Password Protect Directories" -> protect the robinfun.tech root -> set a
+#   username + password. Done.
+#
+# Or do it here: create a password file with `htpasswd -c <path> admin`
+# (ask Hostinger support for your account's absolute home path) and uncomment:
+# AuthType Basic
+# AuthName "Robinfun Admin"
+# AuthUserFile /home/uXXXXXXXXX/.htpasswd_admin
+# Require valid-user
+# ==========================================================================

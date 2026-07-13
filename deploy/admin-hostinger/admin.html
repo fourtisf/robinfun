@@ -187,7 +187,7 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
 </div>
 
 <div class="top"><div class="wrap">
-  <a class="brand" href="/"><span class="dot"></span>Robinfun</a>
+  <a class="brand" href="https://robinfun.io/"><span class="dot"></span>Robinfun</a>
   <span class="badge adm">Admin</span>
   <div class="spacer"></div>
   <div class="net" id="netStat"><span class="led"></span><span id="netTxt">Not connected</span></div>
@@ -352,7 +352,7 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
   <div class="footer">
     Robinfun Admin · Robinhood Chain (4663)<br>
     Factory <span class="mono" id="f-addr">—</span> · FeeRouter <span class="mono" id="r-addr">—</span><br>
-    <a href="/">← Back to the app</a>
+    <a href="https://robinfun.io/">← Back to the app</a>
   </div>
 </div>
 
@@ -386,7 +386,10 @@ const CHAIN = {
   blockExplorerUrls:['https://robinhoodchain.blockscout.com'],
 };
 const EXPLORER = 'https://robinhoodchain.blockscout.com';
-const APP = '/';   // main app (for profile deep-links)
+/* Public app origin — the admin console can live on its OWN domain
+   (e.g. robinfun.tech), so profile/back links must point at the real app,
+   not at the admin domain. Change this if the public app moves. */
+const APP = 'https://robinfun.io/';   // main app (for profile deep-links)
 const FACTORY_ADDR = '0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2';
 const FEEROUTER_ADDR = '0x630216d06a54581e04c452892f69137e75ea45da';
 const DEX_ROUTER_ADDR = '0x89e5db8b5aa49aa85ac63f691524311aeb649eba';
