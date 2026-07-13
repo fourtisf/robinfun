@@ -338,13 +338,25 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
   </div>
 
   <div class="card">
-    <h2>💠 Move revenue</h2>
-    <div class="desc"><b>Flush</b> pushes pending protocol revenue to the staking vault (or the treasury, pre-staking). <b>Sweep</b> collects any stray ETH that arrived outside the accounted flows to the treasury — it can never touch creator balances or pending protocol revenue. Both are safe to run anytime. <code>flushProtocol()</code> · <code>sweepUnaccounted()</code></div>
+    <h2>💰 Claim launchpad revenue</h2>
+    <div class="desc">All protocol fees — deploy fees, the 1% curve fee, and the 10% protocol share of creator levies — accrue as <b>pending revenue</b>. <b>Claim</b> sends it to your treasury (or, once set, the staking vault). <b>Sweep</b> rescues any stray ETH to the treasury and can never touch creator balances or pending revenue. Both are safe anytime. <code>flushProtocol()</code> · <code>sweepUnaccounted()</code></div>
+    <div class="cur">Pending now: <b id="c-pending">—</b> · destination: <b id="c-sink">—</b></div>
     <div class="row">
-      <button class="btn primary" id="flushBtn" onclick="doFlush()">Flush protocol revenue</button>
+      <button class="btn primary" id="flushBtn" onclick="doFlush()">Claim revenue → treasury</button>
       <button class="btn" id="sweepBtn" onclick="doSweep()">Sweep unaccounted ETH</button>
     </div>
-    <div class="hint">Flush needs at least <b>0.001 ETH</b> pending (dust-flush guard).</div>
+    <div class="hint">Needs at least <b>0.001 ETH</b> pending (dust guard). Destination = the treasury set in the card above.</div>
+  </div>
+
+  <div class="card">
+    <h2>📊 Fee model <span class="pill off">reference</span></h2>
+    <div class="desc">How the launchpad earns — and what you can change. The split percentages are fixed in the contract as a fair-launch guarantee; only the deploy fee is tunable.</div>
+    <div class="cur">
+      <div class="kv"><span class="kk">Deploy fee</span><span class="kvv"><b id="fm-deploy">—</b> per launch → 100% launchpad · <span class="gold">settable</span></span></div>
+      <div class="kv"><span class="kk">Curve trade fee</span><span class="kvv">1% of every bonding-curve trade → 100% launchpad · fixed</span></div>
+      <div class="kv"><span class="kk">Creator levy</span><span class="kvv">up to 10% buy/sell (creator sets per token) → 90% creator / 10% launchpad · fixed split</span></div>
+      <div class="kv"><span class="kk">Graduation</span><span class="kvv">100% of LP burned · no protocol cut · fixed</span></div>
+    </div>
   </div>
 
   <!-- ============ ADVANCED ============ -->
@@ -694,6 +706,15 @@ async function refreshAll(){
   setT('c-treas', addrOrNone(treas)); setT('c-vault', addrOrNone(vault));
   setT('c-harv', harv===undefined ? '—' : (harv===ADDR0?'not set (harvest is permissionless)':harv));
   setT('c-router', addrOrNone(router));
+
+  // claim-revenue card + fee model
+  const sinkSet = (vault!==undefined && vault!==ADDR0);
+  const sinkName = sinkSet ? 'staking vault' : 'treasury';
+  const sinkAddr = sinkSet ? vault : treas;
+  setT('c-pending', fmtEth(ppend) + (ppend!==undefined ? (' · '+fmtUsd(usdOf(ppend))) : ''));
+  setT('c-sink', (sinkAddr&&sinkAddr!==ADDR0) ? (sinkName+' '+shortAddr(sinkAddr)) : (sinkName+' — NOT SET'));
+  setT('fm-deploy', fmtEth(fee));
+  const fb=document.getElementById('flushBtn'); if(fb) fb.textContent = (ppend!==undefined && ppend>0n) ? ('Claim '+fmtEth(ppend)+' → '+sinkName) : ('Claim revenue → '+sinkName);
 
   // dex
   setT('c-dexf', dexf===undefined?'—':dexf); setT('c-weth', weth===undefined?'—':weth);
