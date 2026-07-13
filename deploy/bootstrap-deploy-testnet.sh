@@ -5,10 +5,11 @@
 # deployment (protocol + a functional Uniswap-v2 DEX + WETH).
 #
 # This deploys the AUDIT-FIXED build (internal audit 2026-07-13: 7 findings fixed,
-# 155/155 tests) with the BETA SAFETY CAP: each token's curve holds at most
-# GRADUATION_ETH (default 0.05 ETH) before graduating and burning 100% of the LP,
-# so the at-risk funds per token are bounded. Raise the cap as confidence grows:
-#   GRADUATION_ETH=100000000000000000 VIRTUAL_ETH=... ./bootstrap-deploy-testnet.sh
+# 158/158 tests) with a PRIVATE BETA + SAFETY CAP: only allowlisted wallets can
+# create/trade, and each token's curve holds at most GRADUATION_ETH (default
+# 0.001 ETH ≈ $1-2) before graduating and burning 100% of the LP, so the at-risk
+# funds per token are tiny. Raise the cap as confidence grows:
+#   GRADUATION_ETH=10000000000000000 VIRTUAL_ETH=... ./bootstrap-deploy-testnet.sh
 #
 # Re-run this to redeploy after the audit fixes; the current live factory
 # (0x1B57...) is the PRE-audit build and must be replaced.

@@ -150,8 +150,8 @@ contract AuditFixesTest is BaseSetup {
     ///      blast radius of any residual bug during the mainnet beta.
     function test_BetaCap_curveNeverHoldsMoreThanCap() public {
         vm.deal(address(this), 1 ether);
-        uint128 vEth = uint128(uint256(1.122 ether) / 52); // same shape, 1/52 scale
-        uint128 gradEth = 0.05 ether;
+        uint128 vEth = uint128(uint256(1.122 ether) / 2600); // same shape, 1/2600 scale
+        uint128 gradEth = 0.001 ether; // ~$1-2 beta cap
 
         FeeRouter fr = new FeeRouter(address(this));
         RobinfunFactory betaFactory = new RobinfunFactory(
@@ -160,26 +160,26 @@ contract AuditFixesTest is BaseSetup {
             address(dexFactory),
             address(weth),
             IBondingCurve.CurveParams(vEth, 1_080_000_000e18, gradEth),
-            0.001 ether
+            0.0002 ether
         );
         fr.setFactory(address(betaFactory));
         fr.setDexRouter(address(dexRouter));
         fr.setTreasury(treasury);
 
-        (, address c) = betaFactory.createToken{value: 0.001 ether}(_params());
+        (, address c) = betaFactory.createToken{value: 0.0002 ether}(_params());
         BondingCurve curve = BondingCurve(payable(c));
         (, uint256 target) = curve.graduationProgress();
-        assertEq(target, gradEth, "per-token cap = 0.05 ETH");
+        assertEq(target, gradEth, "per-token cap = 0.001 ETH");
 
         // A whale tries to sink 100 ETH: the buy is capped to the graduation
-        // target and the surplus refunded — the curve never holds >0.05 ETH.
+        // target and the surplus refunded — the curve never holds >0.001 ETH.
         vm.deal(alice, 100 ether);
         uint256 before = alice.balance;
         vm.prank(alice);
         curve.buy{value: 100 ether}(0, block.timestamp);
 
-        assertTrue(curve.graduated(), "beta token graduates at the cap");
-        assertLt(before - alice.balance, 0.07 ether, "whale buy capped + refunded to ~the 0.05 cap");
+        assertTrue(curve.graduated(), "beta token graduates at the tiny cap");
+        assertLt(before - alice.balance, 0.01 ether, "whale buy capped + refunded to ~the 0.001 cap");
         assertEq(address(curve).balance, 0, "no stranded ETH");
     }
 

@@ -28,19 +28,19 @@ contract DeployTestnet is Script {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(pk);
         address treasury = vm.envOr("TREASURY", deployer);
-        uint256 deployFee = vm.envOr("DEPLOY_FEE", uint256(0.001 ether));
+        uint256 deployFee = vm.envOr("DEPLOY_FEE", uint256(0.0002 ether));
 
         // BETA SAFETY CAP. A curve provably never holds more than `graduationEth`
         // real ETH (invariant `invariant_reserveNeverExceedsGraduation`) before
         // it graduates to Uniswap and burns 100% of the LP — so `graduationEth`
-        // IS the per-token at-risk cap. Default 0.05 ETH bounds the blast radius
-        // of any residual bug during the mainnet beta; raise it via env as
+        // IS the per-token at-risk cap. Default 0.001 ETH (~$1-2) keeps each beta
+        // test's slippage loss to well under a dollar; raise it via env as
         // confidence grows. `virtualEth` is the full-size 1.122 ETH scaled by the
-        // same 1/52 as graduation (2.6 → 0.05), so the curve shape — price
+        // same 1/2600 as graduation (2.6 → 0.001), so the curve shape — price
         // multiple and % of supply sold — is IDENTICAL to production, just
-        // denominated 52× smaller.
-        uint256 graduationEth = vm.envOr("GRADUATION_ETH", uint256(0.05 ether));
-        uint256 virtualEth = vm.envOr("VIRTUAL_ETH", uint256(1.122 ether) / 52);
+        // denominated 2600× smaller.
+        uint256 graduationEth = vm.envOr("GRADUATION_ETH", uint256(0.001 ether));
+        uint256 virtualEth = vm.envOr("VIRTUAL_ETH", uint256(1.122 ether) / 2600);
         uint256 virtualToken = vm.envOr("VIRTUAL_TOKEN", uint256(1_080_000_000e18));
         IBondingCurve.CurveParams memory params = IBondingCurve.CurveParams({
             virtualEth: uint128(virtualEth),
