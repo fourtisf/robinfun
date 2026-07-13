@@ -2693,8 +2693,17 @@ async function loadDexTrades(t){
       const eth = buy? ethIn : ethOut;
       const tokens = buy? tokOut : tokIn;
       if(!(eth>0) || !(tokens>0)) continue;
-      out.push({block:e.blockNumber, li:e.index, buy, eth, tokens, levyEth:0, wallet:shortAddr(a.to), full:a.to.toLowerCase(), priceEth:(eth/tokens), dex:true});
+      // Swap.to is the ROUTER on a token→ETH sell (it unwraps WETH), so it's
+      // not the trader. Default to `to` (correct for buys); overwritten with the
+      // tx sender below so sells attribute to the real wallet.
+      out.push({block:e.blockNumber, li:e.index, buy, eth, tokens, levyEth:0, wallet:shortAddr(a.to), full:a.to.toLowerCase(), txh:e.transactionHash, priceEth:(eth/tokens), dex:true});
     }
+    // Resolve the real trader (tx.from) for each swap — one getTransaction per
+    // unique tx. Cheap for a beta; makes sells show the seller, not the router.
+    const txs = [...new Set(out.map(o=>o.txh))];
+    const froms = {};
+    await Promise.all(txs.map(async h=>{ try{ const tx=await ro.getTransaction(h); if(tx&&tx.from) froms[h]=tx.from.toLowerCase(); }catch(_){} }));
+    for(const o of out){ const f=froms[o.txh]; if(f){ o.full=f; o.wallet=shortAddr(f); } }
     return out;
   }catch(e){ console.error('loadDexTrades', e); return []; }
 }
