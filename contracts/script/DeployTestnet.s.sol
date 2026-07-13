@@ -22,13 +22,13 @@ import {MockUniswapV2Factory, MockUniswapV2Router} from "../test/mocks/MockUnisw
 ///   PRIVATE_KEY   deployer key (a FRESH throwaway wallet funded from the faucet)
 /// Optional env:
 ///   TREASURY      wallet that receives protocol fees (default: the deployer)
-///   DEPLOY_FEE    per-launch fee in wei (default: 0.0005 ETH)
+///   DEPLOY_FEE    per-launch fee in wei (default: 0.001 ETH)
 contract DeployTestnet is Script {
     function run() external {
         uint256 pk = vm.envUint("PRIVATE_KEY");
         address deployer = vm.addr(pk);
         address treasury = vm.envOr("TREASURY", deployer);
-        uint256 deployFee = vm.envOr("DEPLOY_FEE", uint256(0.0002 ether));
+        uint256 deployFee = vm.envOr("DEPLOY_FEE", uint256(0.001 ether));
 
         // BETA SAFETY CAP. A curve provably never holds more than `graduationEth`
         // real ETH (invariant `invariant_reserveNeverExceedsGraduation`) before

@@ -1025,6 +1025,13 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             </div>
             <label class="switch"><input type="checkbox" id="c-renounce"><span class="track"></span></label>
           </div>
+          <div class="switch-row">
+            <div>
+              <div class="sw-t">Vanity address — ends in <span class="mono" style="color:var(--gold)">…feed</span></div>
+              <div class="sw-d">Robinfun's signature. Your browser grinds a salt (a few seconds) so the token's contract address ends in <span class="mono">feed</span> — no extra gas, no extra fee.</div>
+            </div>
+            <label class="switch"><input type="checkbox" id="c-vanity"><span class="track"></span></label>
+          </div>
         </div>
 
         <div style="height:14px"></div>
@@ -1452,8 +1459,8 @@ const FACTORY_ADDR = '0xD975d8F2d5447312810347C9c2D75548738D4E11';   // beta (au
 /* FeeRouter — authoritative source for a creator's real, on-chain earnings. */
 const FEEROUTER_ADDR = '0x87b452A906B4904D2Aa2A38A500961131F975553';
 const FEEROUTER_ABI = [ 'function creatorEarnedLifetime(address) view returns (uint256)' ];
-let DEPLOY_FEE_WEI = 200000000000000n;     // 0.0002 ETH — refreshed live from the chain
-let deployFeeEth = 0.0002;
+let DEPLOY_FEE_WEI = 1000000000000000n;     // 0.001 ETH — refreshed live from the chain
+let deployFeeEth = 0.001;
 const MIN_DEV_BUY = 0.01;                  // dev buy is mandatory — creator must hold a launch position
 const EXPLORER = 'https://explorer.testnet.chain.robinhood.com';
 const FACTORY_ABI = [
@@ -1462,6 +1469,8 @@ const FACTORY_ABI = [
   'function owner() view returns (address)',
   'function setDeployFee(uint256 fee)',
   'function curveOf(address token) view returns (address)',
+  'function tokenImplementation() view returns (address)',
+  'function predictTokenAddress(address creator, bytes32 vanitySalt) view returns (address)',
   'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
 ];
 const CURVE_ABI = [
@@ -1489,7 +1498,27 @@ const ERC20_ABI = [
 const chainReady = () => !!(CHAIN && FACTORY_ADDR && typeof ethers !== 'undefined');
 const realToken = (t) => !!(chainReady() && t && t.ca && /^0x[0-9a-fA-F]{40}$/.test(t.ca));
 let _ro = null;
-const roProvider = () => (_ro ||= new ethers.JsonRpcProvider(CHAIN.rpcUrls[0]));
+/* Read-only RPC provider.
+   batchMaxCount:1 — send ONE eth_call per HTTP request. ethers v6 otherwise
+   coalesces same-tick calls (e.g. the 6 reads in loadCurveState via
+   Promise.all) into a single JSON-RPC *array*; the Robinhood testnet RPC
+   rejects batched arrays, which made every multi-read fail silently and left
+   the page showing only the simulation. Single reads (a lone quote) worked,
+   which is why trading succeeded but the live stats/chart never populated.
+   staticNetwork — don't re-probe eth_chainId on every call. */
+const roProvider = () => {
+  if(_ro) return _ro;
+  // ethers v6: 2nd arg is a Networkish (Network|number|string), NOT a plain
+  // object. Build a real Network when available so there's zero chain-id
+  // detection round-trip; fall back to plain no-batch if the build lacks it.
+  try{
+    const net = new ethers.Network('robinhood-testnet', 46630);
+    _ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0], net, { batchMaxCount: 1, staticNetwork: net });
+  }catch(_){
+    _ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0], undefined, { batchMaxCount: 1, staticNetwork: true });
+  }
+  return _ro;
+};
 
 /* ---- Multi-wallet discovery (EIP-6963) ----
    Every installed injected wallet (MetaMask, Rabby, Coinbase, Brave, OKX, …)
@@ -2292,20 +2321,25 @@ async function loadCurveState(t){
       t.curveAddr = c;
     }
     const curve = new ethers.Contract(t.curveAddr, CURVE_ABI, ro);
-    const [pWei, mWei, prog, grad, vE, vT] = await Promise.all([
-      curve.currentPrice(), curve.marketCapEth(), curve.graduationProgress(),
-      curve.graduated(), curve.virtualEthReserve(), curve.virtualTokenReserve()
+    // Only 4 reads, and price/mcap are DERIVED from the reserves (price =
+    // vEth/vTok, mcap = price × supply) rather than calling currentPrice()/
+    // marketCapEth() — fewer round-trips and no dependence on those two views.
+    const [vE, vT, grad, prog] = await Promise.all([
+      curve.virtualEthReserve(), curve.virtualTokenReserve(),
+      curve.graduated(), curve.graduationProgress()
     ]);
-    t.priceEth = Number(ethers.formatEther(pWei));
+    const vEth = Number(ethers.formatEther(vE));
+    const vTok = Number(ethers.formatUnits(vT, 18));
+    t.vEth = vEth; t.vTok = vTok;
+    t.priceEth = vTok>0 ? vEth/vTok : 0;
     t.price = t.priceEth * ETH_USD;
-    t.mcap = Number(ethers.formatEther(mWei)) * ETH_USD;
+    t.mcap = t.priceEth * SUPPLY * ETH_USD;
     t.reserveEth = Number(ethers.formatEther(prog.collected));
     t.gradTargetEth = Number(ethers.formatEther(prog.target));
     t.graduated = grad;
-    t.vEth = Number(ethers.formatEther(vE));
-    t.vTok = Number(ethers.formatUnits(vT, 18));
+    t._readErr = null;
     return true;
-  }catch(e){ console.error('loadCurveState', e); return false; }
+  }catch(e){ console.error('loadCurveState', e); t._readErr = (e&&(e.shortMessage||e.message))||'chain read failed'; return false; }
 }
 async function loadBalances(t){
   try{
@@ -2328,11 +2362,21 @@ async function loadCurveTrades(t){
     const ro = roProvider();
     const curve = new ethers.Contract(t.curveAddr, CURVE_ABI, ro);
     const head = await ro.getBlockNumber();
-    const from = Math.max(0, head - 200000);
-    const [buys, sells] = await Promise.all([
-      curve.queryFilter(curve.filters.Buy(), from, head),
-      curve.queryFilter(curve.filters.Sell(), from, head),
-    ]);
+    // Some RPCs cap eth_getLogs to a few thousand blocks and reject a wide
+    // range outright (even when it would return nothing). Try widest→narrow;
+    // a freshly launched token's events are always in the most recent blocks.
+    let buys=[], sells=[], got=false;
+    for(const span of [200000, 45000, 9000, 2000, 500]){
+      try{
+        const from = Math.max(0, head - span);
+        [buys, sells] = await Promise.all([
+          curve.queryFilter(curve.filters.Buy(), from, head),
+          curve.queryFilter(curve.filters.Sell(), from, head),
+        ]);
+        got=true; break;
+      }catch(_){ /* range rejected — try a smaller window */ }
+    }
+    if(!got){ console.error('loadCurveTrades: all getLogs ranges rejected'); return; }
     const px = a => Number(ethers.formatEther(a.virtualEthReserve)) / Number(ethers.formatUnits(a.virtualTokenReserve, 18));
     const evs = [];
     for(const e of buys){ const a=e.args; evs.push({block:e.blockNumber, li:e.index, buy:true,
@@ -2402,7 +2446,17 @@ function buildCandlesFromTrades(t){
 }
 async function refreshReal(t, withTrades){
   const ok = await loadCurveState(t);
-  if(!ok || currentTokenId!==t.id) return;
+  if(currentTokenId!==t.id) return;
+  if(!ok){
+    // Chain read failed — never blank the page. Show an honest status, draw
+    // whatever chart we can, and let the 12s poll retry.
+    if(!t._loaded){
+      const st = document.getElementById('tk-status');
+      if(st) st.innerHTML = '<span class="gold">◈ reading from chain…</span>';
+    }
+    if(!t.candles){ buildCandlesFromTrades(t); drawChart(t); }
+    return;
+  }
   document.getElementById('tk-price').textContent = fmtPrice(t.price);
   document.getElementById('ts-mcap').textContent = fmtUsd(t.mcap);
   document.getElementById('tk-status').innerHTML = t.graduated
@@ -2973,10 +3027,54 @@ async function deploy(){
     sellTax: parseFloat(document.getElementById('r-sell').value),
     decay: document.getElementById('c-decay').checked,
     renounced: document.getElementById('c-renounce').checked,
+    vanity: !!(document.getElementById('c-vanity') && document.getElementById('c-vanity').checked),
     devBuy,
   };
   if(chainReady()) return realLaunch(meta);
   return simulateLaunch(meta);
+}
+
+/* ---- vanity address miner (…feed) ----
+   The factory deploys each token as an EIP-1167 minimal-proxy clone via CREATE2
+   at predictTokenAddress(creator, vanitySalt), where
+     salt = keccak256(abi.encode(creator, vanitySalt))
+     addr = CREATE2(factory, salt, keccak256(EIP-1167 initcode for tokenImpl)).
+   We grind vanitySalt in the browser until the resulting address ends in the
+   chosen hex suffix, then pass that salt to createToken. The salt is bound to
+   `creator` on-chain, so one seen in the mempool can't be front-run. */
+let _tokenImpl = null;
+async function tokenImpl(){
+  if(_tokenImpl) return _tokenImpl;
+  try{ _tokenImpl = await new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, roProvider()).tokenImplementation(); }
+  catch(_){ _tokenImpl = '0xA9d5adbead994662c66E38Ce10F0c7281431a500'; }   // known testnet impl (fallback)
+  return _tokenImpl;
+}
+async function mineVanity(creator, suffix, onProgress){
+  const impl = await tokenImpl();
+  // Canonical EIP-1167 minimal-proxy init code (55 bytes) for `impl`.
+  const initCode = '0x3d602d80600a3d3981f3363d3d373d3d3d363d73' + impl.slice(2).toLowerCase() + '5af43d82803e903d91602b57fd5bf3';
+  const initHash = ethers.keccak256(initCode);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const want = (''+suffix).toLowerCase();
+  const t0 = Date.now();
+  // Start at 1, NOT 0: vanitySalt == 0 tells the factory "no vanity" and it
+  // deploys via a plain (non-deterministic) clone, so a mined 0 salt would NOT
+  // land at the predicted address.
+  let tries = 1;
+  const HARD_CAP = 8_000_000;   // absolute upper bound
+  const TIME_CAP = 30_000;      // ms — bail so a launch never hangs
+  while(tries < HARD_CAP){
+    for(let k=0;k<3000 && tries<HARD_CAP;k++,tries++){
+      const vanitySalt = ethers.zeroPadValue(ethers.toBeHex(BigInt(tries)), 32);
+      const salt = ethers.keccak256(coder.encode(['address','bytes32'], [creator, vanitySalt]));
+      const addr = ethers.getCreate2Address(FACTORY_ADDR, salt, initHash);
+      if(addr.toLowerCase().endsWith(want)) return { vanitySalt, addr, tries };
+    }
+    if(onProgress) onProgress(tries);
+    await new Promise(r=>setTimeout(r,0));       // yield so the tab stays responsive
+    if(Date.now()-t0 > TIME_CAP) return null;
+  }
+  return null;
 }
 
 /* --- real on-chain launch: signs createToken() with the user's own wallet --- */
@@ -3003,6 +3101,16 @@ async function realLaunch(meta){
       // what we just read, so a fee bump can't silently eat the dev buy.
       maxDeployFee: DEPLOY_FEE_WEI * 2n,
     };
+    // Vanity address: grind a salt in the browser so the token CA ends in
+    // "feed", then hand that salt to createToken (bound to the caller on-chain).
+    if(meta.vanity){
+      busy(true,'Mining …feed address…');
+      const creator = await signer.getAddress();
+      const mined = await mineVanity(creator, 'feed', n=>busy(true,'Mining …feed ('+n.toLocaleString()+')'));
+      if(mined){ params.vanitySalt = mined.vanitySalt; toast('Vanity address found — <b>'+shortAddr(mined.addr)+'</b>','gold'); }
+      else { toast('Vanity mining timed out — launching with a standard address','seal'); }
+      busy(true,'Confirm in wallet…');
+    }
     let value = DEPLOY_FEE_WEI;
     if(meta.devBuy>0) value += ethers.parseEther(String(meta.devBuy));
 
