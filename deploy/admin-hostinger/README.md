@@ -9,6 +9,17 @@ The admin console is a single self-contained static page. It talks to the chain
 directly (read via RPC, write via your wallet) — **no backend, no database, no
 private key on the page.**
 
+> **Hosting on your VPS instead of Hostinger?** Point `robinfun.tech`'s DNS at
+> your VPS IP, then run the one-command installer — it adds a *separate* nginx
+> server block for `robinfun.tech` (robinfun.io is untouched), publishes these
+> same files, sets the security headers + optional password, and gets HTTPS:
+> ```
+> curl -fsSL https://raw.githubusercontent.com/fourtisf/robinfun/claude/new-session-v8c9tt/deploy/bootstrap-admin.sh -o /root/bootstrap-admin.sh
+> chmod +x /root/bootstrap-admin.sh
+> BASIC_AUTH_USER=admin BASIC_AUTH_PASS='choose-a-strong-pass' /root/bootstrap-admin.sh
+> ```
+> The rest of this file is the **manual Hostinger** path.
+
 ---
 
 ## What to upload
