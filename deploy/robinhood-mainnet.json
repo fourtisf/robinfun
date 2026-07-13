@@ -1,0 +1,25 @@
+{
+  "network": "Robinhood Chain (mainnet)",
+  "chainId": 4663,
+  "chainIdHex": "0x1237",
+  "rpc": "https://rpc.mainnet.chain.robinhood.com",
+  "explorer": "https://robinhoodchain.blockscout.com",
+  "deployedAt": "2026-07-13",
+  "build": "mainnet private beta (own DEX + betaMode allowlist + 0.001 ETH cap)",
+  "deployFeeWei": "1000000000000000",
+  "graduationEthWei": "1000000000000000",
+  "betaMode": true,
+  "allowlisted": ["0xA49dc277A65CCb35D94522cecDa19CA340AE991C"],
+  "admin": "0xA49dc277A65CCb35D94522cecDa19CA340AE991C",
+  "contracts": {
+    "factory": "0xc8b95E3212d1876a2Ce1CD2876cAD23592cb0819",
+    "feeRouter": "0x2894A7E9728dcA83DD60cEdD29Bce8054b96a4cF",
+    "weth": "0xabbD2fc6065f0AC5929500f5326db0c37D186bE1",
+    "dexFactory": "0xe84dedbff1609634bfcd5af0b3E757F8B539B6dc",
+    "dexRouter": "0xAAF3fb3C1c8aa48655fB81CEF0c62e1b2E80240f",
+    "tokenImpl": "0xc8858C1AdE7959126f06F28D0c92fD890F9E2AFE",
+    "curveImpl": "0x31A53259CDc35738A9CB391E67650dc2c611C617",
+    "treasury": "0xA49dc277A65CCb35D94522cecDa19CA340AE991C"
+  },
+  "notes": "MAINNET private beta. betaMode ON — only the allowlisted wallet creates/trades. Each curve holds <=0.001 ETH before graduating (LP burned). Own Uniswap-v2 DEX + WETH deployed alongside. Admin/owner/treasury = the deployer 0xA49dc277 (NOTE: this key was exposed in plaintext during setup — rotate ownership to a fresh/multisig wallet before scaling or going public). Add wallets: factory.setBetaAllowed([addr], true). Go public: factory.setBetaMode(false)."
+}

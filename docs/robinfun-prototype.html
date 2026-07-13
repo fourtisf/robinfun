@@ -785,7 +785,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 <!-- ======================= TESTNET NOTICE ======================= -->
 <div class="testnet-bar" id="testnetBar">
   <span class="tn-dot"></span>
-  <span class="tn-txt"><b>TESTNET</b> — Robinfun runs on Robinhood Chain Testnet. Tokens &amp; ETH here have <b>no real value</b>; the contracts are <b>unaudited</b>. Don't send real funds.</span>
+  <span class="tn-txt"><b>PRIVATE BETA · MAINNET</b> — Robinfun runs on Robinhood Chain with <b>real ETH</b>. Only <b>allowlisted</b> wallets can create/trade, and each token is <b>capped at 0.001 ETH</b>. Contracts are <b>unaudited</b> — trade only what you can afford to lose.</span>
   <button class="tn-x" onclick="dismissTestnet()" aria-label="Dismiss">✕</button>
 </div>
 
@@ -1445,24 +1445,25 @@ let LAUNCH_COUNT = 0;
 /* ---------------- wallet ---------------- */
 let wallet = null;
 let MY_ADDR = '0x7A3f19bC…C41d';   // display fallback until a real wallet connects
-/* Robinhood Chain testnet (Arbitrum Orbit L2, chainId 46630). Connect will
-   add/switch the wallet to this network automatically. */
+/* Robinhood Chain MAINNET (Arbitrum Orbit L2, chainId 4663). Connect will
+   add/switch the wallet to this network automatically. Private beta: only the
+   allowlisted wallet can create/trade; each curve is capped at 0.001 ETH. */
 const CHAIN = {
-  chainId: '0xb626',   // 46630
-  chainName: 'Robinhood Chain Testnet',
+  chainId: '0x1237',   // 4663
+  chainName: 'Robinhood Chain',
   nativeCurrency: { name:'Ether', symbol:'ETH', decimals:18 },
-  rpcUrls: ['https://rpc.testnet.chain.robinhood.com'],
-  blockExplorerUrls: ['https://explorer.testnet.chain.robinhood.com'],
+  rpcUrls: ['https://rpc.mainnet.chain.robinhood.com'],
+  blockExplorerUrls: ['https://robinhoodchain.blockscout.com'],
 };
-/* Deployed RobinfunFactory (testnet). Launch calls createToken() here. */
-const FACTORY_ADDR = '0xD975d8F2d5447312810347C9c2D75548738D4E11';   // beta (audit-fixed, capped 0.001, allowlist)
+/* Deployed RobinfunFactory (MAINNET beta). Launch calls createToken() here. */
+const FACTORY_ADDR = '0xc8b95E3212d1876a2Ce1CD2876cAD23592cb0819';   // mainnet beta (capped 0.001, allowlist)
 /* FeeRouter — authoritative source for a creator's real, on-chain earnings. */
-const FEEROUTER_ADDR = '0x87b452A906B4904D2Aa2A38A500961131F975553';
+const FEEROUTER_ADDR = '0x2894A7E9728dcA83DD60cEdD29Bce8054b96a4cF';
 const FEEROUTER_ABI = [ 'function creatorEarnedLifetime(address) view returns (uint256)' ];
 let DEPLOY_FEE_WEI = 1000000000000000n;     // 0.001 ETH — refreshed live from the chain
 let deployFeeEth = 0.001;
 const MIN_DEV_BUY = 0.01;                  // dev buy is mandatory — creator must hold a launch position
-const EXPLORER = 'https://explorer.testnet.chain.robinhood.com';
+const EXPLORER = 'https://robinhoodchain.blockscout.com';
 const FACTORY_ABI = [
   'function createToken((string name,string symbol,string metadataURI,uint16 buyLevyBps,uint16 sellLevyBps,bool decayAtGraduation,bool renounceRateControl,uint256 devBuyMinTokensOut,bytes32 vanitySalt,uint256 maxDeployFee)) payable returns (address token, address curve)',
   'function deployFee() view returns (uint256)',
@@ -1512,7 +1513,7 @@ const roProvider = () => {
   // object. Build a real Network when available so there's zero chain-id
   // detection round-trip; fall back to plain no-batch if the build lacks it.
   try{
-    const net = new ethers.Network('robinhood-testnet', 46630);
+    const net = new ethers.Network('robinhood-mainnet', 4663);
     _ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0], net, { batchMaxCount: 1, staticNetwork: net });
   }catch(_){
     _ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0], undefined, { batchMaxCount: 1, staticNetwork: true });
@@ -1846,9 +1847,10 @@ const PATH_TO_PAGE = {'':'home', 'create':'create', 'staking':'stake', 'whitepap
 let pendingTokenId = null;   // deep-linked /token/<id> awaiting the async server load
 let PROFILE_ADDR = null;     // address shown on the profile page (null → own wallet)
 function tokenById(id){ return TOKENS.find(t=>t.id===id); }
-/* Testnet notice — dismissible, remembered per browser. */
-function dismissTestnet(){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); try{ localStorage.setItem('rf_testnet_dismissed','1'); }catch(e){} }
-(function(){ try{ if(localStorage.getItem('rf_testnet_dismissed')==='1'){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); } }catch(e){} })();
+/* Mainnet private-beta notice — dismissible, remembered per browser. Key is
+   bumped from the old testnet one so everyone sees the new real-ETH warning. */
+function dismissTestnet(){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); try{ localStorage.setItem('rf_beta_mainnet_dismissed','1'); }catch(e){} }
+(function(){ try{ if(localStorage.getItem('rf_beta_mainnet_dismissed')==='1'){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); } }catch(e){} })();
 function setRoute(path, title){
   if(title) document.title = title;
   if(location.protocol === 'file:') return;   // local file preview — History API unavailable
@@ -2493,7 +2495,7 @@ async function doTradeReal(t){
   try{
     if(!activeProvider){ toast('Connect a wallet first','seal'); connectWallet(); return; }
     await ensureChain(activeProvider);
-    if((await activeProvider.request({method:'eth_chainId'}))!==CHAIN.chainId){ toast('Switch to Robinhood Chain Testnet','seal'); return; }
+    if((await activeProvider.request({method:'eth_chainId'}))!==CHAIN.chainId){ toast('Switch to Robinhood Chain','seal'); return; }
     const amt = parseFloat(document.getElementById('amt').value)||0;
     if(!(amt>0)){ toast('Enter an amount','seal'); return; }
     const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
@@ -2640,7 +2642,7 @@ function renderRealThread(t){
   const box = document.getElementById('threadBody');
   if(!box) return;
   box.innerHTML = '<div style="padding:20px 16px;color:var(--cream-mute);font-size:13px;line-height:1.65">'+
-    'Community chat isn\'t wired for this testnet build yet. Everything above — price, trades, volume, holders and creator fees — is read live from the bonding curve on-chain.'+
+    'Community chat isn\'t wired for this beta build yet. Everything above — price, trades, volume, holders and creator fees — is read live from the bonding curve on-chain.'+
     '</div>';
 }
 const SHILL = ['first. fee me daddy','creator based, tax fair, sending it','sold my '+'HOODRAT'+' for this ngl','the 3/3 is honest work','dev doxxed on X, fee renounced, what more do you want','graduation speedrun when','bought the dip, dip kept dipping','this the one'];
@@ -3046,7 +3048,7 @@ let _tokenImpl = null;
 async function tokenImpl(){
   if(_tokenImpl) return _tokenImpl;
   try{ _tokenImpl = await new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, roProvider()).tokenImplementation(); }
-  catch(_){ _tokenImpl = '0xA9d5adbead994662c66E38Ce10F0c7281431a500'; }   // known testnet impl (fallback)
+  catch(_){ _tokenImpl = '0xc8858C1AdE7959126f06F28D0c92fD890F9E2AFE'; }   // known mainnet impl (fallback)
   return _tokenImpl;
 }
 async function mineVanity(creator, suffix, onProgress){
@@ -3086,7 +3088,7 @@ async function realLaunch(meta){
     busy(true,'Switching network…');
     await ensureChain(activeProvider);
     if((await activeProvider.request({method:'eth_chainId'})) !== CHAIN.chainId){
-      toast('Switch your wallet to Robinhood Chain Testnet, then Deploy again','seal'); busy(false,'Deploy token'); return;
+      toast('Switch your wallet to Robinhood Chain, then Deploy again','seal'); busy(false,'Deploy token'); return;
     }
     busy(true,'Confirm in wallet…');
     const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
@@ -3172,7 +3174,7 @@ function showLaunchReceipt(meta, t, opts){
   const real = !!opts.ca;
   document.getElementById('m-title').textContent = meta.name+' is live';
   document.getElementById('m-sub').textContent = real
-    ? 'Deployed to Robinhood Chain Testnet' : 'Deployed to Robinhood Chain · block #'+(9_412_000+Math.floor(rnd(0,999))).toLocaleString();
+    ? 'Deployed to Robinhood Chain' : 'Deployed to Robinhood Chain · block #'+(9_412_000+Math.floor(rnd(0,999))).toLocaleString();
   const caLine = opts.ca
     ? `<div class="r-line"><span>Contract</span><b><a href="${EXPLORER}/address/${opts.ca}" target="_blank" rel="noopener noreferrer" style="color:var(--gilt-bright)">${opts.ca.slice(0,10)}…${opts.ca.slice(-6)} ↗</a></b></div>` : '';
   const txLine = opts.txHash
