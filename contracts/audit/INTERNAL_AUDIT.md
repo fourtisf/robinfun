@@ -169,6 +169,17 @@ truncates the inner factor before multiplying, short-changing the creator by a f
 
 ---
 
+## Static analysis (Slither)
+
+Slither (crytic) was run across all `src/` contracts. **No real vulnerability was reported.** Every result
+falls into a known false-positive / by-design class: `arbitrary-send-eth` (the seller receiving their own
+ETH + trusted FeeRouter calls, all `nonReentrant` + CEI), `divide-before-multiply` (the standard AMM
+`fee = %·gross` order, wei-level), `incorrect-equality` (`== 0` skip-guards), `uninitialized-local`
+(zero-defaulted accumulators), `unused-return` (`mint(DEAD)` LP amount intentionally discarded),
+`missing-zero-check` (owner-only setters where `address(0)` is an intentional sentinel). Notably Slither did
+**not** flag the M-1 griefing that the manual review caught — automated tools find known patterns, not novel
+logic/economic bugs, which is why they complement but never replace human review.
+
 ## Verdict & path to mainnet
 
 - **Positive:** the core value-conservation invariants hold (144 tests incl. fuzz/invariant pass), the
