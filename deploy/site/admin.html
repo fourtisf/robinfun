@@ -4,15 +4,23 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<!-- Content-Security-Policy (defence-in-depth). Real headers (frame-ancestors,
+     X-Frame-Options, Referrer-Policy) are set by nginx — those are ignored in
+     <meta>. Here we enforce the exfil-relevant directives so that even if some
+     attacker-controlled string slipped past escaping, it could not phone home
+     or pull external code: scripts only from this origin (ethers is now
+     self-hosted, not a CDN), and network calls only to the RPC + price APIs.
+     'unsafe-inline' is required because the markup uses inline on* handlers and
+     an inline <style>; it does NOT weaken connect-src / object-src / base-uri,
+     which are the directives that contain a compromise. -->
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src https://rpc.mainnet.chain.robinhood.com https://api.coingecko.com https://api.coinbase.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'">
 <title>Robinfun — Admin Console</title>
 <meta name="description" content="Owner-only control panel for the Robinfun launchpad on Robinhood Chain.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%230B0F0A%22%2F%3E%3Cpath%20fill%3D%22%23C6F23C%22%20d%3D%22M32%2012l16%209v18l-16%209-16-9V21z%22%20opacity%3D%22.9%22%2F%3E%3C%2Fsvg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
-<!-- ethers.js — every action here is a real on-chain owner transaction sent via
-     your connected wallet. No private keys ever touch this page. -->
-<script defer src="https://cdn.jsdelivr.net/npm/ethers@6.15.0/dist/ethers.umd.min.js"></script>
 <style>
 :root{
   --ink:#080B0A; --ink-2:#0B0F0C; --ledger:#0F140F; --ledger-2:#161C13;
@@ -129,15 +137,61 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
 .sec-label::after{content:"";flex:1;height:1px;background:var(--rule)}
 .footer{color:var(--cream-mute);font-size:12px;text-align:center;padding:34px 0 40px;line-height:1.7}
 .footer a{color:var(--cream-dim);text-decoration:underline}
+.gatelink{color:var(--gilt-bright);text-decoration:underline;cursor:pointer;font-weight:600}
+/* ---- lock overlay ---- */
+.lock{position:fixed;inset:0;z-index:100;background:var(--ink);display:flex;align-items:center;justify-content:center;padding:24px}
+.lock[hidden]{display:none}
+.lock-box{width:100%;max-width:420px;background:var(--ledger);border:1px solid var(--rule-2);border-radius:var(--r-lg);padding:26px 24px;box-shadow:var(--shadow-card)}
+.lock-brand{display:flex;align-items:center;gap:10px;font-family:var(--font-display);font-weight:700;font-size:17px;margin-bottom:18px}
+.lock-brand .dot{width:24px;height:24px;border-radius:7px;background:linear-gradient(135deg,#A6D62E,#C6F23C 55%,#E4FF7A);box-shadow:var(--glow)}
+.lock-box h3{font-family:var(--font-display);font-size:18px;font-weight:600;margin-bottom:8px}
+.lock-note{font-size:12.5px;line-height:1.6;color:var(--cream-dim);margin-bottom:16px;padding:10px 12px;background:var(--amber-dim);border:1px solid rgba(242,179,60,.28);border-radius:var(--r-sm)}
+.lock-box input{width:100%;background:var(--ink-2);border:1px solid var(--rule-2);border-radius:var(--r-sm);padding:11px 13px;font-size:14px;font-family:var(--font-mono);margin-bottom:10px}
+.lock-box input:focus{border-color:var(--gilt);outline:none}
+.lock-row{display:flex;gap:10px;flex-wrap:wrap;margin-top:4px}
+.lock-err{font-family:var(--font-mono);font-size:12px;color:var(--seal-bright);margin-top:10px;min-height:16px}
+.lock-sub{font-size:11px;color:var(--cream-mute);margin-top:14px;line-height:1.55}
 </style>
 </head>
 <body>
+
+<!-- ============ LOCK OVERLAY (convenience lock, see note) ============ -->
+<div id="lockScreen" class="lock" hidden>
+  <div class="lock-box">
+    <div class="lock-brand"><span class="dot"></span>Robinfun Admin</div>
+    <!-- first-run: set a passphrase, or skip -->
+    <div id="lockSetup" hidden>
+      <h3>Secure this console</h3>
+      <div class="lock-note"><b>Convenience lock — not encryption.</b> This page's source is public and this check runs in your browser. It stops someone glancing at your screen or opening this URL casually. It does <b>not</b> protect anything on-chain: every real action still needs your wallet to sign, and the contract's owner check is the actual guard.</div>
+      <input type="password" id="setPass" placeholder="Passphrase (a strong phrase, not a 4-digit PIN)" autocomplete="new-password">
+      <input type="password" id="setPass2" placeholder="Confirm passphrase" autocomplete="new-password">
+      <div class="lock-row">
+        <button class="btn primary" id="setPassBtn" onclick="doSetupLock()">Set lock &amp; enter</button>
+        <button class="btn" onclick="skipLock()">Skip</button>
+      </div>
+      <div class="lock-err" id="setErr"></div>
+      <div class="lock-sub">Prefer a server-enforced gate? Skip this and protect <code>/admin</code> with nginx HTTP Basic-Auth or an IP allow-list instead — that blocks visitors before the page even loads.</div>
+    </div>
+    <!-- returning: unlock -->
+    <div id="lockUnlock" hidden>
+      <h3>Console locked</h3>
+      <div class="lock-note">Enter your console passphrase to continue. All figures here are public on-chain — this lock only keeps casual eyes off the dashboard.</div>
+      <input type="password" id="unlockPass" placeholder="Passphrase" autocomplete="current-password" onkeydown="if(event.key==='Enter')doUnlock()">
+      <div class="lock-row">
+        <button class="btn primary" id="unlockBtn" onclick="doUnlock()">Unlock</button>
+        <button class="btn" onclick="forgotLock()">Forgot / reset</button>
+      </div>
+      <div class="lock-err" id="unlockErr"></div>
+    </div>
+  </div>
+</div>
 
 <div class="top"><div class="wrap">
   <a class="brand" href="/"><span class="dot"></span>Robinfun</a>
   <span class="badge adm">Admin</span>
   <div class="spacer"></div>
   <div class="net" id="netStat"><span class="led"></span><span id="netTxt">Not connected</span></div>
+  <button class="btn sm" id="lockBtn" onclick="lockNow('manual')" hidden>🔒 Lock</button>
   <button class="btn primary" id="connectBtn" onclick="connect()">Connect wallet</button>
 </div></div>
 
@@ -304,10 +358,26 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
 
 <div id="toast"></div>
 
+<!-- ethers.js — SELF-HOSTED (no CDN) and SRI-pinned. Serving it from our own
+     origin removes a third-party supply-chain path into the exact page the
+     owner signs from; the integrity hash makes a tampered file fail closed. -->
+<script src="vendor/ethers-6.15.0.umd.min.js"
+        integrity="sha384-OwtfwhPoP4aGLIw192UbPWjNbSkb7AllEbIhEJ01Yp8MxhNLLNUMA+DSjh6Zct05"
+        crossorigin="anonymous" referrerpolicy="no-referrer"></script>
 <script>
 /* ================================================================
    Robinfun Admin — pure client. Reads via a batch-free RPC provider;
    writes via the connected wallet (owner). No secrets on this page.
+
+   Security model (see /admin design notes): the ONLY thing with on-chain
+   effect is the Solidity onlyOwner check — no browser code can add or remove
+   it. What this page adds is defence-in-depth + operator UX:
+     • a convenience passphrase lock over the whole console (shoulder-surf),
+     • a wallet-signature ownership PROOF before controls unlock (SIWE-lite),
+     • auto-lock on idle / long-hidden / account change,
+     • a live owner re-check + chain-id guard before every write,
+     • self-hosted+SRI ethers and a locked-down CSP.
+   None of it is a substitute for rotating the owner key to a multisig.
    ================================================================ */
 const CHAIN = {
   chainId:'0x1237', chainName:'Robinhood Chain',
@@ -446,23 +516,34 @@ async function connect(){
     inj.on && inj.on('chainChanged', ()=>location.reload());
     document.getElementById('connectBtn').textContent = shortAddr(wallet);
     logLine('Connected '+shortAddr(wallet),'ok');
-    await refreshAll();
+    await refreshAll();                       // computes isOwner
+    if(isOwner){
+      const restored = restoreProof();        // valid, unexpired, same-host, re-verified signature?
+      if(restored && eq(restored, wallet)){ isProven=true; logLine('Session restored ✓','ok'); applyGate(); }
+      else { await proveOwner(); }            // one signature to prove control of the owner key
+    }
   }catch(e){ toast(errMsg(e),'err'); }
 }
 
 function setNet(state,txt){ const n=document.getElementById('netStat'); n.className='net '+(state||''); document.getElementById('netTxt').textContent=txt; }
 
-/* ---- owner gate ---- */
+/* ---- owner gate ----
+   Controls unlock only when the wallet is an owner AND has PROVEN it by signing
+   the login challenge (isProven). Accept-ownership buttons are the exception:
+   the pending owner is usually NOT the current owner, so they only need a
+   connected wallet. */
 function applyGate(){
   const g=document.getElementById('gate'), gt=document.getElementById('gateTxt');
   const writes=document.querySelectorAll('.btn.primary, .btn.danger, #treasBtn, #vaultBtn, #harvBtn, #dexBtn, #betaOffBtn, #acceptFacBtn, #acceptRtrBtn, #flushBtn, #sweepBtn');
-  if(!wallet){ g.className='gate warn'; gt.innerHTML='Connect the owner wallet to unlock controls.'; return; }
-  if(isOwner){ g.className='gate ok'; gt.innerHTML='✓ <b>Owner verified</b> — '+shortAddr(wallet)+'. All controls are live.'; }
-  else{ g.className='gate bad'; gt.innerHTML='✕ <b>'+shortAddr(wallet)+' is not the factory owner</b> ('+shortAddr(ownerAddr)+'). You can read everything, but every write will revert. Connect the owner wallet.'; }
+  let enable=false;
+  if(!wallet){ g.className='gate warn'; gt.innerHTML='Connect the owner wallet to unlock controls.'; }
+  else if(isOwner && isProven){ g.className='gate ok'; gt.innerHTML='✓ <b>Owner verified &amp; signed</b> — '+shortAddr(wallet)+'. All controls are live.'; enable=true; }
+  else if(isOwner && !isProven){ g.className='gate warn'; gt.innerHTML='◆ <b>'+shortAddr(wallet)+'</b> is the owner — <a class="gatelink" onclick="proveOwner();return false">sign the login challenge</a> to unlock controls.'; }
+  else{ g.className='gate bad'; gt.innerHTML='✕ <b>'+shortAddr(wallet)+' is not an owner</b> ('+shortAddr(ownerAddr)+'). Read-only — every write reverts on-chain. Connect the owner wallet.'; }
   writes.forEach(b=>{
     if(b.id==='connectBtn') return;                                   // never disable connect
-    if(b.id==='acceptFacBtn'||b.id==='acceptRtrBtn'){ b.disabled=false; return; }  // pending owner ≠ current owner
-    b.disabled=!isOwner;
+    if(b.id==='acceptFacBtn'||b.id==='acceptRtrBtn'){ b.disabled=!wallet; return; }  // pending owner ≠ current owner
+    b.disabled=!enable;
   });
 }
 
@@ -552,14 +633,14 @@ async function loadTokens(len){
   body.innerHTML = good.map(r=>`
     <tr>
       <td class="small">${r.i}</td>
-      <td><a href="${EXPLORER}/address/${r.ca}" target="_blank" rel="noopener">${esc(r.name)} <span class="gold">$${esc(r.sym)}</span></a></td>
-      <td>${r.creator&&r.creator!==ADDR0?`<a href="${APP}profile/${r.creator}" title="${r.creator}">${shortAddr(r.creator)}</a>`:'—'}</td>
+      <td><a href="${EXPLORER}/address/${esc(r.ca)}" target="_blank" rel="noopener">${esc(r.name)} <span class="gold">$${esc(r.sym)}</span></a></td>
+      <td>${r.creator&&r.creator!==ADDR0?`<a href="${APP}profile/${esc(r.creator)}" title="${esc(r.creator)}">${shortAddr(r.creator)}</a>`:'—'}</td>
       <td class="r gold">${fmtEth(r.earned)}</td>
       <td class="r">${fmtEth(r.owed)}</td>
       <td class="r"><a href="${EXPLORER}/address/${r.ca}" target="_blank" rel="noopener" class="small">explorer ↗</a></td>
     </tr>`).join('');
 }
-function esc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+function esc(s){ return (s==null?'':String(s)).replace(/[&<>"'`]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;','`':'&#96;'}[c])); }
 
 /* ---- write actions ---- */
 function errMsg(e){
@@ -568,8 +649,27 @@ function errMsg(e){
   const s = e.shortMessage || e.reason || (e.info&&e.info.error&&e.info.error.message) || e.message || String(e);
   return s.length>120 ? s.slice(0,120)+'…' : s;
 }
-function requireOwner(){ if(!wallet){ toast('Connect your wallet first','err'); return false; } if(!isOwner){ toast('This wallet is not the owner','err'); return false; } return true; }
+function requireOwner(){
+  if(!wallet){ toast('Connect your wallet first','err'); return false; }
+  if(!isProven){ toast('Sign the login challenge to unlock controls','err'); proveOwner(); return false; }
+  if(!isOwner){ toast('This wallet is not an owner','err'); return false; }
+  return true;
+}
+/* Single choke-point for every write. Before signing, RE-READ owner() live and
+   confirm the network — so a mid-session key rotation or a wallet that silently
+   switched chains is caught here, not just on-chain. An RPC hiccup falls back to
+   cached state (the tx would still revert on-chain if we were wrong). */
 async function send(label, fn){
+  try{
+    if(provider){
+      const net = await provider.getNetwork();
+      if(Number(net.chainId) !== 4663){ toast('Wrong network — switch to Robinhood Chain (4663)','err'); logLine(label+' — blocked: wrong network','err'); return false; }
+    }
+    try{
+      const [fo,ro] = await Promise.all([facR.owner(), rtrR.owner()]);
+      if(!eq(wallet,fo) && !eq(wallet,ro)){ isOwner=false; isProven=false; ownerAddr=fo; applyGate(); toast('Owner changed — you are no longer an owner','err'); logLine(label+' — blocked: not owner','err'); return false; }
+    }catch(_){ if(!isOwner){ toast('Cannot verify owner right now','err'); return false; } }
+  }catch(_){}
   try{
     logLine(label+' — sending…');
     const tx = await fn();
@@ -635,9 +735,12 @@ async function doSetCap(){
   let p; try{ p=capToParams(v); }catch(_){ toast('Bad number','err'); return; }
   await send('Set graduation cap '+v+' ETH', ()=>facW.setCurveParams({ virtualEth:p.veth, virtualToken:p.vtok, graduationEth:p.grad }));
 }
-async function doSetTreasury(){ if(!requireOwner()) return; const a=document.getElementById('treas-in').value.trim(); if(!isAddr(a)){ toast('Invalid address','err'); return; } await send('Set treasury '+shortAddr(a), ()=>rtrW.setTreasury(a)); }
-async function doSetVault(){ if(!requireOwner()) return; const a=document.getElementById('vault-in').value.trim(); if(!isAddr(a)){ toast('Invalid address','err'); return; } await send('Set staking vault '+shortAddr(a), ()=>rtrW.setStakingVault(a)); }
-async function doSetHarvester(){ if(!requireOwner()) return; const a=document.getElementById('harv-in').value.trim(); if(!isAddr(a)){ toast('Invalid address','err'); return; } await send('Set harvester '+shortAddr(a), ()=>rtrW.setHarvester(a)); }
+/* Echo the FULL new address back for character-by-character comparison before
+   signing — the cheapest defence against address-poisoning / clipboard swaps. */
+function confirmAddr(action, a){ return confirm(action+'\n\n'+a+'\n\nCheck every character against your source. Proceed?'); }
+async function doSetTreasury(){ if(!requireOwner()) return; const a=document.getElementById('treas-in').value.trim(); if(!isAddr(a)){ toast('Invalid address','err'); return; } if(!confirmAddr('Set protocol TREASURY to:', a)) return; await send('Set treasury '+shortAddr(a), ()=>rtrW.setTreasury(a)); }
+async function doSetVault(){ if(!requireOwner()) return; const a=document.getElementById('vault-in').value.trim(); if(!isAddr(a)){ toast('Invalid address','err'); return; } if(!confirmAddr('Set STAKING VAULT to:', a)) return; await send('Set staking vault '+shortAddr(a), ()=>rtrW.setStakingVault(a)); }
+async function doSetHarvester(){ if(!requireOwner()) return; const a=document.getElementById('harv-in').value.trim(); if(!isAddr(a)){ toast('Invalid address','err'); return; } if(!confirmAddr('Set HARVESTER keeper to:', a)) return; await send('Set harvester '+shortAddr(a), ()=>rtrW.setHarvester(a)); }
 async function doFlush(){ if(!requireOwner()) return; await send('Flush protocol revenue', ()=>rtrW.flushProtocol()); }
 async function doSweep(){ if(!requireOwner()) return; await send('Sweep unaccounted ETH', ()=>rtrW.sweepUnaccounted()); }
 async function doSetDex(){
@@ -674,20 +777,151 @@ async function refreshEthPrice(){
   for(const s of srcs){ try{ const r=await fetch(s.u); if(!r.ok) continue; const v=parseFloat(s.p(await r.json())); if(v>0){ ETH_USD=v; setV('s-eth','$'+ETH_USD.toLocaleString('en-US',{maximumFractionDigits:2})); return; } }catch(_){} }
 }
 
-/* ---- boot ---- */
-window.addEventListener('DOMContentLoaded', ()=>{
-  document.getElementById('cap-in').addEventListener('input', previewCap);
-  const wait=setInterval(()=>{ if(typeof ethers!=='undefined'){ clearInterval(wait); boot(); } },60);
-  setTimeout(()=>{ if(typeof ethers==='undefined'){ toast('ethers.js failed to load','err'); setNet('bad','ethers.js failed'); } },6000);
-});
+/* ================================================================
+   SECURITY GATE — convenience lock, ownership proof, auto-lock.
+   NB: none of this is a substitute for the on-chain onlyOwner check or for
+   rotating the owner key to a multisig. It is defence-in-depth + operator UX.
+   ================================================================ */
+let isProven = false;
+const LOCK_KEY='rf_admin_lock_v1', PROOF_KEY='rf_admin_proof', BACKOFF_KEY='rf_admin_backoff';
+
+/* ---- passphrase lock (PBKDF2-SHA256, verifier only — the secret is never stored) ---- */
+function getLockCfg(){ try{ return JSON.parse(localStorage.getItem(LOCK_KEY)||'null'); }catch(_){ return null; } }
+function lockActive(){ const c=getLockCfg(); return !!(c && !c.skip && c.hash); }
+async function pbkdf2(pass, saltBytes, iter){
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(pass), 'PBKDF2', false, ['deriveBits']);
+  const bits = await crypto.subtle.deriveBits({ name:'PBKDF2', salt:saltBytes, iterations:iter, hash:'SHA-256' }, key, 256);
+  return new Uint8Array(bits);
+}
+function b64(bytes){ let s=''; for(const b of bytes) s+=String.fromCharCode(b); return btoa(s); }
+function unb64(str){ const s=atob(str), a=new Uint8Array(s.length); for(let i=0;i<s.length;i++) a[i]=s.charCodeAt(i); return a; }
+function ctEqual(a,b){ if(a.length!==b.length) return false; let r=0; for(let i=0;i<a.length;i++) r|=a[i]^b[i]; return r===0; }   // constant-time
+
+function showLock(){ document.getElementById('lockScreen').hidden=false; }
+function showSetup(){ showLock(); document.getElementById('lockSetup').hidden=false; document.getElementById('lockUnlock').hidden=true; setTimeout(()=>{const e=document.getElementById('setPass');e&&e.focus();},60); }
+function showUnlock(){ showLock(); document.getElementById('lockSetup').hidden=true; document.getElementById('lockUnlock').hidden=false; setTimeout(()=>{const e=document.getElementById('unlockPass');e&&e.focus();},60); }
+function hideLock(){ document.getElementById('lockScreen').hidden=true; const lb=document.getElementById('lockBtn'); if(lb) lb.hidden=!lockActive(); }
+
+async function doSetupLock(){
+  const p1=document.getElementById('setPass').value, p2=document.getElementById('setPass2').value, err=document.getElementById('setErr');
+  if(p1.length<6){ err.textContent='Use at least 6 characters — a phrase is stronger than a short PIN.'; return; }
+  if(p1!==p2){ err.textContent='Passphrases do not match.'; return; }
+  err.textContent='Securing…';
+  const salt=crypto.getRandomValues(new Uint8Array(16)), iter=310000;
+  const hash=await pbkdf2(p1, salt, iter);
+  localStorage.setItem(LOCK_KEY, JSON.stringify({ v:1, salt:b64(salt), iter, hash:b64(hash) }));
+  localStorage.removeItem(BACKOFF_KEY);
+  document.getElementById('setPass').value=''; document.getElementById('setPass2').value=''; err.textContent='';
+  enterConsole();
+}
+function skipLock(){ localStorage.setItem(LOCK_KEY, JSON.stringify({ v:1, skip:true })); enterConsole(); }
+function forgotLock(){
+  if(confirm('Reset the console lock?\n\nThis clears the local passphrase (it protects nothing on-chain — your wallet + the contract owner check are the real guard). You will set a new one.')){
+    localStorage.removeItem(LOCK_KEY); localStorage.removeItem(BACKOFF_KEY);
+    const e=document.getElementById('unlockErr'); if(e) e.textContent=''; showSetup();
+  }
+}
+function getBackoff(){ try{ return JSON.parse(localStorage.getItem(BACKOFF_KEY)||'{"fails":0,"until":0}'); }catch(_){ return {fails:0,until:0}; } }
+function bumpBackoff(){ const b=getBackoff(); b.fails=(b.fails||0)+1; if(b.fails>5){ b.until=Date.now()+Math.min(3000*Math.pow(2,b.fails-6),60000); } localStorage.setItem(BACKOFF_KEY, JSON.stringify(b)); return b; }
+async function doUnlock(){
+  const cfg=getLockCfg(), err=document.getElementById('unlockErr'), bo=getBackoff();
+  if(bo.until>Date.now()){ err.textContent='Too many attempts — wait '+Math.ceil((bo.until-Date.now())/1000)+'s.'; return; }
+  if(!cfg||!cfg.hash){ showSetup(); return; }
+  const pass=document.getElementById('unlockPass').value;
+  const ok = ctEqual(await pbkdf2(pass, unb64(cfg.salt), cfg.iter||310000), unb64(cfg.hash));
+  if(ok){ localStorage.removeItem(BACKOFF_KEY); document.getElementById('unlockPass').value=''; err.textContent=''; enterConsole(); }
+  else{ const b=bumpBackoff(); err.textContent = b.until>Date.now() ? 'Wrong passphrase — locked for '+Math.ceil((b.until-Date.now())/1000)+'s.' : 'Wrong passphrase.'; }
+}
+
+/* ---- ownership PROOF (SIWE-lite): sign a challenge; recovered signer must equal the LIVE owner() ---- */
+function buildProofMsg(acct, ownerA, nonce, issued, exp){
+  return location.host+' wants you to sign in as the Robinfun owner:\n'+acct+'\n\n'+
+    'Prove you control the Robinfun owner key to unlock the admin console.\n'+
+    'This is a LOGIN PROOF ONLY — it authorizes no transaction and moves no funds.\n\n'+
+    'URI: '+location.origin+location.pathname+'\n'+
+    'Version: 1\n'+
+    'Chain ID: 4663\n'+
+    'Contracts:\n- RobinfunFactory '+ethers.getAddress(FACTORY_ADDR)+'\n- FeeRouter '+ethers.getAddress(FEEROUTER_ADDR)+'\n'+
+    'Expected owner: '+ownerA+'\n'+
+    'Nonce: '+nonce+'\n'+
+    'Issued At: '+issued+'\n'+
+    'Expiration Time: '+exp;
+}
+async function proveOwner(){
+  if(!signer||!wallet){ toast('Connect your wallet first','err'); return false; }
+  let fo,ro; try{ [fo,ro]=await Promise.all([facR.owner(), rtrR.owner()]); }catch(_){ toast('Cannot read owner from chain','err'); return false; }
+  const acct=ethers.getAddress(wallet);
+  const target = eq(acct,fo)?ethers.getAddress(fo):(eq(acct,ro)?ethers.getAddress(ro):null);
+  if(!target){ toast('This wallet is not an owner — nothing to prove','err'); return false; }
+  const issued=new Date(), exp=new Date(issued.getTime()+15*60*1000);
+  const nonce=[...crypto.getRandomValues(new Uint8Array(16))].map(x=>x.toString(16).padStart(2,'0')).join('');
+  const msg=buildProofMsg(acct, target, nonce, issued.toISOString(), exp.toISOString());
+  let sig; try{ toast('Sign the login challenge in your wallet…'); sig=await signer.signMessage(msg); }catch(e){ toast(errMsg(e),'err'); return false; }
+  if(!eq(ethers.verifyMessage(msg, sig), target)){ toast('Signature did not match the owner','err'); return false; }
+  try{ sessionStorage.setItem(PROOF_KEY, JSON.stringify({ msg, sig, addr:target, exp:exp.getTime(), host:location.host })); }catch(_){}
+  isProven=true; logLine('Ownership proven ✓','ok'); toast('Ownership proven — controls unlocked','ok'); applyGate(); return true;
+}
+function restoreProof(){
+  try{
+    const p=JSON.parse(sessionStorage.getItem(PROOF_KEY)||'null');
+    if(!p || p.host!==location.host || Date.now()>p.exp) throw 0;
+    if(!eq(ethers.verifyMessage(p.msg, p.sig), p.addr)) throw 0;   // re-verify — blob may be hand-edited
+    return ethers.getAddress(p.addr);
+  }catch(_){ sessionStorage.removeItem(PROOF_KEY); return null; }
+}
+
+/* ---- auto-lock ---- */
+let idleTimer=null, hiddenTimer=null, autoLockWired=false;
+const IDLE_MS=15*60*1000, HIDDEN_MS=10*60*1000;
+function resetIdle(){ if(!lockActive()) return; clearTimeout(idleTimer); idleTimer=setTimeout(()=>lockNow('idle'), IDLE_MS); }
+function onVis(){
+  if(!lockActive()) return;
+  if(document.hidden){ clearTimeout(hiddenTimer); hiddenTimer=setTimeout(()=>lockNow('hidden'), HIDDEN_MS); }   // grace: a 3-second wallet popup never trips it
+  else{ clearTimeout(hiddenTimer); resetIdle(); }
+}
+function armAutoLock(){
+  if(!lockActive()) return;
+  if(!autoLockWired){
+    autoLockWired=true;
+    ['mousemove','keydown','click','touchstart','scroll'].forEach(ev=>window.addEventListener(ev, resetIdle, {passive:true}));
+    document.addEventListener('visibilitychange', onVis);
+  }
+  resetIdle();
+}
+function lockNow(){
+  signer=provider=facW=rtrW=null; wallet=null; isOwner=false; ownerAddr=null; isProven=false;   // wipe in-memory session
+  try{ sessionStorage.removeItem(PROOF_KEY); }catch(_){}
+  clearTimeout(idleTimer); clearTimeout(hiddenTimer);
+  const cb=document.getElementById('connectBtn'); if(cb) cb.textContent='Connect wallet';
+  setNet('','Locked');
+  applyGate();
+  showUnlock();
+}
+
+/* ---- boot orchestration: gate FIRST, reveal the console only after unlock ---- */
+let capInputWired=false;
+function enterConsole(){
+  hideLock();
+  const lb=document.getElementById('lockBtn'); if(lb) lb.hidden=!lockActive();
+  armAutoLock();
+  if(!capInputWired){ capInputWired=true; const ci=document.getElementById('cap-in'); if(ci) ci.addEventListener('input', previewCap); }
+  const wait=setInterval(()=>{ if(typeof ethers!=='undefined'){ clearInterval(wait); boot(); } }, 60);
+  setTimeout(()=>{ if(typeof ethers==='undefined'){ toast('ethers.js failed to load','err'); setNet('bad','ethers.js failed'); } }, 6000);
+}
 async function boot(){
   setT('f-addr', shortAddr(FACTORY_ADDR)); setT('r-addr', shortAddr(FEEROUTER_ADDR));
   refreshEthPrice();
-  await refreshAll();   // read-only view works before connecting
-  // auto-connect if a wallet is already authorized
+  await refreshAll();   // read-only view works before connecting a wallet
   const inj=pickInjected();
-  if(inj){ try{ const accs=await inj.request({method:'eth_accounts'}); if(accs&&accs.length){ activeInjected=inj; connect(); } }catch(_){} }
+  if(inj){ try{ const accs=await inj.request({ method:'eth_accounts' }); if(accs&&accs.length){ activeInjected=inj; connect(); } }catch(_){} }
 }
+function initGate(){
+  const cfg=getLockCfg();
+  if(!cfg){ showSetup(); return; }        // first run — force a choice (set a lock, or Skip)
+  if(cfg.skip){ enterConsole(); return; } // operator opted out (recommend nginx auth)
+  showUnlock();                           // a passphrase is configured
+}
+if(document.readyState==='loading') document.addEventListener('DOMContentLoaded', initGate); else initGate();
 </script>
 </body>
 </html>
