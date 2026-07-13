@@ -1449,6 +1449,9 @@ const CHAIN = {
 };
 /* Deployed RobinfunFactory (testnet). Launch calls createToken() here. */
 const FACTORY_ADDR = '0xD975d8F2d5447312810347C9c2D75548738D4E11';   // beta (audit-fixed, capped 0.001, allowlist)
+/* FeeRouter — authoritative source for a creator's real, on-chain earnings. */
+const FEEROUTER_ADDR = '0x87b452A906B4904D2Aa2A38A500961131F975553';
+const FEEROUTER_ABI = [ 'function creatorEarnedLifetime(address) view returns (uint256)' ];
 let DEPLOY_FEE_WEI = 200000000000000n;     // 0.0002 ETH — refreshed live from the chain
 let deployFeeEth = 0.0002;
 const MIN_DEV_BUY = 0.01;                  // dev buy is mandatory — creator must hold a launch position
@@ -2134,13 +2137,16 @@ function renderToken(fresh){
     : '<span class="gold">◈ on the bonding curve</span>';
   const lc = document.getElementById('tk-links'); if(lc) lc.innerHTML = tokenLinks(t);
   document.getElementById('tk-price').textContent = fmtPrice(t.price);
+  // For a real token whose chain data hasn't loaded yet, show placeholders
+  // instead of the seed values — never fake numbers. refreshReal() fills them.
+  const pending = realToken(t) && !t._loaded;
   const c = document.getElementById('tk-chg');
-  c.textContent = (t.chg24>=0?'+':'')+t.chg24.toFixed(1)+'% · 24h';
-  c.className = 'tok-chg '+(t.chg24>=0?'up':'down');
-  document.getElementById('ts-mcap').textContent = fmtUsd(t.mcap);
-  document.getElementById('ts-vol').textContent = fmtUsd(t.vol24);
-  document.getElementById('ts-holders').textContent = t.holders.toLocaleString();
-  document.getElementById('ts-earned').textContent = t.earnedEth.toFixed(3)+' ETH';
+  c.textContent = pending ? '— · 24h' : (t.chg24>=0?'+':'')+t.chg24.toFixed(1)+'% · 24h';
+  c.className = 'tok-chg '+(pending?'':(t.chg24>=0?'up':'down'));
+  document.getElementById('ts-mcap').textContent = pending ? '—' : fmtUsd(t.mcap);
+  document.getElementById('ts-vol').textContent = pending ? '—' : fmtUsd(t.vol24);
+  document.getElementById('ts-holders').textContent = pending ? '—' : t.holders.toLocaleString();
+  document.getElementById('ts-earned').textContent = pending ? '—' : t.earnedEth.toFixed(3)+' ETH';
   /* curve */
   const prog = Math.min(100, t.mcap/GRAD_CAP*100);
   const fill = document.getElementById('tk-fill');
@@ -2154,13 +2160,13 @@ function renderToken(fresh){
   document.getElementById('li-decay').textContent = t.decay? 'halves to '+(t.buyTax/2)+'/'+(t.sellTax/2) : 'unchanged';
   document.getElementById('li-ren').textContent = t.renounced? 'renounced — locked' : 'lower-only';
   document.getElementById('li-dest').textContent = t.mine? 'your wallet' : t.creator;
-  document.getElementById('li-earned').textContent = t.earnedEth.toFixed(3)+' ETH';
+  document.getElementById('li-earned').textContent = pending ? '—' : t.earnedEth.toFixed(3)+' ETH';
   document.getElementById('fee-note').textContent = side==='buy'
     ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
     : (t.sellTax>0? t.sellTax+'% sell fee → creator' : 'no sell fee');
   if(fresh){
-    renderHolders(t);
-    renderThread(t);
+    if(realToken(t)){ renderRealHolders(t); renderRealThread(t); }
+    else { renderHolders(t); renderThread(t); }
     setSide('buy');
     document.getElementById('amt').value='';
     quote();
@@ -2341,30 +2347,64 @@ async function loadCurveTrades(t){
     await Promise.all(uniq.map(async b=>{ try{ const bl=await ro.getBlock(b); if(bl) times[b]=Number(bl.timestamp)*1000; }catch(_){} }));
     evs.forEach(e=> e.ts = times[e.block] || Date.now());
     t.trades = evs.slice().reverse().map(e=>({ts:e.ts, buy:e.buy, eth:e.eth, tokens:e.tokens, levyEth:e.levyEth, wallet:e.wallet}));
-    t.holders = Math.max(1, new Set(evs.map(e=>e.wallet)).size);
     t._series = evs.map(e=> e.priceEth*ETH_USD);
     t.vol24 = evs.filter(e=> Date.now()-e.ts < 864e5).reduce((s,e)=> s+e.eth, 0)*ETH_USD;
+
+    /* real holder distribution — net token flow per wallet from curve trades
+       (buys credit the recipient, sells debit the trader). This tracks who
+       actually holds, approximating current balances without an archive scan. */
+    const net = {};
+    for(const e of buys){ const a=e.args; const w=a.recipient.toLowerCase(); net[w]=(net[w]||0)+Number(ethers.formatUnits(a.tokensOut,18)); }
+    for(const e of sells){ const a=e.args; const w=a.trader.toLowerCase(); net[w]=(net[w]||0)-Number(ethers.formatUnits(a.tokensIn,18)); }
+    t._holderRows = Object.entries(net).filter(([,v])=>v>1e-6)
+      .map(([w,v])=>({who:shortAddr(w), full:w, tokens:v, pct:v/SUPPLY*100}))
+      .sort((x,y)=> y.tokens-x.tokens);
+    t.holders = Math.max(1, t._holderRows.length);   // wallets with a live balance
+
+    /* real 24h change: latest price vs the first trade inside the 24h window. */
+    const dayAgo = Date.now()-864e5;
+    const recent = evs.filter(e=> e.ts>=dayAgo);
+    const base = recent.length ? recent[0].priceEth : (evs.length ? evs[0].priceEth : 0);
+    const lastPx = evs.length ? evs[evs.length-1].priceEth : base;
+    t.chg24 = base>0 ? (lastPx/base-1)*100 : 0;
+
+    /* real creator earnings: authoritative from the FeeRouter's lifetime
+       counter; fall back to 90% of the on-curve levy summed from events. */
+    t.earnedEth = evs.reduce((s,e)=> s+(e.levyEth||0), 0) * 0.9;
+    try{
+      const fr = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, ro);
+      const v = Number(ethers.formatEther(await fr.creatorEarnedLifetime(t.ca)));
+      if(v>0) t.earnedEth = v;
+    }catch(_){}
   }catch(e){ console.error('loadCurveTrades', e); }
 }
 function buildCandlesFromTrades(t){
-  const pts = (t._series && t._series.length) ? t._series.slice() : [t.price||0];
-  const N = Math.min(60, Math.max(1, pts.length));
-  const per = Math.ceil(pts.length/N);
+  // Build OHLC from the real post-trade price walk. We prepend the curve's
+  // launch price (mcap START_ETH over the fixed supply) as the opening
+  // reference and bucket with SHARED endpoints (each candle opens where the
+  // previous closed), so even a single trade renders a real body instead of a
+  // flat dash. The last close is pinned to the live price.
+  const series = (t._series && t._series.length) ? t._series.slice() : [];
+  const launchPx = (START_ETH/SUPPLY)*ETH_USD || (t.price||0);
+  const prices = [launchPx, ...series];
+  if(t.price) prices[prices.length-1] = t.price;
+  const steps = prices.length - 1;
+  if(steps < 1){ t.candles = [{o:launchPx, h:launchPx, l:launchPx, c:launchPx, v:0}]; return; }
+  const N = Math.min(60, steps);
   const out = [];
-  for(let i=0;i<pts.length;i+=per){
-    const sl = pts.slice(i, i+per);
-    out.push({o:sl[0], c:sl[sl.length-1], h:Math.max(...sl), l:Math.min(...sl), v:sl.length});
+  for(let k=0;k<N;k++){
+    const a = Math.floor(k*steps/N);
+    const b = Math.max(a+1, Math.floor((k+1)*steps/N));
+    const sl = prices.slice(a, b+1);              // shared endpoint → continuous bodies
+    out.push({o:sl[0], c:sl[sl.length-1], h:Math.max(...sl), l:Math.min(...sl), v:sl.length-1});
   }
-  if(out.length && t.price) out[out.length-1].c = t.price;
-  t.candles = out.length ? out : [{o:t.price, h:t.price, l:t.price, c:t.price, v:0}];
+  t.candles = out;
 }
 async function refreshReal(t, withTrades){
   const ok = await loadCurveState(t);
   if(!ok || currentTokenId!==t.id) return;
   document.getElementById('tk-price').textContent = fmtPrice(t.price);
   document.getElementById('ts-mcap').textContent = fmtUsd(t.mcap);
-  document.getElementById('ts-vol').textContent = fmtUsd(t.vol24||0);
-  document.getElementById('ts-holders').textContent = (t.holders||1).toLocaleString();
   document.getElementById('tk-status').innerHTML = t.graduated
     ? '<span class="up">◆ graduated — trading on Uniswap, LP burned</span>'
     : '<span class="gold">◈ on the bonding curve</span>';
@@ -2374,7 +2414,15 @@ async function refreshReal(t, withTrades){
   document.getElementById('tk-curvelbl').textContent = t.graduated
     ? 'curve complete' : t.reserveEth.toFixed(4)+' ETH raised · '+prog.toFixed(0)+'%';
   const gl = document.getElementById('tk-gradlbl'); if(gl) gl.textContent = 'graduates at '+t.gradTargetEth+' ETH';
-  if(withTrades){ await loadCurveTrades(t); if(currentTokenId!==t.id) return; renderTrades(t); }
+  if(withTrades){ await loadCurveTrades(t); if(currentTokenId!==t.id) return; t._loaded = true; renderTrades(t); renderRealHolders(t); }
+  /* trade-derived stats — written AFTER loadCurveTrades so they reflect the
+     real on-chain history (volume, holders, 24h change, creator fees). */
+  document.getElementById('ts-vol').textContent = fmtUsd(t.vol24||0);
+  document.getElementById('ts-holders').textContent = (t.holders||1).toLocaleString();
+  document.getElementById('ts-earned').textContent = (t.earnedEth||0).toFixed(3)+' ETH';
+  const le = document.getElementById('li-earned'); if(le) le.textContent = (t.earnedEth||0).toFixed(3)+' ETH';
+  const cg = document.getElementById('tk-chg');
+  if(cg){ cg.textContent = ((t.chg24||0)>=0?'+':'')+(t.chg24||0).toFixed(1)+'% · 24h'; cg.className = 'tok-chg '+((t.chg24||0)>=0?'up':'down'); }
   buildCandlesFromTrades(t); drawChart(t);
   loadBalances(t);
 }
@@ -2501,6 +2549,45 @@ function renderHolders(t){
       <div style="width:120px"><div class="holder-bar"><div class="holder-fill" style="width:${Math.min(100,r.pct*2.2)}%"></div></div></div>
       <span class="mono" style="font-size:12px;font-weight:600;width:56px;text-align:right">${r.pct.toFixed(2)}%</span>
     </div>`).join('');
+}
+/* REAL holder distribution — built from on-chain curve trades (see
+   loadCurveTrades → t._holderRows). No random addresses, no invented
+   percentages: every row is a wallet that actually holds the token, plus the
+   bonding curve's unsold inventory. */
+function renderRealHolders(t){
+  const box = document.getElementById('holdersBody');
+  if(!box) return;
+  const rows = (t._holderRows||[]).slice();
+  const me = wallet ? wallet.toLowerCase() : null;
+  const circulating = rows.reduce((s,r)=>s+r.tokens,0);
+  const list = [];
+  if(!t.graduated){
+    const curveHeld = Math.max(0, SUPPLY - circulating);
+    list.push({who:'Bonding curve (contract)', pct:curveHeld/SUPPLY*100, tag:'curve'});
+  }
+  for(const r of rows){
+    list.push({who:r.who, pct:r.pct, tag:(me && r.full===me)?'you':''});
+  }
+  if(!list.length){
+    box.innerHTML = '<div style="padding:16px;color:var(--cream-mute)">No holders yet — be the first to buy.</div>';
+    return;
+  }
+  box.innerHTML = list.slice(0,12).map((r,i)=>`
+    <div style="display:flex;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--rule)">
+      <span class="mono" style="font-size:11px;color:var(--cream-mute);width:18px">${i+1}</span>
+      <span class="mono" style="font-size:12px;flex:1">${r.who} ${r.tag?'<span class="gold">· '+r.tag+'</span>':''}</span>
+      <div style="width:120px"><div class="holder-bar"><div class="holder-fill" style="width:${Math.min(100,r.pct)}%"></div></div></div>
+      <span class="mono" style="font-size:12px;font-weight:600;width:56px;text-align:right">${r.pct.toFixed(2)}%</span>
+    </div>`).join('');
+}
+/* Real tokens have no on-chain social thread — say so honestly instead of
+   showing invented comments. */
+function renderRealThread(t){
+  const box = document.getElementById('threadBody');
+  if(!box) return;
+  box.innerHTML = '<div style="padding:20px 16px;color:var(--cream-mute);font-size:13px;line-height:1.65">'+
+    'Community chat isn\'t wired for this testnet build yet. Everything above — price, trades, volume, holders and creator fees — is read live from the bonding curve on-chain.'+
+    '</div>';
 }
 const SHILL = ['first. fee me daddy','creator based, tax fair, sending it','sold my '+'HOODRAT'+' for this ngl','the 3/3 is honest work','dev doxxed on X, fee renounced, what more do you want','graduation speedrun when','bought the dip, dip kept dipping','this the one'];
 function renderThread(t){
@@ -2929,12 +3016,15 @@ async function realLaunch(meta){
     }
     busy(false,'Deploy token');
 
+    // Seed neutral — this is a REAL token, so every stat (mcap, volume,
+    // holders, 24h, creator fees) is read live from the chain on open. No
+    // fabricated numbers (vol24:0 also stops mkTok inventing earnedEth).
     const t = mkTok({
       name:meta.name, ticker:meta.ticker, emoji:null, logo:chosenLogo,
       website:meta.website, x:meta.x, tg:meta.tg, desc:meta.desc,
       buyTax:meta.buyTax, sellTax:meta.sellTax, decay:meta.decay, renounced:meta.renounced,
-      mcap: START_CAP + meta.devBuy*ETH_USD*0.96, vol24: meta.devBuy*ETH_USD, chg24: meta.devBuy>0?rnd(2,9):0,
-      holders: meta.devBuy>0?2:1, replies:0, mine:true, creator:MY_ADDR||wallet,
+      mcap: START_CAP, vol24: 0, chg24: 0,
+      holders: 1, replies:0, mine:true, creator:MY_ADDR||wallet,
       created: Date.now(), lastTrade: Date.now(), earnedEth: 0,
     });
     t.ca = ca || '';
@@ -3056,6 +3146,7 @@ function claimAll(){
    LIVE SIMULATION
    ================================================================ */
 function applyTrade(t, tr, user){
+  if(realToken(t)) return;   // real tokens are driven by on-chain data only, never simulated
   t.trades.unshift(tr); if(t.trades.length>60) t.trades.pop();
   t.lastTrade = tr.ts;
   const usd = tr.eth*ETH_USD;
@@ -3108,7 +3199,9 @@ function applyTrade(t, tr, user){
 }
 function simTick(){
   if(!TOKENS.length) return;   // empty board — nothing to animate yet
-  const live = TOKENS.filter(t=>!t.mine || Math.random()<0.35);
+  // NEVER animate real, on-chain tokens — their volume/holders/price/trades are
+  // read live from the bonding curve. Only the demo board tokens are simulated.
+  const live = TOKENS.filter(t=>!realToken(t) && (!t.mine || Math.random()<0.35));
   if(!live.length) return;
   const weights = live.map(t=> (t.vol24+6000) * (t.graduated?0.5:1) * (Date.now()-t.created<7200e3?2.2:1));
   const total = weights.reduce((a,b)=>a+b,0);
