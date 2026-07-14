@@ -2154,32 +2154,46 @@ function recomputeBoardAggregates(){
   // Paid to creators, all-time = Σ each real token's creator earnings (ETH→USD).
   if(reals.length) PAID_ALLTIME = reals.reduce((s,t)=>s+((t.earnedEth||0)*ETH_USD),0);
 }
+// Run async `fn` over `items` with at most `limit` in flight at once. Because the
+// RPC runs batchMaxCount:1 (every read is its OWN HTTP round-trip), firing a pool
+// of concurrent requests is the ONLY way to go fast — a sequential loop pays the
+// full round-trip latency once PER read (hundreds of them → tens of seconds).
+async function mapLimit(items, limit, fn){
+  let i = 0;
+  const run = async ()=>{ while(i < items.length){ const idx = i++; try{ await fn(items[idx], idx); }catch(_){} } };
+  await Promise.all(Array.from({length: Math.min(limit, items.length)}, run));
+}
 async function loadBoardStats(){
   if(_boardBusy || typeof ethers==='undefined') return;
   const reals = TOKENS.filter(t=>realToken(t)).slice(0,40);   // bound cost on large boards
   if(!reals.length) return;
   _boardBusy = true;
+  const fr = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, roProvider());
+  const tick = ()=>{ recomputeBoardAggregates(); renderStats(); };   // cheap — refresh totals as each token lands
+  let n = 0;
   try{
     // Phase 1 (cheap): curve/DEX state → real mcap + FeeRouter lifetime earnings.
-    for(const t of reals){
+    // CONCURRENT: ~8 in flight so 24 tokens finish in a few round-trips, not 24×.
+    await mapLimit(reals, 8, async (t)=>{
       try{
         if(await loadCurveState(t)){
           if(t.graduated) await loadDexState(t);
-          try{
-            const fr = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, roProvider());
-            const v = Number(ethers.formatEther(await fr.creatorEarnedLifetime(t.ca)));
-            if(v>0) t.earnedEth = v;
-          }catch(_){}
+          try{ const v = Number(ethers.formatEther(await fr.creatorEarnedLifetime(t.ca))); if(v>0) t.earnedEth = v; }catch(_){}
         }
       }catch(_){}
-    }
-    recomputeBoardAggregates(); renderGrid(); renderStats();
-    // Phase 2 (heavier): per-token trade history → 24h + all-time volume.
-    for(const t of reals){
-      if(currentTokenId===t.id && t._loaded) continue;   // its own poll keeps it fresh
+      tick();
+    });
+    renderGrid(); renderStats();
+    // Phase 2 (heavier): per-token trade history → 24h + all-time volume (merges
+    // DEX swaps for graduated tokens inside loadCurveTrades). CONCURRENT too, at a
+    // slightly lower fan-out since each token pages several getLogs windows.
+    await mapLimit(reals, 6, async (t)=>{
+      if(currentTokenId===t.id && t._loaded) return;   // its own poll keeps it fresh
       try{ await loadCurveTrades(t); }catch(_){}
-      recomputeBoardAggregates(); renderGrid(); renderStats();
-    }
+      if(++n % 4 === 0) renderGrid();                  // throttle the heavier grid repaint
+      tick();
+    });
+    recomputeBoardAggregates(); renderGrid(); renderStats();
   }finally{ _boardBusy = false; }
 }
 
