@@ -18,6 +18,7 @@ const fs = require('fs');
 const {
   ethers, CFG, FACTORY_ABI, makeProvider, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
+  makeL1Provider, verifyInbox, bridgeOne,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -70,23 +71,27 @@ const isAdmin = (id) => state.admins.map(String).includes(String(id));
 function menu() {
   return { reply_markup: { inline_keyboard: [
     [{ text: state.running ? '⏸️ Stop' : '▶️ Go', callback_data: state.running ? 'stop' : 'go' }, { text: '📊 Status', callback_data: 'status' }],
-    [{ text: '💰 Wallets', callback_data: 'wallets' }, { text: '📈 Stats', callback_data: 'stats' }],
-    [{ text: '🆕 History (MC)', callback_data: 'last' }, { text: '⚙️ Config', callback_data: 'config' }],
+    [{ text: '💰 Wallets', callback_data: 'wallets' }, { text: '🌉 Bridge', callback_data: 'bridge' }],
+    [{ text: '📈 Stats', callback_data: 'stats' }, { text: '🆕 History (MC)', callback_data: 'last' }],
   ] } };
 }
 
 // ---------------- shared runtime ----------------
 const provider = makeProvider();
+const l1 = makeL1Provider(); // Ethereum mainnet (parent chain) for bridge deposits
 const wallets = loadOrCreateWallets(provider);
 const funder = /^0x[0-9a-fA-F]{64}$/.test(CFG.funderKey) ? new ethers.Wallet(CFG.funderKey, provider) : null;
 const factoryRead = new ethers.Contract(CFG.factory, FACTORY_ABI, provider);
 const gasBuf = ethers.parseEther('0.0006');
 const balances = () => Promise.all(wallets.map((w) => provider.getBalance(w.address).catch(() => 0n)));
+const l1Balances = () => l1 ? Promise.all(wallets.map((w) => l1.getBalance(w.address).catch(() => 0n))) : Promise.resolve(null);
 
 const HELP = `<b>🤖 Robinfun Seeder Bot</b>
-Bot bikin ${wallets.length} wallet sendiri. Tugasmu cuma isi ETH, lalu /go.
+Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 
-<b>/wallets</b> — alamat wallet + saldo (kirim ETH ke sini)
+<b>/wallets</b> — alamat + saldo di Robinhood Chain & Ethereum L1
+<b>/bridge</b> — pindah ETH dari Ethereum L1 → Robinhood Chain
+<b>/keys</b> — 🔑 private key wallet (RAHASIA)
 <b>/go</b> · <b>/stop</b> — mulai / berhenti auto-launch
 <b>/status</b> — status seeder + saldo
 <b>/stats</b> — jumlah token dibuat + total market cap
@@ -98,15 +103,95 @@ Bot bikin ${wallets.length} wallet sendiri. Tugasmu cuma isi ETH, lalu /go.
 <b>Atur setelan:</b>
 /devbuy 0.001 · /interval 60 · /levy 100 · /max 0
 
-Alur: <b>/wallets → kirim ETH → /go</b> ✅`;
+Alur: <b>/wallets → kirim ETH (L1) → /bridge → /go</b> ✅`;
 
-function walletsMsg(bals) {
+async function walletsMsg() {
+  const [l2bals, l1bals] = await Promise.all([balances(), l1Balances()]);
   let t = `<b>💰 Deployer wallets (${wallets.length})</b>\nKirim ETH ke alamat berikut:\n`;
-  let total = 0n;
-  wallets.forEach((w, i) => { const b = bals ? bals[i] : 0n; total += b; t += `\n<code>${w.address}</code>${bals ? ` — ${fmt(b)} ETH` : ''}`; });
-  if (bals) t += `\n\n<b>Total: ${fmt(total)} ETH</b>`;
-  t += `\n\nKunci disimpan di wallets.json (chmod 600) — backup!`;
+  let tL2 = 0n, tL1 = 0n;
+  wallets.forEach((w, i) => {
+    const b2 = l2bals[i]; tL2 += b2;
+    let line = `\n<code>${w.address}</code>\n   🟣 RH: ${fmt(b2)} ETH`;
+    if (l1bals) { const b1 = l1bals[i]; tL1 += b1; line += ` · ⟠ L1: ${fmt(b1)} ETH${b1 > 0n ? ' 🌉' : ''}`; }
+    t += line;
+  });
+  t += `\n\n<b>Total RH: ${fmt(tL2)} ETH</b>`;
+  if (l1bals) t += ` · <b>Total L1: ${fmt(tL1)} ETH</b>\n🌉 = ada ETH di Ethereum → /bridge ke Robinhood Chain`;
+  t += `\n\n🔑 /keys · backup wallets.json (chmod 600)`;
   return t;
+}
+
+function keysMsg() {
+  let t = `🔑 <b>PRIVATE KEY deployer wallets</b>\n⚠️ RAHASIA. Siapa pun yang punya ini bisa kuras dompetnya. Jangan share, dan HAPUS pesan ini setelah dicatat/di-import.\n`;
+  wallets.forEach((w, i) => { t += `\n${i + 1}. <code>${w.address}</code>\n<tg-spoiler><code>${w.privateKey}</code></tg-spoiler>`; });
+  return t;
+}
+
+async function bridgeMsg() {
+  if (!l1) return '⚠️ <b>L1_RPC belum aktif.</b> Set <code>L1_RPC</code> di seeder/.env untuk deteksi + bridge ETH dari Ethereum.';
+  const l1bals = await l1Balances();
+  const min = ethers.parseEther(CFG.bridgeMinEth);
+  const inboxSet = ethers.isAddress(CFG.l1InboxAddr);
+  const ver = inboxSet ? await verifyInbox(l1, CFG.l1InboxAddr) : { ok: false, reason: 'belum di-set' };
+  let ready = 0, totalReady = 0n;
+  let rows = '';
+  wallets.forEach((w, i) => {
+    const b = l1bals[i];
+    if (b >= min) { ready++; totalReady += b; }
+    rows += `<code>${w.address.slice(0, 12)}…</code>  ⟠ ${fmt(b)} ETH ${b >= min ? '✅ siap' : '—'}\n`;
+  });
+  let t = `<b>🌉 Bridge ETH → Robinhood Chain</b>\nEthereum L1 → RH Chain lewat <i>depositEth</i> resmi (address sama, ~10–15 menit).\n\n${rows}\nSiap bridge: <b>${ready}/${wallets.length}</b> wallet · ~${fmt(totalReady)} ETH\n`;
+  t += `\nInbox L1: ${inboxSet ? `<code>${CFG.l1InboxAddr}</code>\n${ver.ok ? '✓ kontrak terdeteksi di L1' : '⚠️ ' + ver.reason}` : '❌ <b>belum di-set</b>'}\n`;
+  if (!inboxSet) {
+    t += `\n⚠️ <b>WAJIB set alamat Inbox resmi dulu.</b> Ambil dari <b>docs.robinhood.com/chain/protocol-contracts/</b>, verifikasi di Etherscan/Blockscout, lalu:\n<code>echo 'L1_INBOX_ADDR=0x...' >> seeder/.env</code> lalu <code>pm2 restart robinfun-seeder-bot</code>.\n\n🚫 JANGAN pakai alamat dari sumber tak resmi (robinhood-bridge.app / robinbridge.xyz = <b>scam</b>). Salah alamat = ETH hilang permanen.`;
+  } else if (!ver.ok) {
+    t += `\n⚠️ Inbox tidak lolos verifikasi — bridge dinonaktifkan demi keamanan. Cek lagi alamatnya.`;
+  } else if (ready) {
+    t += `\nTekan <b>🌉 Bridge semua</b> untuk memindahkan ETH wallet yang siap.`;
+  } else {
+    t += `\nBelum ada ETH di L1. Kirim ETH (jaringan Ethereum) ke address di /wallets dulu.`;
+  }
+  return t;
+}
+function bridgeMenu() {
+  const canGo = ethers.isAddress(CFG.l1InboxAddr);
+  return { reply_markup: { inline_keyboard: [[
+    canGo ? { text: '🌉 Bridge semua', callback_data: 'bridge_go' } : { text: 'ℹ️ Cara set Inbox', callback_data: 'bridge_help' },
+    { text: '🔄 Refresh', callback_data: 'bridge' },
+  ]] } };
+}
+const BRIDGE_HELP = `<b>ℹ️ Cara mengaktifkan bridge</b>
+1. Buka <b>docs.robinhood.com/chain/protocol-contracts/</b> → cari alamat <b>Inbox</b> (di Ethereum L1).
+2. Verifikasi alamat itu di blockscout/etherscan (pastikan kontrak resmi).
+3. Di VPS:
+<code>echo 'L1_INBOX_ADDR=0xALAMAT_INBOX' >> /opt/robinfun/seeder/.env
+pm2 restart robinfun-seeder-bot</code>
+4. Balik ke /bridge → tombol "🌉 Bridge semua" akan aktif.
+
+🚫 Jangan percaya alamat dari situs non-resmi. Salah Inbox = ETH hilang.`;
+
+let bridging = false; // guard: never run two bridge passes at once (double-spend / nonce clash)
+async function doBridgeAll(chatId) {
+  if (!l1) { await send(chatId, 'L1_RPC belum aktif.'); return; }
+  if (!ethers.isAddress(CFG.l1InboxAddr)) { await send(chatId, 'Inbox belum di-set. Lihat /bridge.'); return; }
+  if (bridging) { await send(chatId, '⏳ Bridge sedang berjalan — tunggu selesai dulu.'); return; }
+  const ver = await verifyInbox(l1, CFG.l1InboxAddr);
+  if (!ver.ok) { await send(chatId, `⚠️ Inbox gagal verifikasi: ${ver.reason}. Bridge dibatalkan demi keamanan.`); return; }
+  bridging = true;
+  try {
+    await send(chatId, '🌉 Mulai bridge dari Ethereum L1… (mohon tunggu, jangan spam)');
+    let done = 0, skipped = 0;
+    for (const w of wallets) {
+      try {
+        const r = await bridgeOne(w, l1, CFG.l1InboxAddr, CFG.bridgeMinEth);
+        if (r.ok) { done++; await send(chatId, `✅ <code>${w.address.slice(0, 12)}…</code> bridge <b>${fmt(r.bridged)} ETH</b>\ntx L1 <code>${r.hash}</code>`); }
+        else skipped++;
+      } catch (e) { await send(chatId, `❌ <code>${w.address.slice(0, 12)}…</code>: ${esc(e.shortMessage || e.reason || e.message)}`); }
+    }
+    await send(chatId, done
+      ? `Selesai — ${done} wallet di-bridge${skipped ? `, ${skipped} dilewati` : ''}. ETH muncul di Robinhood Chain ~10–15 menit, lalu /go untuk deploy.`
+      : 'Tidak ada wallet dengan cukup ETH di L1 untuk di-bridge.');
+  } finally { bridging = false; }
 }
 
 async function statusMsg() {
@@ -211,7 +296,11 @@ async function doStop(chatId) {
 async function dispatch(chatId, cmd, args) {
   switch (cmd) {
     case '/start': case '/help': await send(chatId, HELP, menu()); break;
-    case '/wallets': await send(chatId, walletsMsg(await balances())); break;
+    case '/wallets': await send(chatId, await walletsMsg()); break;
+    case '/keys': case '/key': await send(chatId, keysMsg()); break;
+    case '/bridge': await send(chatId, await bridgeMsg(), bridgeMenu()); break;
+    case '/bridge_go': await doBridgeAll(chatId); break;
+    case '/bridge_help': await send(chatId, BRIDGE_HELP); break;
     case '/status': await send(chatId, await statusMsg(), menu()); break;
     case '/stats': await send(chatId, await statsMsg(), menu()); break;
     case '/go': case '/run': await doGo(chatId); break;
@@ -297,6 +386,27 @@ tx <code>${r.txHash}</code>`);
   }
 }
 
+// ---------------- L1 watcher: auto-detect ETH arriving on Ethereum ----------------
+async function l1Watcher() {
+  if (!l1) return;
+  const seen = {};
+  const min = ethers.parseEther(CFG.bridgeMinEth);
+  for (;;) {
+    try {
+      for (const w of wallets) {
+        const b = await l1.getBalance(w.address).catch(() => null);
+        if (b === null) continue;
+        const prev = seen[w.address];
+        if (prev !== undefined && b > prev && b >= min) {
+          await broadcast(`💰 ETH masuk di <b>Ethereum L1</b>\n<code>${w.address.slice(0, 14)}…</code> = <b>${fmt(b)} ETH</b>\n🌉 /bridge untuk pindah ke Robinhood Chain.`);
+        }
+        seen[w.address] = b;
+      }
+    } catch (_) {}
+    await sleep(120000); // every 2 min
+  }
+}
+
 // ---------------- long-poll updates ----------------
 async function poll() {
   let offset = 0;
@@ -326,7 +436,9 @@ async function main() {
   }
   await tg('setMyCommands', { commands: [
     { command: 'help', description: 'Bantuan & daftar perintah' },
-    { command: 'wallets', description: 'Alamat wallet (kirim ETH ke sini)' },
+    { command: 'wallets', description: 'Alamat + saldo (RH Chain & Ethereum L1)' },
+    { command: 'bridge', description: 'Bridge ETH: Ethereum L1 -> Robinhood Chain' },
+    { command: 'keys', description: '🔑 Private key wallet (RAHASIA)' },
     { command: 'go', description: 'Mulai auto-launch token' },
     { command: 'stop', description: 'Berhenti launch' },
     { command: 'status', description: 'Status seeder & saldo' },
@@ -339,6 +451,7 @@ async function main() {
   if (state.admins.length) await broadcast('🤖 Robinfun seeder bot online. /help', menu());
   else console.log('No admin yet — send any message to the bot to claim admin.');
   launchLoop().catch((e) => console.error('loop crashed:', e));
+  l1Watcher().catch((e) => console.error('l1 watcher crashed:', e));
   await poll();
 }
 main().catch((e) => { console.error(e); process.exit(1); });

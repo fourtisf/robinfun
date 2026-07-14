@@ -37,6 +37,14 @@ const CFG = {
   tgToken: (process.env.TELEGRAM_TOKEN || process.env.BOT_TOKEN || '').trim(),
   tgAdmins: (process.env.TELEGRAM_ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
   stateFile: process.env.STATE_FILE || path.join(__dirname, 'bot-state.json'),
+  // L1 bridge (Ethereum mainnet -> Robinhood Chain, canonical depositEth)
+  l1Rpc: (process.env.L1_RPC || 'https://ethereum-rpc.publicnode.com').trim(),
+  // The RH-Chain Delayed Inbox on Ethereum L1. REQUIRED to bridge. Leave EMPTY
+  // until you verify it against the OFFICIAL docs (docs.robinhood.com/chain/
+  // protocol-contracts/) — a wrong Inbox = ETH lost forever. NEVER hardcode an
+  // unverified value here.
+  l1InboxAddr: (process.env.L1_INBOX_ADDR || '').trim(),
+  bridgeMinEth: String(process.env.BRIDGE_MIN_ETH || '0.003'),
 };
 
 const FACTORY_ABI = [
@@ -132,6 +140,50 @@ async function tokenStats(curveAddr, provider) {
   } catch (_) { return { mcEth: 0n, graduated: false }; }
 }
 
+// ---- L1 -> Robinhood Chain canonical bridge (Arbitrum Orbit depositEth) ----
+// depositEth() escrows msg.value on L1 and credits the SAME address on the L2
+// (EOAs only; a contract sender would be address-aliased). Same private key =
+// same address on both chains, so a deployer wallet self-bridges its own ETH.
+const INBOX_ABI = ['function depositEth() payable returns (uint256)'];
+
+function makeL1Provider() {
+  if (!CFG.l1Rpc) return null;
+  try { return new ethers.JsonRpcProvider(CFG.l1Rpc, undefined, { batchMaxCount: 1 }); } catch (_) { return null; }
+}
+
+// Confirm the configured Inbox is actually a deployed contract (catches a
+// totally-wrong/EOA address). Does NOT prove it's the REAL Inbox — that must be
+// verified by the operator against the official docs. Fail closed.
+async function verifyInbox(l1Provider, addr) {
+  if (!addr || !ethers.isAddress(addr)) return { ok: false, reason: 'alamat kosong / tidak valid' };
+  if (!l1Provider) return { ok: false, reason: 'L1 RPC tidak tersedia' };
+  try {
+    const code = await l1Provider.getCode(addr);
+    if (!code || code === '0x') return { ok: false, reason: 'tidak ada kontrak di alamat ini (bukan Inbox)' };
+    return { ok: true };
+  } catch (e) { return { ok: false, reason: e.shortMessage || e.message }; }
+}
+
+// Bridge a single wallet's L1 ETH to Robinhood Chain via Inbox.depositEth().
+// Keeps a gas reserve (estimated) on L1. Returns {ok, bridged, hash} | {skip} | throws.
+async function bridgeOne(wallet, l1Provider, inboxAddr, minEthStr) {
+  const signer = wallet.connect(l1Provider);
+  const bal = await l1Provider.getBalance(signer.address);
+  const inbox = new ethers.Contract(inboxAddr, INBOX_ABI, signer);
+  let gasLimit = 130000n;
+  try { const est = await inbox.depositEth.estimateGas({ value: 1n }); gasLimit = (est * 15n) / 10n; } catch (_) {}
+  const fee = await l1Provider.getFeeData();
+  const gasPrice = fee.maxFeePerGas || fee.gasPrice || ethers.parseUnits('40', 'gwei');
+  const reserve = gasLimit * gasPrice * 2n; // keep 2x estimated gas on L1
+  const minEth = ethers.parseEther(minEthStr);
+  if (bal <= reserve) return { skip: true, reason: 'saldo L1 < cadangan gas', bal };
+  const amount = bal - reserve;
+  if (amount < minEth) return { skip: true, reason: 'di bawah minimum bridge', bal, amount };
+  const tx = await inbox.depositEth({ value: amount });
+  const receipt = await tx.wait();
+  return { ok: true, bridged: amount, hash: tx.hash, receipt };
+}
+
 async function checkBeta(factoryRead, wallets) {
   let beta = false, owner = ethers.ZeroAddress;
   try { [beta, owner] = await Promise.all([factoryRead.betaMode(), factoryRead.owner()]); } catch (_) {}
@@ -192,8 +244,9 @@ async function sweepAll(wallets, provider, dest) {
 }
 
 module.exports = {
-  ethers, CFG, FACTORY_ABI, CURVE_ABI, makeProvider,
+  ethers, CFG, FACTORY_ABI, CURVE_ABI, INBOX_ABI, makeProvider,
   genName, fetchMeme, postMeta, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
   ethUsd, tokenStats,
+  makeL1Provider, verifyInbox, bridgeOne,
 };
