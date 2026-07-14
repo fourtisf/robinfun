@@ -17,6 +17,7 @@ const express = require('express');
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
+const store = require('./store');   // MongoDB (if MONGODB_URI) or JSON-file fallback
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -24,32 +25,15 @@ const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
 const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(DATA_DIR, 'uploads');
 const UPLOAD_BASE = process.env.UPLOAD_BASE || '/uploads';   // public URL prefix (nginx serves this)
 const SITE_DIR = process.env.SITE_DIR || '';                 // optional: serve the static site (dev only)
-const DB_FILE = path.join(DATA_DIR, 'tokens.json');
 const MAX_TOKENS = Number(process.env.MAX_TOKENS || 100000);
 const MAX_IMG_BYTES = 2 * 1024 * 1024;
+const DEFAULT_SETTINGS = { gradLpEth: 2.6 };
 
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-// ---------------------------------------------------------------- JSON store
-function load() {
-  try { return JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); }
-  catch { return { tokens: [] }; }
-}
-function save(db) {
-  const tmp = DB_FILE + '.' + process.pid + '.tmp';
-  fs.writeFileSync(tmp, JSON.stringify(db));
-  fs.renameSync(tmp, DB_FILE);   // atomic replace
-}
-const db = load();
+// Token + settings persistence lives in ./store (MongoDB or JSON — see store.js).
+// store.init() runs before app.listen() in the async bootstrap at the bottom.
 
-// ---------------------------------------------------------------- settings store
-// Small operator-tunable settings the frontend reads on load (e.g. the ETH-LP
-// milestone a token must reach to earn the "GRADUATED" badge on robinfun.io).
-const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
-const DEFAULT_SETTINGS = { gradLpEth: 2.6 };
-function loadSettings() { try { return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) }; } catch { return { ...DEFAULT_SETTINGS }; } }
-function saveSettings(s) { const tmp = SETTINGS_FILE + '.' + process.pid + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, SETTINGS_FILE); }
-let settings = loadSettings();
 // Constant-time admin check, shared by the settings + delete endpoints.
 function adminOk(req) {
   const secret = process.env.ADMIN_SECRET || '';
@@ -101,7 +85,7 @@ const app = express();
 app.set('trust proxy', 1);              // behind nginx → real client IP in req.ip
 app.use(express.json({ limit: '6mb' }));
 
-app.get('/api/health', (req, res) => res.json({ ok: true, tokens: db.tokens.length }));
+app.get('/api/health', (req, res) => res.json({ ok: true, tokens: store.countTokens(), backend: store.backend() }));
 
 // CORS for the admin-console endpoints — the console lives on a different origin
 // (robinfun.tech) and needs to GET/POST/DELETE here. Everything else stays
@@ -120,35 +104,36 @@ function adminCors(req, res, next) {
 }
 app.options('/api/settings', adminCors);
 // Public: the frontend reads these on load.
-app.get('/api/settings', adminCors, (req, res) => res.json(settings));
+app.get('/api/settings', adminCors, (req, res) => res.json(store.getSettings()));
 // Admin: change a setting (same x-admin-secret as delete). e.g. { gradLpEth: 2.6 }
-app.post('/api/settings', adminCors, (req, res) => {
+app.post('/api/settings', adminCors, async (req, res) => {
   if (!process.env.ADMIN_SECRET) return res.status(503).json({ error: 'settings locked (set ADMIN_SECRET)' });
   if (!adminOk(req)) return res.status(403).json({ error: 'forbidden' });
   const b = req.body || {};
+  const settings = { ...store.getSettings() };
   if (b.gradLpEth !== undefined) {
     const g = Number(b.gradLpEth);
     if (!(g > 0 && g <= 1000)) return res.status(400).json({ error: 'gradLpEth must be 0-1000' });
     settings.gradLpEth = g;
   }
-  saveSettings(settings);
-  res.json({ ok: true, settings });
+  try { await store.saveSettings(settings); res.json({ ok: true, settings }); }
+  catch { res.status(500).json({ error: 'server error' }); }
 });
 
 app.options('/api/tokens/:id', adminCors);   // preflight for the admin-console DELETE
 app.get('/api/tokens', adminCors, (req, res) => {
-  res.json(db.tokens.slice().reverse());   // newest first
+  res.json(store.allTokens().slice().reverse());   // newest first
 });
 
 app.get('/api/tokens/:id', (req, res) => {
-  const t = db.tokens.find((x) => x.id === req.params.id);
+  const t = store.findToken(req.params.id);
   if (!t) return res.status(404).json({ error: 'not found' });
   res.json(t);
 });
 
-app.post('/api/tokens', rateLimit, (req, res) => {
+app.post('/api/tokens', rateLimit, async (req, res) => {
   try {
-    if (db.tokens.length >= MAX_TOKENS) return res.status(507).json({ error: 'full' });
+    if (store.countTokens() >= MAX_TOKENS) return res.status(507).json({ error: 'full' });
     const b = req.body || {};
     const name = clip(b.name, 64);
     const ticker = clip(b.ticker, 16).toUpperCase().replace(/[^A-Z0-9]/g, '');
@@ -179,8 +164,7 @@ app.post('/api/tokens', rateLimit, (req, res) => {
       logo,
       createdAt: Date.now(),
     };
-    db.tokens.push(rec);
-    save(db);
+    await store.addToken(rec);
     res.status(201).json(rec);
   } catch {
     res.status(500).json({ error: 'server error' });
@@ -191,7 +175,7 @@ app.post('/api/tokens', rateLimit, (req, res) => {
 // Guarded by a shared admin secret so only the operator can call it. If
 // ADMIN_SECRET is unset the endpoint stays disabled (503) — safe by default.
 // Match by record id, by ticker (?by=ticker), or by contract address (?by=ca).
-app.delete('/api/tokens/:id', adminCors, (req, res) => {
+app.delete('/api/tokens/:id', adminCors, async (req, res) => {
   const secret = process.env.ADMIN_SECRET || '';
   if (!secret) return res.status(503).json({ error: 'deletion disabled (set ADMIN_SECRET)' });
   const given = req.get('x-admin-secret') || '';
@@ -205,12 +189,13 @@ app.delete('/api/tokens/:id', adminCors, (req, res) => {
     by === 'ticker' ? String(t.ticker).toUpperCase() === key.toUpperCase() :
     by === 'ca'     ? String(t.ca || '').toLowerCase() === key.toLowerCase() :
                       t.id === key;
-  const before = db.tokens.length;
-  const removed = db.tokens.filter(match);
-  db.tokens = db.tokens.filter((t) => !match(t));
-  if (db.tokens.length === before) return res.status(404).json({ error: 'not found' });
-  save(db);
-  res.json({ ok: true, removed: removed.length, remaining: db.tokens.length });
+  try {
+    const removed = await store.removeTokens(match);
+    if (!removed.length) return res.status(404).json({ error: 'not found' });
+    res.json({ ok: true, removed: removed.length, remaining: store.countTokens() });
+  } catch {
+    res.status(500).json({ error: 'server error' });
+  }
 });
 
 // Dev convenience: serve the static site + uploads same-origin so the frontend
@@ -220,4 +205,8 @@ if (SITE_DIR) {
   app.use(express.static(SITE_DIR));
 }
 
-app.listen(PORT, HOST, () => console.log(`robinfun-api listening on ${HOST}:${PORT}`));
+// Bootstrap: connect the store (MongoDB or JSON) BEFORE accepting requests.
+(async () => {
+  await store.init({ dataDir: DATA_DIR, defaultSettings: DEFAULT_SETTINGS });
+  app.listen(PORT, HOST, () => console.log(`robinfun-api listening on ${HOST}:${PORT} [store: ${store.backend()}]`));
+})().catch((e) => { console.error('fatal: store init failed', e); process.exit(1); });
