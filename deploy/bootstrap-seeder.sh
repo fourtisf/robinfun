@@ -19,7 +19,10 @@ SRC_DIR="${SRC_DIR:-/opt/robinfun}"
 log(){ printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
 die(){ printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 
-: "${PRIVATE_KEY:?Set PRIVATE_KEY to the allow-listed wallet key (0x + 64 hex)}"
+# Key comes from EITHER the shell (FUNDER_KEY/PRIVATE_KEY) OR seeder/.env.
+if [ -z "${FUNDER_KEY:-}${PRIVATE_KEY:-}" ] && [ ! -f "$SRC_DIR/seeder/.env" ]; then
+  die "No funder key. Either: (a) cp $SRC_DIR/seeder/.env.example $SRC_DIR/seeder/.env && edit it, or (b) run with FUNDER_KEY=0x... ./bootstrap-seeder.sh"
+fi
 command -v node >/dev/null 2>&1 || die "node not found."
 command -v pm2  >/dev/null 2>&1 || { log "Installing pm2"; npm install -g pm2 || die "pm2 install failed"; }
 [ -f "$SRC_DIR/seeder/index.js" ] || die "seeder not found at $SRC_DIR/seeder — pull the branch first."
@@ -27,19 +30,15 @@ command -v pm2  >/dev/null 2>&1 || { log "Installing pm2"; npm install -g pm2 ||
 log "Installing seeder deps"
 ( cd "$SRC_DIR/seeder" && npm install --no-audit --no-fund ) || die "npm install failed"
 
-# Config → export so pm2 --update-env passes them to the app.
-export PRIVATE_KEY
-export RPC="${RPC:-https://rpc.mainnet.chain.robinhood.com}"
-export FACTORY_ADDR="${FACTORY_ADDR:-0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2}"
-export BACKEND="${BACKEND:-http://127.0.0.1:3001}"
-export INTERVAL_SECONDS="${INTERVAL_SECONDS:-60}"
-export DEV_BUY_ETH="${DEV_BUY_ETH:-0.001}"
-export CREATOR_LEVY_BPS="${CREATOR_LEVY_BPS:-100}"
-export BUDGET_CAP_ETH="${BUDGET_CAP_ETH:-0.05}"
-export MAX_TOKENS="${MAX_TOKENS:-0}"
-export DRY_RUN="${DRY_RUN:-}"
+# Pass through ONLY what the operator actually set in the shell; everything else
+# comes from seeder/.env (or the app defaults). This keeps .env authoritative.
+for v in FUNDER_KEY PRIVATE_KEY RPC FACTORY_ADDR BACKEND INTERVAL_SECONDS \
+         DEV_BUY_ETH CREATOR_LEVY_BPS BUDGET_CAP_ETH MAX_TOKENS DRY_RUN \
+         NUM_WALLETS FUND_PER_WALLET_ETH WALLET_FILE; do
+  if [ -n "${!v:-}" ]; then export "$v"; fi
+done
 
-log "Starting robinfun-seeder under pm2 (budget cap ${BUDGET_CAP_ETH} ETH, every ${INTERVAL_SECONDS}s)"
+log "Starting robinfun-seeder under pm2 (budget cap ${BUDGET_CAP_ETH:-from .env/default} ETH, every ${INTERVAL_SECONDS:-60}s)"
 cd "$SRC_DIR/seeder"
 pm2 delete robinfun-seeder >/dev/null 2>&1 || true
 pm2 start index.js --name robinfun-seeder --update-env || die "pm2 start failed"
