@@ -24,8 +24,12 @@ die(){ printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 log "Pulling the latest code (branch ${BRANCH})"
 if [ -d "$SRC_DIR/.git" ]; then
   git -C "$SRC_DIR" fetch --depth 1 origin "$BRANCH" || die "git fetch failed"
-  git -C "$SRC_DIR" checkout -B "$BRANCH" "origin/$BRANCH"
-  git -C "$SRC_DIR" reset --hard "origin/$BRANCH"
+  # Reset to FETCH_HEAD, not origin/$BRANCH: a shallow single-branch clone's
+  # fetch refspec may not create a refs/remotes/origin/<other-branch> ref, so
+  # `origin/main` can be "unknown revision". FETCH_HEAD always points at what we
+  # just fetched.
+  git -C "$SRC_DIR" checkout -B "$BRANCH" FETCH_HEAD
+  git -C "$SRC_DIR" reset --hard FETCH_HEAD
 else
   git clone --depth 1 -b "$BRANCH" "$REPO" "$SRC_DIR" || die "git clone failed"
 fi

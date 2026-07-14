@@ -28,8 +28,10 @@ echo "==> robinup: deploying branch \$BRANCH"
 # Pull latest FIRST (this also refreshes update-all.sh itself), then copy the
 # script out of the repo before it runs — a mid-run reset can't truncate it.
 git -C "\$SRC_DIR" fetch --depth 1 origin "\$BRANCH" || { echo "git fetch failed"; exit 1; }
-git -C "\$SRC_DIR" checkout -B "\$BRANCH" "origin/\$BRANCH" >/dev/null 2>&1 || true
-git -C "\$SRC_DIR" reset --hard "origin/\$BRANCH"
+# FETCH_HEAD, not origin/\$BRANCH — a shallow single-branch clone may not create
+# a refs/remotes/origin/<branch> ref for other branches.
+git -C "\$SRC_DIR" checkout -B "\$BRANCH" FETCH_HEAD >/dev/null 2>&1 || true
+git -C "\$SRC_DIR" reset --hard FETCH_HEAD
 cp "\$SRC_DIR/deploy/update-all.sh" /root/ua.sh
 BRANCH="\$BRANCH" bash /root/ua.sh
 EOF
