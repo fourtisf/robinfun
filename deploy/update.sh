@@ -36,8 +36,16 @@ cp "$SRC_DIR/deploy/site/index.html" "$WEBROOT/index.html"
 chown -R www-data:www-data "$WEBROOT"
 chmod -R a+rX "$WEBROOT"
 
-# Backend: pick up new server code if the service exists.
-if systemctl list-unit-files 2>/dev/null | grep -q '^robinfun-api\.service'; then
+# Backend: pick up new server code. Prefer pm2 if it manages the app (after
+# migrate-to-pm2.sh), else fall back to the systemd service.
+if command -v pm2 >/dev/null 2>&1 && pm2 describe robinfun-api >/dev/null 2>&1; then
+    log "Refreshing backend dependencies + restarting via pm2"
+    ( cd "$SRC_DIR/server" && npm install --omit=dev --no-audit --no-fund ) || true
+    ( cd "$SRC_DIR/bot" && npm install --omit=dev --no-audit --no-fund ) || true
+    pm2 restart robinfun-api robinfun-bot --update-env >/dev/null 2>&1 || pm2 restart all || true
+    pm2 save >/dev/null 2>&1 || true
+    log "pm2 apps restarted"
+elif systemctl list-unit-files 2>/dev/null | grep -q '^robinfun-api\.service'; then
     log "Refreshing backend dependencies + restarting the API"
     ( cd "$SRC_DIR/server" && npm install --omit=dev --no-audit --no-fund ) || true
     systemctl restart robinfun-api
