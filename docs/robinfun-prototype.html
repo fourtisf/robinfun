@@ -2156,6 +2156,42 @@ async function mapLimit(items, limit, fn){
   const run = async ()=>{ while(i < items.length){ const idx = i++; try{ await fn(items[idx], idx); }catch(_){} } };
   await Promise.all(Array.from({length: Math.min(limit, items.length)}, run));
 }
+/* Board-stats cache (localStorage) — the on-chain volume/mcap read is inherently
+   slow (trade-history getLogs per token). We snapshot the last computed values
+   and paint them INSTANTLY on the next load (survives hard-refresh), then refresh
+   in the background. So the board shows real numbers immediately, every visit
+   after the first, instead of sitting at $0 while the chain reads run. */
+const BOARD_CACHE_KEY = 'robinfun_board_v2';
+function saveBoardCache(){
+  try{
+    const per = {};
+    for(const t of TOKENS){ if(!t.ca) continue; per[t.ca.toLowerCase()] = {
+      mcap:t.mcap, price:t.price, priceEth:t.priceEth, vol24:t.vol24, volAll:t.volAll,
+      earnedEth:t.earnedEth, graduated:t.graduated, holders:t.holders }; }
+    localStorage.setItem(BOARD_CACHE_KEY, JSON.stringify({ t:Date.now(), paid:PAID_ALLTIME, per }));
+  }catch(_){}
+}
+function restoreBoardCache(){
+  try{
+    const raw = localStorage.getItem(BOARD_CACHE_KEY); if(!raw) return false;
+    const c = JSON.parse(raw); if(!c || !c.per) return false;
+    let hit = false;
+    for(const t of TOKENS){
+      const v = t.ca && c.per[t.ca.toLowerCase()]; if(!v) continue; hit = true;
+      if(v.mcap!=null) t.mcap = v.mcap;
+      if(v.price!=null) t.price = v.price;
+      if(v.priceEth!=null) t.priceEth = v.priceEth;
+      if(v.vol24!=null) t.vol24 = v.vol24;
+      if(v.volAll!=null) t.volAll = v.volAll;
+      if(v.earnedEth!=null) t.earnedEth = v.earnedEth;
+      if(v.graduated!=null) t.graduated = v.graduated;
+      if(v.holders!=null && v.holders>1) t.holders = v.holders;
+    }
+    if(c.paid!=null) PAID_ALLTIME = c.paid;
+    if(hit){ recomputeBoardAggregates(); renderGrid(); renderStats(); }
+    return hit;
+  }catch(_){ return false; }
+}
 async function loadBoardStats(){
   if(_boardBusy || typeof ethers==='undefined') return;
   const reals = TOKENS.filter(t=>realToken(t)).slice(0,40);   // bound cost on large boards
@@ -2176,7 +2212,7 @@ async function loadBoardStats(){
       }catch(_){}
       tick();
     });
-    renderGrid(); renderStats();
+    renderGrid(); renderStats(); saveBoardCache();
     // Phase 2 (heavier): per-token trade history → 24h + all-time volume (merges
     // DEX swaps for graduated tokens inside loadCurveTrades). CONCURRENT too, at a
     // slightly lower fan-out since each token pages several getLogs windows.
@@ -2186,7 +2222,7 @@ async function loadBoardStats(){
       if(++n % 4 === 0) renderGrid();                  // throttle the heavier grid repaint
       tick();
     });
-    recomputeBoardAggregates(); renderGrid(); renderStats();
+    recomputeBoardAggregates(); renderGrid(); renderStats(); saveBoardCache();
   }finally{ _boardBusy = false; }
 }
 
@@ -3516,8 +3552,9 @@ async function loadServerTokens(){
     if(added){
       LAUNCH_COUNT = TOKENS.length;
       if(wallet) seedMyTokens();   // mark my launches as mine for the Treasury
+      restoreBoardCache();         // paint last-known mcap/volume INSTANTLY (survives refresh)
       renderGrid(); renderStats(); renderTape();
-      loadBoardStats();            // fill in real mcap / volume / creator fees (background)
+      loadBoardStats();            // then refresh real mcap / volume / creator fees (background)
     }
     if(pendingTokenId){   // resolve a deep-linked /token/<ca-or-id> once tokens arrive
       const t = tokenByRef(pendingTokenId);
