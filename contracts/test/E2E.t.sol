@@ -81,9 +81,10 @@ contract E2ETest is BaseSetup {
         uint256 creatorGain = feeRouter.creatorOwed(address(token)) - creatorBefore;
         uint256 protocolGain = feeRouter.protocolPending() - protocolBefore;
         assertGt(creatorGain, 0);
-        // Harvest is creator levy (3%) + protocol fee (0.5%): creator gets 90%
-        // of the levy portion (270 bps), protocol the rest (80 bps) → 27:8.
-        assertApproxEqRel(creatorGain * 8, protocolGain * 27, 0.001e18, "harvest split 27:8");
+        // Harvest is creator levy (3%) + protocol fee (1%): creator gets 90%
+        // of the levy portion (270 bps), protocol the rest — 10% of the levy
+        // (30 bps) + the 1% protocol fee (100 bps) = 130 bps → 27:13.
+        assertApproxEqRel(creatorGain * 13, protocolGain * 27, 0.001e18, "harvest split 27:13");
         assertEq(token.balanceOf(address(feeRouter)), 0, "levy inventory fully harvested");
 
         // ------------------------------------------------ 6. creator claims (Treasury page)
