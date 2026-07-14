@@ -71,6 +71,8 @@ const CFG = {
   // DEX (Uniswap V2 on Robinhood Chain) — for buying/selling graduated tokens
   dexRouter: (process.env.DEX_ROUTER || '0x89e5db8b5aa49aa85ac63f691524311aeb649eba').trim(),
   weth: (process.env.WETH || '0x0bd7d308f8e1639fab988df18a8011f41eacad73').trim(),
+  // FeeRouter — where creator levy fees accrue. The creator wallet claims them.
+  feeRouter: (process.env.FEE_ROUTER || '0x10343c9f38ca2a4f543318e378f84c58a4bd10d1').trim(),
 };
 
 const FACTORY_ABI = [
@@ -103,6 +105,13 @@ const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function approve(address spender, uint256 amount) returns (bool)',
   'function allowance(address owner, address spender) view returns (uint256)',
+];
+
+const FEEROUTER_ABI = [
+  'function creatorOwed(address token) view returns (uint256)',            // unclaimed, per token
+  'function creatorEarnedLifetime(address token) view returns (uint256)',  // lifetime (claimed + unclaimed)
+  'function claim(address token)',                                          // claim one token (caller must be creator)
+  'function claimMany(address[] tokens)',                                   // claim many in one tx
 ];
 
 const PRE = ['Doge','Pepe','Wojak','Chad','Turbo','Giga','Baby','Based','Mega','Shib','Floki','Cyber','Rocket','Degen','Sigma','Ninja','Cosmic','Quantum','Hyper','Moon','Ser','Wen','Bonk','Wif','Fren','Comfy','Alpha','Vibe','Astro','Retro'];
@@ -323,7 +332,7 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
   const trade = {};
   try {
     if (ca && Number(CFG.autoBuyEth) > 0) {
-      await botBuy(wallet, provider, ca, ethers.parseEther(String(CFG.autoBuyEth)));
+      await botBuy(wallet, provider, ca, CFG.autoBuyEth);   // ETH string; botBuy parses to wei
       trade.boughtEth = CFG.autoBuyEth;
     }
     if (ca && CFG.autoSellPct > 0) {
@@ -368,6 +377,9 @@ async function ensureApprove(wallet, ca, spender, amount) {
 
 // Buy `ethAmount` ETH of token `ca` from `wallet`. Curve buy while bonding,
 // Uniswap swap once graduated. Returns {ok, venue, hash, pending} | throws.
+// IMPORTANT: `ethAmount` is a HUMAN ETH amount (string/number like "0.01"), NOT
+// wei — this parses it. Never pass ethers.parseEther(...) here (that double-parses
+// into an astronomically large value → "insufficient funds").
 async function botBuy(wallet, provider, ca, ethAmount) {
   const value = ethers.parseEther(String(ethAmount));
   const deadline = Math.floor(Date.now() / 1000) + 600;
@@ -421,7 +433,7 @@ async function seedVolume(provider, buyers, ca, minEth, maxEth) {
       const need = ethers.parseEther(ethStr) + ethers.parseEther('0.0002'); // buy + gas headroom
       const bal = await provider.getBalance(w.address).catch(() => 0n);
       if (bal < need || Number(ethStr) <= 0) { out.push({ address: w.address, skip: true }); continue; }
-      await botBuy(w, provider, ca, ethers.parseEther(ethStr));
+      await botBuy(w, provider, ca, ethStr);   // botBuy parses ETH→wei itself; pass the ETH string (NOT wei)
       out.push({ address: w.address, ok: true, eth: Number(ethStr) });
     } catch (e) { out.push({ address: w.address, ok: false, error: e.shortMessage || e.message }); }
   }
@@ -437,11 +449,61 @@ async function sellHoldings(provider, sellers, ca, pct) {
   return out;
 }
 
+// ---- creator fee (levy) earnings: read + claim ----
+// Read pending + lifetime creator earnings for a list of token CAs.
+// Returns [{ ca, owed (ETH number), lifetime (ETH number) }]. Never throws.
+async function creatorEarnings(provider, cas) {
+  const fr = new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider);
+  const out = [];
+  for (const ca of cas) {
+    if (!ca || !ethers.isAddress(ca)) continue;
+    try {
+      const [owed, life] = await Promise.all([fr.creatorOwed(ca), fr.creatorEarnedLifetime(ca)]);
+      out.push({ ca, owed: Number(ethers.formatEther(owed)), lifetime: Number(ethers.formatEther(life)) });
+    } catch (_) { out.push({ ca, owed: 0, lifetime: 0, error: true }); }
+  }
+  return out;
+}
+
+// Claim creator levy fees. `launched` = [{ ca, creator }]. Only tokens whose
+// creator is one of OUR `wallets` (and that have a positive owed balance) are
+// claimed, grouped per creator wallet via claimMany (one tx each). The ETH lands
+// in that creator wallet — /sweep afterwards to move it to the treasury.
+// Returns [{ address, tokens:[ca…], claimedEth, tx } | { address, tokens, error }].
+async function claimCreator(wallets, provider, launched) {
+  const fr = new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider);
+  const byAddr = new Map(wallets.map((w) => [w.address.toLowerCase(), w]));
+  const groups = new Map();   // creatorAddrLower -> Map(caChecksum -> owedWei)
+  for (const t of (launched || [])) {
+    if (!t || !t.ca || !ethers.isAddress(t.ca) || !t.creator) continue;
+    const key = String(t.creator).toLowerCase();
+    if (!byAddr.has(key)) continue;                       // token not created by a wallet we control
+    let owed = 0n; try { owed = await fr.creatorOwed(t.ca); } catch (_) {}
+    if (owed <= 0n) continue;                             // nothing to claim for this token
+    if (!groups.has(key)) groups.set(key, new Map());
+    groups.get(key).set(ethers.getAddress(t.ca), owed);
+  }
+  const out = [];
+  for (const [key, caMap] of groups) {
+    const w = byAddr.get(key);
+    const tokens = [...caMap.keys()];
+    const total = [...caMap.values()].reduce((s, v) => s + v, 0n);
+    try {
+      const frw = new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, w);
+      const tx = tokens.length === 1 ? await frw.claim(tokens[0]) : await frw.claimMany(tokens);
+      await waitBounded(tx);
+      out.push({ address: w.address, tokens, claimedEth: Number(ethers.formatEther(total)), tx: tx.hash });
+    } catch (e) { out.push({ address: w.address, tokens, error: e.shortMessage || e.reason || e.message }); }
+  }
+  return out;
+}
+
 module.exports = {
-  ethers, CFG, FACTORY_ABI, CURVE_ABI, ROUTER_ABI, ERC20_ABI, INBOX_ABI, makeProvider,
+  ethers, CFG, FACTORY_ABI, CURVE_ABI, ROUTER_ABI, ERC20_ABI, FEEROUTER_ABI, INBOX_ABI, makeProvider,
   genName, fetchMeme, postMeta, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
   resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, randEthStr,
+  creatorEarnings, claimCreator,
 };

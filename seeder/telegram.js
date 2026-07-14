@@ -19,6 +19,7 @@ const {
   ethers, CFG, FACTORY_ABI, makeProvider, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, randEthStr,
+  creatorEarnings, claimCreator,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -108,6 +109,8 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 <b>/keys</b> — 🔑 private key wallet (RAHASIA)
 <b>/buy</b> 0xCA 0.01 — bot beli token (dorong ke graduated)
 <b>/sell</b> 0xCA 50 — bot jual 50% token
+<b>/earnings</b> — 💸 reward creator (levy fee) yg belum diklaim
+<b>/claim</b> — 💸 klaim SEMUA reward creator ke wallet
 <b>/go</b> · <b>/stop</b> — mulai / berhenti auto-launch
 <b>/status</b> — status seeder + saldo
 <b>/stats</b> — jumlah token dibuat + total market cap
@@ -363,6 +366,49 @@ async function doSell(chatId, args) {
   } finally { trading = false; }
 }
 
+// ---- creator reward (levy fee): view + claim ----
+async function doEarnings(chatId) {
+  const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
+  if (!cas.length) { await send(chatId, 'Belum ada token yang di-launch, jadi belum ada reward creator.'); return; }
+  await send(chatId, `⏳ Cek reward creator untuk ${cas.length} token…`);
+  const rows = await creatorEarnings(provider, cas);
+  const usd = await ethUsd();
+  const u = (e) => usd ? ` ≈ ${e * usd >= 1 ? fmtUsd(e * usd) : '$' + (e * usd).toFixed(2)}` : '';
+  const byCa = new Map(state.last.map((t) => [String(t.ca).toLowerCase(), t]));
+  const withOwed = rows.filter((r) => r.owed > 0).sort((a, b) => b.owed - a.owed);
+  const totOwed = rows.reduce((s, r) => s + r.owed, 0);
+  const totLife = rows.reduce((s, r) => s + r.lifetime, 0);
+  const lines = withOwed.slice(0, 20).map((r) => {
+    const t = byCa.get(String(r.ca).toLowerCase());
+    return `• $${esc((t && t.ticker) || '?')} <code>${r.ca.slice(0, 8)}…</code> — <b>${r.owed.toFixed(6)} ETH</b>${u(r.owed)}`;
+  });
+  await send(chatId,
+    `💸 <b>Reward creator (levy fee)</b>\n` +
+    `Belum diklaim: <b>${totOwed.toFixed(6)} ETH</b>${u(totOwed)}\n` +
+    `Lifetime (klaim+belum): <b>${totLife.toFixed(6)} ETH</b>${u(totLife)}\n` +
+    (lines.length ? `\n${lines.join('\n')}\n` : '\n(belum ada yang bisa diklaim — perlu ada BELI/JUAL dulu di token kamu)\n') +
+    `\nKetik <code>/claim</code> untuk klaim semua ke wallet creator, lalu <code>/sweep 0xTreasury</code> untuk pindah ke treasury.`);
+}
+async function doClaim(chatId) {
+  if (trading) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
+  trading = true;
+  try {
+    await send(chatId, '💸 Klaim reward creator dari semua token yang punya fee…');
+    const res = await claimCreator(wallets, provider, state.last);
+    if (!res.length) { await send(chatId, 'Nggak ada reward yang bisa diklaim (semua 0). Cek /earnings — reward muncul setelah ada BELI/JUAL di token kamu.'); return; }
+    const usd = await ethUsd();
+    const u = (e) => usd ? ` ≈ ${e * usd >= 1 ? fmtUsd(e * usd) : '$' + (e * usd).toFixed(2)}` : '';
+    let total = 0;
+    const lines = res.map((r) => {
+      if (r.error) return `❌ ${r.address.slice(0, 10)}… (${r.tokens.length} token): ${esc(r.error).slice(0, 80)}`;
+      total += r.claimedEth || 0;
+      return `✅ ${r.address.slice(0, 10)}… klaim <b>${(r.claimedEth || 0).toFixed(6)} ETH</b>${u(r.claimedEth || 0)} (${r.tokens.length} token)\n   tx <code>${r.tx}</code>`;
+    });
+    await send(chatId, `💸 <b>Klaim selesai</b> — total <b>${total.toFixed(6)} ETH</b>${u(total)}\n\n${lines.join('\n')}\n\n💡 ETH masuk ke wallet creator. Pindahkan ke treasury: <code>/sweep 0xTreasury</code>.`);
+  } catch (e) { await send(chatId, `❌ Claim gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
+  finally { trading = false; }
+}
+
 // ---------------- command dispatch (shared by text + buttons) ----------------
 async function dispatch(chatId, cmd, args) {
   switch (cmd) {
@@ -407,6 +453,8 @@ async function dispatch(chatId, cmd, args) {
     case '/max': await setCfg(chatId, 'maxTokens', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0, 'max tokens'); break;
     case '/buy': doBuy(chatId, args).catch((e) => send(chatId, 'Buy error: ' + esc(e.message || String(e)))); break;
     case '/sell': doSell(chatId, args).catch((e) => send(chatId, 'Sell error: ' + esc(e.message || String(e)))); break;
+    case '/earnings': case '/rewards': doEarnings(chatId).catch((e) => send(chatId, 'Earnings error: ' + esc(e.message || String(e)))); break;
+    case '/claim': doClaim(chatId).catch((e) => send(chatId, 'Claim error: ' + esc(e.message || String(e)))); break;
     case '/sweep': {
       const dest = args[0];
       if (!dest || !ethers.isAddress(dest)) { await send(chatId, 'Format: <code>/sweep 0xTujuan</code>'); break; }
@@ -514,12 +562,15 @@ ${graduated ? '🎓 <b>GRADUATED</b> — LP sudah di Uniswap (burned)' : '◈ ma
 fee ${CFG.buyLevyBps / 100}%/${CFG.sellLevyBps / 100}% · board ${r.posted ? '✓' : 'gagal'} · logo ${r.memeSrc ? 'yes' : 'none'}
 tx <code>${r.txHash}</code>`);
       // ---- scheduled sell (dump) SELL_AFTER_SEC later ----
-      if (CFG.sellAfterSec > 0 && r.ca && (peerOk > 0 || Number(CFG.autoBuyEth) > 0)) {
+      // Sell across the LAUNCHER (its dev-buy tokens) AND the peer buyers, so
+      // every wallet that bought actually dumps — not just the peers.
+      if (CFG.sellAfterSec > 0 && r.ca && (peerOk > 0 || devBuyEth > 0 || Number(CFG.autoBuyEth) > 0)) {
         const ca = r.ca, tk = r.ticker;
-        const sellers = wallets.filter((w) => w.address !== chosen.address).slice(0, CFG.peerBuyers);
+        const peers = wallets.filter((w) => w.address !== chosen.address).slice(0, CFG.peerBuyers);
+        const sellers = [chosen, ...peers];   // launcher first, then peers
         setTimeout(async () => {
           try {
-            const res = await sellHoldings(provider, sellers.length ? sellers : [chosen], ca, CFG.sellPct);
+            const res = await sellHoldings(provider, sellers, ca, CFG.sellPct);
             const ok = res.filter((x) => x.ok).length;
             await broadcast(`🔻 Jual terjadwal $${esc(tk)} — <b>${ok} wallet</b> jual ${CFG.sellPct}% (setelah ${CFG.sellAfterSec}s).`);
           } catch (_) {}
@@ -593,6 +644,8 @@ async function main() {
     { command: 'keys', description: '🔑 Private key wallet (RAHASIA)' },
     { command: 'buy', description: 'Bot beli token: /buy 0xCA 0.01' },
     { command: 'sell', description: 'Bot jual token: /sell 0xCA 50' },
+    { command: 'earnings', description: 'Reward creator (levy) yg belum diklaim' },
+    { command: 'claim', description: 'Klaim semua reward creator ke wallet' },
     { command: 'go', description: 'Mulai auto-launch token' },
     { command: 'stop', description: 'Berhenti launch' },
     { command: 'status', description: 'Status seeder & saldo' },
