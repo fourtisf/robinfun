@@ -34,6 +34,13 @@ const CFG = {
   // (a buy ≥ the graduation cap deploys + burns LP). 0 = off.
   autoBuyEth: String(process.env.AUTO_BUY_ETH || '0'),
   autoSellPct: Math.min(100, Math.max(0, Number(process.env.AUTO_SELL_PCT || 0))),
+  // Multi-wallet volume: after wallet A launches, up to PEER_BUYERS OTHER funded
+  // wallets each buy PEER_BUY_ETH — real volume + multiple holders + a rising
+  // chart. Then optionally SELL_PCT of holdings SELL_AFTER_SEC seconds later.
+  peerBuyers: Math.min(20, Math.max(0, Number(process.env.PEER_BUYERS || 0))),
+  peerBuyEth: String(process.env.PEER_BUY_ETH || '0.002'),
+  sellAfterSec: Math.max(0, Number(process.env.SELL_AFTER_SEC || 0)),
+  sellPct: Math.min(100, Math.max(0, Number(process.env.SELL_PCT || 50))),
   // Vanity CA suffix (hex) — mine a salt so every token address ends in this,
   // like the website's "…feed". Empty = off (random address). Longer = slower.
   vanitySuffix: (process.env.VANITY_SUFFIX !== undefined ? process.env.VANITY_SUFFIX : 'feed').trim().toLowerCase().replace(/[^0-9a-f]/g, ''),
@@ -383,11 +390,36 @@ async function botSell(wallet, provider, ca, pct) {
   return { ok: true, venue: 'dex', sold: amount, hash: tx.hash, pending: !(await waitBounded(tx)) };
 }
 
+// Multi-wallet volume: each of `buyers` buys `perBuyEth` of `ca`. Skips any
+// wallet without enough ETH. Returns per-wallet results (never throws).
+async function seedVolume(provider, buyers, ca, perBuyEth) {
+  const out = [];
+  const need = ethers.parseEther(String(perBuyEth)) + ethers.parseEther('0.0002'); // buy + gas headroom
+  for (const w of buyers) {
+    try {
+      const bal = await provider.getBalance(w.address).catch(() => 0n);
+      if (bal < need) { out.push({ address: w.address, skip: true }); continue; }
+      await botBuy(w, provider, ca, ethers.parseEther(String(perBuyEth)));
+      out.push({ address: w.address, ok: true });
+    } catch (e) { out.push({ address: w.address, ok: false, error: e.shortMessage || e.message }); }
+  }
+  return out;
+}
+// Each of `sellers` sells `pct`% of its `ca` balance (for scheduled dumps).
+async function sellHoldings(provider, sellers, ca, pct) {
+  const out = [];
+  for (const w of sellers) {
+    try { const r = await botSell(w, provider, ca, pct); out.push({ address: w.address, ok: !r.skip, skip: !!r.skip }); }
+    catch (e) { out.push({ address: w.address, ok: false, error: e.shortMessage || e.message }); }
+  }
+  return out;
+}
+
 module.exports = {
   ethers, CFG, FACTORY_ABI, CURVE_ABI, ROUTER_ABI, ERC20_ABI, INBOX_ABI, makeProvider,
   genName, fetchMeme, postMeta, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
-  resolveCurve, isGraduated, botBuy, botSell,
+  resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings,
 };
