@@ -18,7 +18,7 @@ const fs = require('fs');
 const {
   ethers, CFG, FACTORY_ABI, makeProvider, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
-  makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, randEthStr,
+  makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator,
 } = require('./core');
 
@@ -64,6 +64,9 @@ function applyCfg() {
   if (state.cfg.peerBuyEth !== undefined) CFG.peerBuyEth = String(state.cfg.peerBuyEth);
   if (state.cfg.sellAfterSec !== undefined) CFG.sellAfterSec = Math.max(0, Number(state.cfg.sellAfterSec) || 0);
   if (state.cfg.sellPct !== undefined) CFG.sellPct = Math.min(100, Math.max(0, Number(state.cfg.sellPct) || 0));
+  if (state.cfg.autoSaleOn !== undefined) CFG.autoSaleOn = !!state.cfg.autoSaleOn;
+  if (state.cfg.autoSaleEverySec !== undefined) CFG.autoSaleEverySec = Math.max(30, Number(state.cfg.autoSaleEverySec) || 600);
+  if (state.cfg.autoSalePct !== undefined) CFG.autoSalePct = Math.min(100, Math.max(1, Number(state.cfg.autoSalePct) || 100));
   ['devBuyMin', 'devBuyMax', 'peerBuyMin', 'peerBuyMax'].forEach((k) => { if (state.cfg[k] !== undefined) CFG[k] = String(state.cfg[k]); });
 }
 loadState(); applyCfg();
@@ -111,6 +114,8 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 <b>/sell</b> 0xCA 50 — bot jual 50% token
 <b>/earnings</b> — 💸 reward creator (levy fee) yg belum diklaim
 <b>/claim</b> — 💸 klaim SEMUA reward creator ke wallet
+<b>/autosale on|off</b> — 🔻 auto-jual holding di SEMUA token berkala
+<b>/dumpall</b> [%] — 🔻 jual SEKARANG semua token dari semua wallet
 <b>/go</b> · <b>/stop</b> — mulai / berhenti auto-launch
 <b>/status</b> — status seeder + saldo
 <b>/stats</b> — jumlah token dibuat + total market cap
@@ -127,6 +132,7 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 /peerrange 0.001 0.01  (tiap wallet beli ACAK 0.001–0.01 ETH) · /peerbuy = fixed
 /devrange 0.001 0.005  (dev-buy ACAK) · /devbuy = fixed
 /sellafter 300 · /sellpct 50  (jual otomatis setelah 300s; 0=off)
+/autosale on · /autosalepct 100 · /autosaleevery 600  (auto-jual berkala SEMUA token)
 
 Alur: <b>/wallets → kirim ETH (L1) → /bridge → /go</b> ✅`;
 
@@ -291,6 +297,7 @@ buy fee ${(CFG.buyLevyBps / 100)}%  <i>(/buyfee)</i> · sell fee ${(CFG.sellLevy
 auto-buy ${CFG.autoBuyEth} ETH  <i>(/autobuy)</i> · auto-sell ${CFG.autoSellPct}%  <i>(/autosell)</i>
 peer-buy ${CFG.peerBuyers} wallet × ${Number(CFG.peerBuyMax) > 0 ? `${CFG.peerBuyMin || CFG.peerBuyEth}–${CFG.peerBuyMax} ETH (acak)` : `${CFG.peerBuyEth} ETH`}  <i>(/peerbuyers /peerbuy /peerrange)</i>
 sell-after ${CFG.sellAfterSec ? CFG.sellAfterSec + 's · ' + CFG.sellPct + '%' : 'off'}  <i>(/sellafter /sellpct)</i>
+auto-sale ${CFG.autoSaleOn ? `<b>ON</b> · ${CFG.autoSalePct}% tiap ${CFG.autoSaleEverySec}s` : 'off'}  <i>(/autosale /autosalepct /autosaleevery)</i>
 max tokens ${CFG.maxTokens || '∞'}  <i>(/max)</i>
 backend ${CFG.backend}
 funder ${funder ? 'set (auto allow-list + fund)' : 'none (self-funded)'}`;
@@ -408,6 +415,35 @@ async function doClaim(chatId) {
   } catch (e) { await send(chatId, `❌ Claim gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
   finally { trading = false; }
 }
+// ---- auto-sale: sell holdings across ALL already-created tokens ----
+async function doDumpAll(chatId, args) {
+  const pct = args[0] ? Number(args[0]) : 100;
+  if (!(pct > 0 && pct <= 100)) { await send(chatId, 'Format: <code>/dumpall 100</code> — jual 100% SEMUA token dari semua wallet.'); return; }
+  if (trading) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
+  const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
+  if (!cas.length) { await send(chatId, 'Belum ada token yang di-launch.'); return; }
+  trading = true;
+  try {
+    await send(chatId, `🔻 DUMP ALL ${pct}% · ${cas.length} token · dari semua wallet…`);
+    const res = await sellAllHoldings(provider, wallets, cas, pct);
+    const ok = res.filter((r) => r.ok).length, err = res.filter((r) => r.error).length;
+    await send(chatId, ok || err
+      ? `✅ Dump selesai: <b>${ok}</b> posisi terjual${err ? `, ⚠️ ${err} error` : ''} (${cas.length} token dicek).`
+      : `Nggak ada wallet yang pegang token ini (semua saldo 0).`);
+  } catch (e) { await send(chatId, `❌ Dump gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
+  finally { trading = false; }
+}
+async function doAutoSale(chatId, args) {
+  const a = (args[0] || '').toLowerCase();
+  if (a !== 'on' && a !== 'off') {
+    await send(chatId, `Format: <code>/autosale on</code> / <code>/autosale off</code>\nSekarang: <b>${CFG.autoSaleOn ? 'ON' : 'OFF'}</b> · jual ${CFG.autoSalePct}% tiap ${CFG.autoSaleEverySec}s\nAtur: <code>/autosalepct 50</code> · <code>/autosaleevery 600</code>`);
+    return;
+  }
+  state.cfg.autoSaleOn = (a === 'on'); applyCfg(); saveState();
+  await send(chatId, a === 'on'
+    ? `✅ Auto-sale <b>ON</b> — tiap <b>${CFG.autoSaleEverySec}s</b> bot jual <b>${CFG.autoSalePct}%</b> holding di SEMUA token yang sudah dibuat. (/autosale off untuk stop)`
+    : `🛑 Auto-sale <b>OFF</b>.`);
+}
 
 // ---------------- command dispatch (shared by text + buttons) ----------------
 async function dispatch(chatId, cmd, args) {
@@ -455,6 +491,10 @@ async function dispatch(chatId, cmd, args) {
     case '/sell': doSell(chatId, args).catch((e) => send(chatId, 'Sell error: ' + esc(e.message || String(e)))); break;
     case '/earnings': case '/rewards': doEarnings(chatId).catch((e) => send(chatId, 'Earnings error: ' + esc(e.message || String(e)))); break;
     case '/claim': doClaim(chatId).catch((e) => send(chatId, 'Claim error: ' + esc(e.message || String(e)))); break;
+    case '/autosale': doAutoSale(chatId, args).catch((e) => send(chatId, 'Auto-sale error: ' + esc(e.message || String(e)))); break;
+    case '/autosalepct': await setCfg(chatId, 'autoSalePct', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 1 && Number(v) <= 100, 'auto-sale (%)'); break;
+    case '/autosaleevery': await setCfg(chatId, 'autoSaleEverySec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 30, 'auto-sale interval (detik)'); break;
+    case '/dumpall': doDumpAll(chatId, args).catch((e) => send(chatId, 'Dump error: ' + esc(e.message || String(e)))); break;
     case '/sweep': {
       const dest = args[0];
       if (!dest || !ethers.isAddress(dest)) { await send(chatId, 'Format: <code>/sweep 0xTujuan</code>'); break; }
@@ -592,6 +632,27 @@ tx <code>${r.txHash}</code>`);
   }
 }
 
+// ---------------- auto-sale loop: periodically dump holdings across ALL tokens ----------------
+// Runs continuously when CFG.autoSaleOn. Every CFG.autoSaleEverySec it sells
+// CFG.autoSalePct% of every wallet's balance across every already-created token.
+// Shares the `trading` lock with launches/manual trades to avoid nonce clashes;
+// only broadcasts when it actually sold something (no spam on idle rounds).
+async function autoSaleLoop() {
+  for (;;) {
+    if (!CFG.autoSaleOn) { await sleep(3000); continue; }
+    const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
+    if (cas.length && !trading) {
+      trading = true;
+      try {
+        const res = await sellAllHoldings(provider, wallets, cas, CFG.autoSalePct);
+        const ok = res.filter((r) => r.ok).length, err = res.filter((r) => r.error).length;
+        if (ok > 0) await broadcast(`🔻 Auto-sale — jual <b>${CFG.autoSalePct}%</b> di <b>${ok}</b> posisi${err ? ` (⚠️ ${err} error)` : ''} · ${cas.length} token dicek.`);
+      } catch (_) {} finally { trading = false; }
+    }
+    await sleep(CFG.autoSaleEverySec * 1000);
+  }
+}
+
 // ---------------- L1 watcher: auto-detect ETH arriving on Ethereum ----------------
 // Baseline (state.l1seen) is persisted, so a pm2 restart with ETH already sitting
 // on L1 still nudges once, and known balances don't re-notify on every restart.
@@ -655,6 +716,10 @@ async function main() {
     { command: 'sell', description: 'Bot jual token: /sell 0xCA 50' },
     { command: 'earnings', description: 'Reward creator (levy) yg belum diklaim' },
     { command: 'claim', description: 'Klaim semua reward creator ke wallet' },
+    { command: 'autosale', description: 'Auto-jual berkala SEMUA token: /autosale on' },
+    { command: 'autosalepct', description: 'Persen auto-sale: /autosalepct 100' },
+    { command: 'autosaleevery', description: 'Interval auto-sale (detik): /autosaleevery 600' },
+    { command: 'dumpall', description: 'Jual SEKARANG semua token: /dumpall 100' },
     { command: 'go', description: 'Mulai auto-launch token' },
     { command: 'stop', description: 'Berhenti launch' },
     { command: 'status', description: 'Status seeder & saldo' },
@@ -677,6 +742,7 @@ async function main() {
   if (state.admins.length) await broadcast('🤖 Robinfun seeder bot online. /help', menu());
   else console.log('⚠️ No admin yet — the FIRST person to DM the bot IN A PRIVATE CHAT claims admin. Set TELEGRAM_ADMIN_IDS in seeder/.env to lock this down and close the claim window.');
   launchLoop().catch((e) => console.error('loop crashed:', e));
+  autoSaleLoop().catch((e) => console.error('auto-sale loop crashed:', e));
   l1Watcher().catch((e) => console.error('l1 watcher crashed:', e));
   await poll();
 }

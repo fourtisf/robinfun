@@ -41,6 +41,12 @@ const CFG = {
   peerBuyEth: String(process.env.PEER_BUY_ETH || '0.002'),
   sellAfterSec: Math.max(0, Number(process.env.SELL_AFTER_SEC || 0)),
   sellPct: Math.min(100, Math.max(0, Number(process.env.SELL_PCT || 50))),
+  // Continuous AUTO-SALE: a background loop that periodically sells a % of every
+  // wallet's holdings across ALL already-created tokens (take profit / recover
+  // ETH / create sell volume). autoSaleOn=off by default.
+  autoSaleOn: /^(1|true|yes|on)$/i.test(process.env.AUTO_SALE_ON || ''),
+  autoSaleEverySec: Math.max(30, Number(process.env.AUTO_SALE_EVERY_SEC || 600)),
+  autoSalePct: Math.min(100, Math.max(1, Number(process.env.AUTO_SALE_PCT || 100))),
   // Random buy sizes: when a MAX is set, each buy is a random ETH amount in
   // [MIN, MAX] (organic-looking volume) instead of the fixed amount above.
   devBuyMin: String(process.env.DEV_BUY_MIN || ''),
@@ -465,6 +471,21 @@ async function sellHoldings(provider, sellers, ca, pct) {
   }
   return out;
 }
+// Sell `pct`% of EVERY wallet's balance across ALL token CAs in `cas`. botSell
+// reads the balance first and skips wallets holding nothing, so idle positions
+// cost only a cheap balanceOf. Used by the continuous auto-sale loop and /dumpall.
+// Returns [{ ca, address, ok|skip|error }].
+async function sellAllHoldings(provider, wallets, cas, pct) {
+  const out = [];
+  for (const ca of cas) {
+    if (!ca || !ethers.isAddress(ca)) continue;
+    for (const w of wallets) {
+      try { const r = await botSell(w, provider, ca, pct); out.push({ ca, address: w.address, ok: !r.skip, skip: !!r.skip }); }
+      catch (e) { out.push({ ca, address: w.address, ok: false, error: e.shortMessage || e.message }); }
+    }
+  }
+  return out;
+}
 
 // ---- creator fee (levy) earnings: read + claim ----
 // Read pending + lifetime creator earnings for a list of token CAs.
@@ -521,6 +542,6 @@ module.exports = {
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
-  resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, randEthStr,
+  resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator,
 };
