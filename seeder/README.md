@@ -1,58 +1,66 @@
-# Robinfun Seeder Bot
+# Robinfun Seeder Bot (multi-wallet)
 
-Auto-launches meme tokens on the Robinfun launchpad on a schedule, so the board
-stays active. Each launch gets a random meme **name + ticker**, a random **meme
-image** (from a public, SFW-filtered meme API — *not* Pinterest scraping), a
+Auto-launches meme tokens on the Robinfun launchpad on a schedule, spreading
+launches across **N freshly generated deployer wallets** so the board shows
+varied creators. Each launch gets a random meme **name + ticker**, a random
+**meme image** (public, SFW-filtered meme API — *not* Pinterest scraping), a
 configurable **dev-buy**, and a **1% creator levy** by default. Metadata + logo
 are posted to the backend so the token shows on the board.
 
-**It spends real ETH** (deploy fee + dev-buy + gas per launch) — so there is a
-**hard budget cap**: the bot stops itself once it has spent `BUDGET_CAP_ETH`.
+The **funder** (your allow-listed **owner** key) does the plumbing automatically:
+1. generates / loads N deployer wallets → persisted to `wallets.json` (chmod 600),
+2. **allow-lists** them on-chain (`setBetaAllowed`) while `betaMode` is ON,
+3. **funds** each with ETH,
+
+then the bot round-robins launches across them. There is a **hard budget cap**
+(total ETH the funder sends out), so it can never run away with real ETH.
 
 ## Config (env)
 
 | Var | Default | Meaning |
 |-----|---------|---------|
-| `PRIVATE_KEY` | — (required) | Allow-listed wallet key (the one permitted to create). |
-| `DEV_BUY_ETH` | `0.001` | ETH the bot buys of each token at launch. |
-| `CREATOR_LEVY_BPS` | `100` (1%) | Creator fee, buy + sell, in bps (max 1000 = 10%). |
-| `BUDGET_CAP_ETH` | `0.05` | **Hard stop** — bot exits after spending this much total. |
+| `FUNDER_KEY` (or `PRIVATE_KEY`) | — (required) | Funder **+ owner** wallet key (funds + allow-lists the deployers). |
+| `NUM_WALLETS` | `5` | How many deployer wallets to use (2–5+). |
+| `FUND_PER_WALLET_ETH` | `BUDGET_CAP_ETH / NUM_WALLETS` | ETH sent to each deployer. |
+| `BUDGET_CAP_ETH` | `0.05` | **Hard stop** — max total ETH the funder sends out. |
+| `DEV_BUY_ETH` | `0.001` | ETH each launch buys of its token. |
+| `CREATOR_LEVY_BPS` | `100` (1%) | Creator fee, buy + sell (max 1000 = 10%). |
 | `INTERVAL_SECONDS` | `60` | Seconds between launches. |
-| `MAX_TOKENS` | `0` | Optional count cap (0 = unlimited, until budget). |
-| `FACTORY_ADDR` | live factory | Launchpad factory address. |
-| `RPC` | Robinhood mainnet | RPC URL. |
-| `BACKEND` | `http://127.0.0.1:3001` | Metadata API for logos/board. |
-| `MEME_API` | `meme-api.com/gimme` | Random meme image source. |
-| `DRY_RUN` | off | `1` → simulate, send **no** transactions. |
+| `MAX_TOKENS` | `0` | Optional count cap (0 = until wallets run dry). |
+| `WALLET_FILE` | `./wallets.json` | Where the generated keys are stored (keep private!). |
+| `FACTORY_ADDR`, `RPC`, `BACKEND`, `MEME_API`, `DRY_RUN` | live / defaults | See source. |
 
 ## Run
 
-**1. Dry run first (no ETH spent):**
+**1. Dry run first (generates wallets, spends nothing):**
 ```bash
 cd /opt/robinfun/seeder && npm install
-DRY_RUN=1 PRIVATE_KEY=0xYOURKEY node index.js
+DRY_RUN=1 FUNDER_KEY=0xOWNERKEY NUM_WALLETS=5 node index.js
 ```
 
-**2. For real, under pm2 (survives reboots):**
+**2. For real, under pm2:**
 ```bash
-PRIVATE_KEY=0xYOURKEY DEV_BUY_ETH=0.001 CREATOR_LEVY_BPS=100 BUDGET_CAP_ETH=0.05 INTERVAL_SECONDS=60 \
+FUNDER_KEY=0xOWNERKEY NUM_WALLETS=5 DEV_BUY_ETH=0.001 CREATOR_LEVY_BPS=100 \
+BUDGET_CAP_ETH=0.05 INTERVAL_SECONDS=60 \
   bash /opt/robinfun/deploy/bootstrap-seeder.sh
 ```
 
-Watch / control:
+**3. Reclaim leftover ETH** from the deployer wallets back to the funder:
 ```bash
-pm2 logs robinfun-seeder     # live launches
-pm2 stop robinfun-seeder     # pause
-pm2 delete robinfun-seeder && pm2 save   # remove
+cd /opt/robinfun/seeder && FUNDER_KEY=0xOWNERKEY node index.js sweep
 ```
+
+Control: `pm2 logs robinfun-seeder` · `pm2 stop robinfun-seeder` ·
+`pm2 delete robinfun-seeder && pm2 save`.
 
 ## Notes
 
-- The wallet must be **allow-listed** (while `betaMode` is ON) and hold enough
-  ETH. The bot warns if it isn't allow-listed and stops on low balance.
-- **Instant graduation:** if `DEV_BUY_ETH` ≥ the graduation cap, a token
-  graduates to Uniswap immediately (thin pool). To keep tokens *bonding* on the
-  curve, use a dev-buy smaller than the cap (e.g. `0.0003` on a `0.001` cap), or
-  raise the cap in the admin panel.
-- Each launch is logged with name, CA, dev-buy, **gas ETH used**, creator fee,
-  logo URL, running total vs cap, and tx hash.
+- **`wallets.json` holds private keys** — it is git-ignored and chmod 600. Keep
+  it safe; it's how you (and `sweep`) recover the deployers' ETH. Back it up.
+- The funder must be the **owner** (to allow-list) and hold enough ETH to fund
+  all deployers + a little gas.
+- **Instant graduation:** if `DEV_BUY_ETH` ≥ the graduation cap, tokens graduate
+  to Uniswap immediately (thin pool). For tokens that stay *bonding*, use a
+  smaller dev-buy (e.g. `0.0003` on a `0.001` cap) or raise the cap in the admin.
+- Each launch logs which wallet created it, plus name, CA, dev-buy, gas ETH,
+  levy %, logo, and tx hash.

@@ -16,6 +16,10 @@ server/package-lock.json
 .env.*
 !.env.example
 
+# Seeder generated deployer wallets — PRIVATE KEYS, never commit
+seeder/wallets.json
+seeder/node_modules/
+
 # Editor
 .DS_Store
 .idea/
