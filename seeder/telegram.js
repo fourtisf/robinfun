@@ -54,6 +54,11 @@ function applyCfg() {
   CFG.intervalSec = Math.max(5, Number(state.cfg.intervalSec) || 60);
   CFG.levyBps = Math.min(1000, Math.max(0, Number(state.cfg.levyBps) || 0));
   CFG.maxTokens = Math.max(0, Number(state.cfg.maxTokens) || 0);
+  // Newer knobs — keep the env/CFG value when the (older) state has no entry.
+  if (state.cfg.buyLevyBps !== undefined) CFG.buyLevyBps = Math.min(1000, Math.max(0, Number(state.cfg.buyLevyBps) || 0));
+  if (state.cfg.sellLevyBps !== undefined) CFG.sellLevyBps = Math.min(1000, Math.max(0, Number(state.cfg.sellLevyBps) || 0));
+  if (state.cfg.autoBuyEth !== undefined) CFG.autoBuyEth = String(state.cfg.autoBuyEth);
+  if (state.cfg.autoSellPct !== undefined) CFG.autoSellPct = Math.min(100, Math.max(0, Number(state.cfg.autoSellPct) || 0));
 }
 loadState(); applyCfg();
 
@@ -107,7 +112,9 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 <b>/sweep 0x…</b> — tarik ETH sisa ke wallet-mu
 
 <b>Atur setelan:</b>
-/devbuy 0.001 · /interval 60 · /levy 100 · /max 0
+/devbuy 0.001 · /interval 60 · /max 0
+/buyfee 100 · /sellfee 100 · /levy 100 (set dua-duanya)
+/autobuy 0.02 · /autosell 30  (bot beli & jual sendiri → volume; auto-buy ≥ cap = graduate + LP)
 
 Alur: <b>/wallets → kirim ETH (L1) → /bridge → /go</b> ✅`;
 
@@ -268,7 +275,8 @@ factory <code>${CFG.factory}</code>
 wallets ${wallets.length}
 dev-buy ${CFG.devBuyEth} ETH  <i>(/devbuy)</i>
 interval ${CFG.intervalSec}s  <i>(/interval)</i>
-levy ${CFG.levyBps} bps = ${CFG.levyBps / 100}%  <i>(/levy)</i>
+buy fee ${(CFG.buyLevyBps / 100)}%  <i>(/buyfee)</i> · sell fee ${(CFG.sellLevyBps / 100)}%  <i>(/sellfee)</i>
+auto-buy ${CFG.autoBuyEth} ETH  <i>(/autobuy)</i> · auto-sell ${CFG.autoSellPct}%  <i>(/autosell)</i>
 max tokens ${CFG.maxTokens || '∞'}  <i>(/max)</i>
 backend ${CFG.backend}
 funder ${funder ? 'set (auto allow-list + fund)' : 'none (self-funded)'}`;
@@ -290,7 +298,7 @@ async function allowlistMsg() {
 
 async function setCfg(chatId, key, val, ok, label) {
   if (val === undefined || !ok(val)) { await send(chatId, `❌ Nilai tidak valid untuk ${label}.`); return; }
-  state.cfg[key] = (key === 'devBuyEth') ? String(val) : Number(val);
+  state.cfg[key] = (key === 'devBuyEth' || key === 'autoBuyEth') ? String(val) : Number(val);
   applyCfg(); saveState();
   await send(chatId, `✅ ${label} = <b>${state.cfg[key]}</b>`);
 }
@@ -363,7 +371,16 @@ async function dispatch(chatId, cmd, args) {
     case '/allowlist': await send(chatId, await allowlistMsg()); break;
     case '/devbuy': await setCfg(chatId, 'devBuyEth', args[0], (v) => /^\d*\.?\d+$/.test(v) && Number(v) > 0, 'dev-buy (ETH)'); break;
     case '/interval': await setCfg(chatId, 'intervalSec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 5, 'interval (detik)'); break;
-    case '/levy': await setCfg(chatId, 'levyBps', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 1000, 'levy (bps)'); break;
+    case '/levy': {                                   // set BOTH buy + sell fee (bps) at once
+      const v = args[0]; const okv = Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 1000;
+      if (!okv) { await send(chatId, '❌ Nilai tidak valid untuk levy (bps 0-1000).'); break; }
+      state.cfg.buyLevyBps = Number(v); state.cfg.sellLevyBps = Number(v); applyCfg(); saveState();
+      await send(chatId, `✅ buy fee & sell fee = <b>${Number(v) / 100}%</b>`); break;
+    }
+    case '/buyfee': await setCfg(chatId, 'buyLevyBps', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 1000, 'buy fee (bps)'); break;
+    case '/sellfee': await setCfg(chatId, 'sellLevyBps', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 1000, 'sell fee (bps)'); break;
+    case '/autobuy': await setCfg(chatId, 'autoBuyEth', args[0], (v) => /^\d*\.?\d+$/.test(v) && Number(v) >= 0, 'auto-buy (ETH)'); break;
+    case '/autosell': await setCfg(chatId, 'autoSellPct', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 100, 'auto-sell (%)'); break;
     case '/max': await setCfg(chatId, 'maxTokens', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0, 'max tokens'); break;
     case '/buy': doBuy(chatId, args).catch((e) => send(chatId, 'Buy error: ' + esc(e.message || String(e)))); break;
     case '/sell': doSell(chatId, args).catch((e) => send(chatId, 'Sell error: ' + esc(e.message || String(e)))); break;
@@ -514,6 +531,10 @@ async function main() {
     { command: 'stats', description: 'Jumlah token dibuat + market cap' },
     { command: 'last', description: 'History token terakhir + MC' },
     { command: 'config', description: 'Lihat setelan' },
+    { command: 'buyfee', description: 'Set fee beli token bot (bps): /buyfee 100' },
+    { command: 'sellfee', description: 'Set fee jual token bot (bps): /sellfee 100' },
+    { command: 'autobuy', description: 'Bot beli sendiri tiap launch (ETH): /autobuy 0.02' },
+    { command: 'autosell', description: 'Bot jual sendiri tiap launch (%): /autosell 30' },
     { command: 'allowlist', description: 'Cek/allowlist wallet (beta)' },
     { command: 'sweep', description: 'Tarik ETH sisa' },
   ] });

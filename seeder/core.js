@@ -27,6 +27,13 @@ const CFG = {
   intervalSec: Math.max(5, Number(process.env.INTERVAL_SECONDS || 60)),
   devBuyEth: String(process.env.DEV_BUY_ETH || '0.001'),
   levyBps: Math.min(1000, Math.max(0, Number(process.env.CREATOR_LEVY_BPS || 100))),
+  // Creator fee per side — set BUY and SELL separately (both default to CREATOR_LEVY_BPS).
+  buyLevyBps: Math.min(1000, Math.max(0, Number(process.env.BUY_LEVY_BPS || process.env.CREATOR_LEVY_BPS || 100))),
+  sellLevyBps: Math.min(1000, Math.max(0, Number(process.env.SELL_LEVY_BPS || process.env.CREATOR_LEVY_BPS || 100))),
+  // After launching, the bot can trade its OWN token to seed volume / graduate it
+  // (a buy ≥ the graduation cap deploys + burns LP). 0 = off.
+  autoBuyEth: String(process.env.AUTO_BUY_ETH || '0'),
+  autoSellPct: Math.min(100, Math.max(0, Number(process.env.AUTO_SELL_PCT || 0))),
   budgetEth: String(process.env.BUDGET_CAP_ETH || '0.05'),
   fundPerWalletEth: process.env.FUND_PER_WALLET_ETH || '',
   maxTokens: Number(process.env.MAX_TOKENS || 0),
@@ -234,7 +241,7 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
   const value = deployFee + devBuy;
   const params = {
     name, symbol: ticker, metadataURI: '',
-    buyLevyBps: CFG.levyBps, sellLevyBps: CFG.levyBps,
+    buyLevyBps: CFG.buyLevyBps, sellLevyBps: CFG.sellLevyBps,
     decayAtGraduation: false, renounceRateControl: false,
     devBuyMinTokensOut: 0n, vanitySalt: ethers.ZeroHash, maxDeployFee: deployFee,
   };
@@ -251,11 +258,26 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
   const posted = await postMeta({
     name, ticker, ca,
     description: (meme && meme.title ? meme.title : `${name} — a Robinfun fair launch`).slice(0, 280),
-    buyFee: CFG.levyBps / 100, sellFee: CFG.levyBps / 100,
+    buyFee: CFG.buyLevyBps / 100, sellFee: CFG.sellLevyBps / 100,
     creator: wallet.address, logo: meme ? meme.dataUrl : undefined,
   });
 
-  return { ok: true, name, ticker, ca, curve, gasCostWei, txHash: receipt.hash, posted, memeSrc: meme ? meme.src : null, creator: wallet.address };
+  // Optional self-trade phase: seed volume and/or graduate the token (a buy that
+  // crosses the graduation cap deploys + burns the Uniswap LP). Failures here
+  // never fail the launch — the token is already live.
+  const trade = {};
+  try {
+    if (ca && Number(CFG.autoBuyEth) > 0) {
+      await botBuy(wallet, provider, ca, ethers.parseEther(String(CFG.autoBuyEth)));
+      trade.boughtEth = CFG.autoBuyEth;
+    }
+    if (ca && CFG.autoSellPct > 0) {
+      await botSell(wallet, provider, ca, CFG.autoSellPct);
+      trade.soldPct = CFG.autoSellPct;
+    }
+  } catch (e) { trade.error = e.shortMessage || e.message; }
+
+  return { ok: true, name, ticker, ca, curve, gasCostWei, txHash: receipt.hash, posted, memeSrc: meme ? meme.src : null, creator: wallet.address, trade };
 }
 
 // Reclaim leftover ETH from `wallets` to `dest`. Returns [{address, sent|skip|error}].
