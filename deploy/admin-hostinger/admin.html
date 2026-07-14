@@ -329,6 +329,19 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
     <div class="hint" id="gradlp-hint"></div>
   </div>
 
+  <!-- ============ BOARD TOKENS (backend metadata) ============ -->
+  <div class="card danger">
+    <h2>🗑 Board tokens · robinfun.io</h2>
+    <div class="desc">These are the token cards shown on the <b>robinfun.io board</b> (backend metadata — name, ticker, logo, socials). Deleting one removes it from the board only; the on-chain contract is permanent and cannot be deleted. Use this to clear test/testnet launches. Requires <code>ADMIN_SECRET</code>.</div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="field"><label>Admin secret</label><input type="password" id="board-secret" placeholder="ADMIN_SECRET" autocomplete="off"></div>
+      <button class="btn" id="boardReloadBtn" onclick="loadBoardTokens()">↻ Reload list</button>
+      <button class="btn danger" id="boardWipeBtn" onclick="deleteAllBoardTokens()">Delete ALL</button>
+    </div>
+    <div id="board-list" class="cur" style="max-height:340px;overflow:auto;padding:6px 12px">Click <b>Reload list</b> to load the board tokens.</div>
+    <div class="hint" id="board-hint"></div>
+  </div>
+
   <!-- ============ TREASURY / REVENUE ============ -->
   <div class="sec-label">Treasury &amp; revenue (FeeRouter)</div>
   <div class="card">
@@ -1050,6 +1063,51 @@ async function doSetGradLp(){
   }catch(e){ toast('Network error: '+(e.message||e),'err'); }
   finally{ btn.disabled=false; }
 }
+/* ---- board tokens (backend metadata store) ---- */
+async function loadBoardTokens(){
+  const box=document.getElementById('board-list');
+  box.innerHTML='Loading…';
+  try{
+    const r=await fetch(APP+'api/tokens',{headers:{accept:'application/json'}});
+    if(!r.ok) throw new Error('HTTP '+r.status);
+    const list=await r.json();
+    document.getElementById('board-hint').textContent = (Array.isArray(list)?list.length:0)+' token(s) on the board.';
+    if(!Array.isArray(list)||!list.length){ box.innerHTML='No board tokens.'; return; }
+    box.innerHTML = list.map(t=>`<div style="display:flex;align-items:center;gap:10px;padding:7px 2px;border-bottom:1px solid var(--rule)">
+      <b style="min-width:74px">$${esc(t.ticker||'?')}</b>
+      <span class="small" style="flex:1;min-width:0">${esc(t.name||'')} <span class="mono" style="opacity:.6">${t.ca?esc(shortAddr(t.ca)):'(no CA)'}</span></span>
+      <button class="btn sm danger" onclick="deleteBoardToken('${esc(t.id)}',decodeURIComponent('${encodeURIComponent(t.ticker||'')}'),this)">Delete</button>
+    </div>`).join('');
+  }catch(e){ box.innerHTML='Error loading: '+esc(e.message||String(e))+' — is the backend reachable & CORS deployed?'; }
+}
+async function deleteBoardToken(id,ticker,btn){
+  const secret=document.getElementById('board-secret').value;
+  if(!secret){ toast('Enter the ADMIN_SECRET','err'); return; }
+  if(!confirm('Delete $'+ticker+' from the robinfun.io board?')) return;
+  if(btn) btn.disabled=true;
+  try{
+    const r=await fetch(APP+'api/tokens/'+encodeURIComponent(id),{method:'DELETE',headers:{'x-admin-secret':secret}});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ toast('Deleted $'+ticker,'ok'); loadBoardTokens(); }
+    else { toast('Failed: '+(j.error||('HTTP '+r.status)),'err'); if(btn) btn.disabled=false; }
+  }catch(e){ toast('Network error: '+(e.message||e),'err'); if(btn) btn.disabled=false; }
+}
+async function deleteAllBoardTokens(){
+  const secret=document.getElementById('board-secret').value;
+  if(!secret){ toast('Enter the ADMIN_SECRET','err'); return; }
+  let list;
+  try{ list=await (await fetch(APP+'api/tokens',{headers:{accept:'application/json'}})).json(); }
+  catch(e){ toast('Could not load list: '+(e.message||e),'err'); return; }
+  if(!Array.isArray(list)||!list.length){ toast('Board is already empty','ok'); return; }
+  if(!confirm('Delete ALL '+list.length+' board tokens? This cannot be undone.')) return;
+  const btn=document.getElementById('boardWipeBtn'); btn.disabled=true;
+  let ok=0;
+  for(const t of list){
+    try{ const r=await fetch(APP+'api/tokens/'+encodeURIComponent(t.id),{method:'DELETE',headers:{'x-admin-secret':secret}}); if(r.ok) ok++; }catch(_){}
+  }
+  toast('Deleted '+ok+' / '+list.length+' tokens', ok?'ok':'err');
+  btn.disabled=false; loadBoardTokens();
+}
 /* Echo the FULL new address back for character-by-character comparison before
    signing — the cheapest defence against address-poisoning / clipboard swaps. */
 function confirmAddr(action, a){ return confirm(action+'\n\n'+a+'\n\nCheck every character against your source. Proceed?'); }
@@ -1322,6 +1380,7 @@ async function boot(){
   setT('f-addr', shortAddr(FACTORY_ADDR)); setT('r-addr', shortAddr(FEEROUTER_ADDR));
   refreshEthPrice();
   loadGradLp();         // show the current graduated-badge LP threshold from the backend
+  loadBoardTokens();    // list the robinfun.io board tokens (for the delete card)
   await refreshAll();   // read-only view works before connecting a wallet
   const inj=pickInjected();
   if(inj){ try{ const accs=await inj.request({ method:'eth_accounts' }); if(accs&&accs.length){ activeInjected=inj; connect(); } }catch(_){} }

@@ -103,25 +103,26 @@ app.use(express.json({ limit: '6mb' }));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, tokens: db.tokens.length }));
 
-// CORS for the settings endpoints only — the admin console lives on a different
-// origin (robinfun.tech) and needs to GET/POST here. Everything else stays same-origin.
+// CORS for the admin-console endpoints — the console lives on a different origin
+// (robinfun.tech) and needs to GET/POST/DELETE here. Everything else stays
+// same-origin. Only the exact ADMIN_ORIGIN is ever allowed.
 const ADMIN_ORIGIN = process.env.ADMIN_ORIGIN || 'https://robinfun.tech';
-function settingsCors(req, res, next) {
+function adminCors(req, res, next) {
   const origin = req.get('origin') || '';
   if (origin === ADMIN_ORIGIN) {
     res.set('Access-Control-Allow-Origin', ADMIN_ORIGIN);
     res.set('Vary', 'Origin');
     res.set('Access-Control-Allow-Headers', 'content-type, x-admin-secret');
-    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
   }
   if (req.method === 'OPTIONS') return res.status(204).end();
   next();
 }
-app.options('/api/settings', settingsCors);
+app.options('/api/settings', adminCors);
 // Public: the frontend reads these on load.
-app.get('/api/settings', settingsCors, (req, res) => res.json(settings));
+app.get('/api/settings', adminCors, (req, res) => res.json(settings));
 // Admin: change a setting (same x-admin-secret as delete). e.g. { gradLpEth: 2.6 }
-app.post('/api/settings', settingsCors, (req, res) => {
+app.post('/api/settings', adminCors, (req, res) => {
   if (!process.env.ADMIN_SECRET) return res.status(503).json({ error: 'settings locked (set ADMIN_SECRET)' });
   if (!adminOk(req)) return res.status(403).json({ error: 'forbidden' });
   const b = req.body || {};
@@ -134,7 +135,8 @@ app.post('/api/settings', settingsCors, (req, res) => {
   res.json({ ok: true, settings });
 });
 
-app.get('/api/tokens', (req, res) => {
+app.options('/api/tokens/:id', adminCors);   // preflight for the admin-console DELETE
+app.get('/api/tokens', adminCors, (req, res) => {
   res.json(db.tokens.slice().reverse());   // newest first
 });
 
@@ -189,7 +191,7 @@ app.post('/api/tokens', rateLimit, (req, res) => {
 // Guarded by a shared admin secret so only the operator can call it. If
 // ADMIN_SECRET is unset the endpoint stays disabled (503) — safe by default.
 // Match by record id, by ticker (?by=ticker), or by contract address (?by=ca).
-app.delete('/api/tokens/:id', (req, res) => {
+app.delete('/api/tokens/:id', adminCors, (req, res) => {
   const secret = process.env.ADMIN_SECRET || '';
   if (!secret) return res.status(503).json({ error: 'deletion disabled (set ADMIN_SECRET)' });
   const given = req.get('x-admin-secret') || '';
