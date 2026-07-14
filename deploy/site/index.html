@@ -1082,20 +1082,6 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <input type="text" id="c-wallet" class="mono" placeholder="Connect wallet to autofill" spellcheck="false">
             <div class="hint">Fees are harvested to ETH automatically and stream here. Claim any time from the Treasury tab.</div>
           </div>
-          <div class="switch-row">
-            <div>
-              <div class="sw-t">Halve fee at graduation</div>
-              <div class="sw-d">Signals long-term intent — rates drop 50% when the token graduates to Uniswap.</div>
-            </div>
-            <label class="switch"><input type="checkbox" id="c-decay" onchange="projector()"><span class="track"></span></label>
-          </div>
-          <div class="switch-row">
-            <div>
-              <div class="sw-t">Renounce rate control</div>
-              <div class="sw-d">Locks the fee permanently. Without this, you can lower rates later — but never raise them.</div>
-            </div>
-            <label class="switch"><input type="checkbox" id="c-renounce"><span class="track"></span></label>
-          </div>
         </div>
 
         <div style="height:14px"></div>
@@ -1526,7 +1512,19 @@ const CHAIN = {
   blockExplorerUrls: ['https://robinhoodchain.blockscout.com'],
 };
 /* Deployed RobinfunFactory (MAINNET beta — graduates to real Uniswap V2). */
-const FACTORY_ADDR = '0xf0a093bc6ab5bb408ca1f084ec2161d879edaa57';   // mainnet beta v2 (capped 0.001, allowlist, real Uniswap)
+const FACTORY_ADDR = '0xf0a093bc6ab5bb408ca1f084ec2161d879edaa57';   // mainnet v3 — uniform 1% fee, 0.005 ETH cap
+// Superseded factories: tokens minted on them still resolve their curve here as
+// a fallback, so their trades/stats keep loading after a factory migration.
+const LEGACY_FACTORIES = ['0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2'];
+// curveOf across the current factory then any legacy one (returns '' if unknown).
+async function curveOfAny(ca, ro){
+  const provider = ro || roProvider();
+  for(const fa of [FACTORY_ADDR, ...LEGACY_FACTORIES]){
+    try{ const c = await new ethers.Contract(fa, FACTORY_ABI, provider).curveOf(ca);
+      if(c && /^0x[0-9a-fA-F]{40}$/.test(c) && c !== ethers.ZeroAddress) return c; }catch(_){}
+  }
+  return '';
+}
 /* FeeRouter — authoritative source for a creator's real, on-chain earnings. */
 const FEEROUTER_ADDR = '0x10343c9f38ca2a4f543318e378f84c58a4bd10d1';
 const FEEROUTER_ABI = [
@@ -2186,7 +2184,7 @@ async function loadHoldings(addr){
     try{
       const [balRaw, curveAddr] = await Promise.all([
         new ethers.Contract(t.ca, ERC20_ABI, ro).balanceOf(addr),
-        (t.curveAddr ? Promise.resolve(t.curveAddr) : new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro).curveOf(t.ca)),
+        (t.curveAddr ? Promise.resolve(t.curveAddr) : curveOfAny(t.ca, ro)),
       ]);
       const amt = Number(ethers.formatEther(balRaw));
       if(amt <= 1e-9) return null;
@@ -2501,8 +2499,8 @@ async function loadCurveState(t){
   try{
     const ro = roProvider();
     if(!t.curveAddr){
-      const c = await new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro).curveOf(t.ca);
-      if(!c || c===ethers.ZeroAddress) return false;
+      const c = await curveOfAny(t.ca, ro);   // current factory, then any legacy one
+      if(!c) return false;
       t.curveAddr = c;
     }
     const curve = new ethers.Contract(t.curveAddr, CURVE_ABI, ro);
@@ -3332,7 +3330,7 @@ function projector(){
   const avg = (b+s)/2/100;
   const gross = vol*avg;
   const net = gross*0.9;
-  const decay = document.getElementById('c-decay').checked;
+  const decay = false; // halve-fee-at-graduation feature removed
   document.getElementById('receipt').innerHTML =
     `<div class="r-line"><span>Assumed volume / day</span><b>${fmtUsdFull(vol)}</b></div>`+
     `<div class="r-line"><span>Avg fee (buy ${b}% · sell ${s}%)</span><b>${((b+s)/2).toFixed(2)}%</b></div>`+
@@ -3428,8 +3426,8 @@ async function deploy(){
     desc: document.getElementById('c-desc').value.trim() || 'Freshly launched on Robinfun.',
     buyTax: parseFloat(document.getElementById('r-buy').value),
     sellTax: parseFloat(document.getElementById('r-sell').value),
-    decay: document.getElementById('c-decay').checked,
-    renounced: document.getElementById('c-renounce').checked,
+    decay: false, // halve-fee-at-graduation feature removed
+    renounced: false, // renounce-rate-control feature removed
     vanity: false, // vanity …feed address feature removed
     devBuy,
   };
