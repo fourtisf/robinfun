@@ -40,15 +40,40 @@ Run **only one** at a time so the same wallets aren't used twice.
 ### Commands
 | Command | What it does |
 |---------|--------------|
-| `/wallets` | The deployer addresses + balances — **send ETH here**. |
+| `/wallets` | Deployer addresses + balances on **both** Robinhood Chain and Ethereum L1, each with a live **USD** value. |
+| `/bridge` | Move ETH from **Ethereum L1 → Robinhood Chain** (canonical Orbit `depositEth`, same address). Requires a verified `L1_INBOX_ADDR`. |
+| `/keys` | 🔑 Reveal the deployer **private keys** (admin only, spoiler-hidden). |
 | `/go` | Start auto-launching (every `interval`s from any funded wallet). |
 | `/stop` | Pause launching. |
-| `/status` | Running state, launch count, balances, beta/allow-list. |
-| `/last` | The most recently launched tokens (name, ticker, CA). |
+| `/status` | Running state, launch count, balances (+ USD), beta/allow-list. |
+| `/stats` | Tokens created + total market cap (ETH + USD). |
+| `/last` | The most recently launched tokens (name, ticker, CA, MC). |
 | `/config` | Show current settings. |
 | `/devbuy 0.001` · `/interval 60` · `/levy 100` · `/max 0` | Change settings live. |
 | `/allowlist` | Check (and, with `FUNDER_KEY`, fix) beta allow-listing. |
 | `/sweep 0x…` | Reclaim leftover ETH from the deployer wallets. |
+
+**Security:** the bot authenticates by Telegram **user id** (not chat id) and only
+auto-claims admin in a **private** chat. Set `TELEGRAM_ADMIN_IDS` to lock the admin
+list explicitly. `/keys` and `/bridge` move real value — keep the bot private.
+
+### Bridge (Ethereum L1 → Robinhood Chain)
+
+Robinhood Chain settles to Ethereum mainnet, so a deployer wallet can bridge its
+own ETH to the **same address** on Robinhood Chain via the canonical Orbit
+`Inbox.depositEth()`. To enable it you must set the **verified** L1 Inbox address:
+
+```bash
+# get the REAL Inbox address from https://docs.robinhood.com/chain/protocol-contracts/
+# verify it on blockscout/etherscan, then:
+echo 'L1_INBOX_ADDR=0x...' >> seeder/.env
+pm2 restart robinfun-seeder-bot
+```
+
+The bot never sends ETH to an unverified/scam Inbox: `L1_INBOX_ADDR` has no default,
+and the bot checks the address has contract code before depositing. Deposits keep a
+gas reserve, use a bounded confirmation wait, and take ~10–15 min to appear on
+Robinhood Chain. ⚠️ Never use `robinhood-bridge.app` / `robinbridge.xyz` — phishing.
 
 **Flow: `/wallets` → send ETH → `/go` ✅** — it launches automatically and DMs you
 each new token.

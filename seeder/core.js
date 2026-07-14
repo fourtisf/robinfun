@@ -165,7 +165,13 @@ async function verifyInbox(l1Provider, addr) {
 }
 
 // Bridge a single wallet's L1 ETH to Robinhood Chain via Inbox.depositEth().
-// Keeps a gas reserve (estimated) on L1. Returns {ok, bridged, hash} | {skip} | throws.
+// Keeps a gas reserve on L1 and sets explicit, headroomed gas so a base-fee
+// rise can't strand the tx. Returns one of:
+//   {skip}                                  — nothing sent (too little ETH)
+//   {ok, bridged, hash, receipt}            — sent + confirmed
+//   {ok, pending, bridged, hash}            — sent, not confirmed within timeout
+//   {ok, unconfirmed, bridged, hash, error} — sent, confirmation RPC errored
+// Throws ONLY if the send itself fails (no tx broadcast).
 async function bridgeOne(wallet, l1Provider, inboxAddr, minEthStr) {
   const signer = wallet.connect(l1Provider);
   const bal = await l1Provider.getBalance(signer.address);
@@ -173,15 +179,22 @@ async function bridgeOne(wallet, l1Provider, inboxAddr, minEthStr) {
   let gasLimit = 130000n;
   try { const est = await inbox.depositEth.estimateGas({ value: 1n }); gasLimit = (est * 15n) / 10n; } catch (_) {}
   const fee = await l1Provider.getFeeData();
-  const gasPrice = fee.maxFeePerGas || fee.gasPrice || ethers.parseUnits('40', 'gwei');
-  const reserve = gasLimit * gasPrice * 2n; // keep 2x estimated gas on L1
+  const baseMax = fee.maxFeePerGas || fee.gasPrice || ethers.parseUnits('40', 'gwei');
+  const maxFeePerGas = baseMax * 2n; // headroom so a routine base-fee rise doesn't wedge the tx
+  const maxPriorityFeePerGas = fee.maxPriorityFeePerGas || ethers.parseUnits('2', 'gwei');
+  const reserve = gasLimit * maxFeePerGas; // the tx can never cost more than this
   const minEth = ethers.parseEther(minEthStr);
   if (bal <= reserve) return { skip: true, reason: 'saldo L1 < cadangan gas', bal };
   const amount = bal - reserve;
   if (amount < minEth) return { skip: true, reason: 'di bawah minimum bridge', bal, amount };
-  const tx = await inbox.depositEth({ value: amount });
-  const receipt = await tx.wait();
-  return { ok: true, bridged: amount, hash: tx.hash, receipt };
+  const tx = await inbox.depositEth({ value: amount, gasLimit, maxFeePerGas, maxPriorityFeePerGas });
+  try {
+    const receipt = await tx.wait(1, 180000); // bounded wait so a stuck tx can't hang the bot
+    return { ok: true, bridged: amount, hash: tx.hash, receipt };
+  } catch (e) {
+    if (e && e.code === 'TIMEOUT') return { ok: true, pending: true, bridged: amount, hash: tx.hash };
+    return { ok: true, unconfirmed: true, bridged: amount, hash: tx.hash, error: e.shortMessage || e.message };
+  }
 }
 
 async function checkBeta(factoryRead, wallets) {

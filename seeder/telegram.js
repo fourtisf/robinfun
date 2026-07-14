@@ -35,6 +35,7 @@ const state = {
   launched: 0,
   last: [],
   cfg: { devBuyEth: CFG.devBuyEth, intervalSec: CFG.intervalSec, levyBps: CFG.levyBps, maxTokens: CFG.maxTokens },
+  l1seen: {}, // per-wallet last-seen L1 balance (decimal string) — survives restarts
 };
 function loadState() {
   try {
@@ -42,6 +43,7 @@ function loadState() {
     Object.assign(state, s);
     if (!Array.isArray(state.admins)) state.admins = [];
     if (!Array.isArray(state.last)) state.last = [];
+    if (!state.l1seen || typeof state.l1seen !== 'object') state.l1seen = {};
     if (!state.cfg) state.cfg = { devBuyEth: CFG.devBuyEth, intervalSec: CFG.intervalSec, levyBps: CFG.levyBps, maxTokens: CFG.maxTokens };
     if (CFG.tgAdmins.length) state.admins = Array.from(new Set([...state.admins.map(String), ...CFG.tgAdmins.map(String)]));
   } catch (_) {}
@@ -64,6 +66,8 @@ async function tg(method, params) {
 }
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const fmtUsd = (n) => n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? '$' + (n / 1e3).toFixed(1) + 'k' : '$' + n.toFixed(0);
+const ethShort = (wei) => { const n = Number(ethers.formatEther(wei)); return n === 0 ? '0' : n.toFixed(6).replace(/0+$/, '').replace(/\.$/, ''); };
+const usdOf = (wei, usd) => { if (!usd) return ''; const v = Number(ethers.formatEther(wei)) * usd; return ` (${v >= 1000 ? fmtUsd(v) : '$' + v.toFixed(2)})`; };
 async function send(chatId, text, extra) { return tg('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(extra || {}) }); }
 async function broadcast(text, extra) { for (const id of state.admins) { await send(id, text, extra); } }
 async function answerCb(id, text) { return tg('answerCallbackQuery', { callback_query_id: id, ...(text ? { text } : {}) }); }
@@ -106,18 +110,18 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 Alur: <b>/wallets → kirim ETH (L1) → /bridge → /go</b> ✅`;
 
 async function walletsMsg() {
-  const [l2bals, l1bals] = await Promise.all([balances(), l1Balances()]);
+  const [l2bals, l1bals, usd] = await Promise.all([balances(), l1Balances(), ethUsd()]);
   let t = `<b>💰 Deployer wallets (${wallets.length})</b>\nKirim ETH ke alamat berikut:\n`;
   let tL2 = 0n, tL1 = 0n;
   wallets.forEach((w, i) => {
     const b2 = l2bals[i]; tL2 += b2;
-    let line = `\n<code>${w.address}</code>\n   🟣 RH: ${fmt(b2)} ETH`;
-    if (l1bals) { const b1 = l1bals[i]; tL1 += b1; line += ` · ⟠ L1: ${fmt(b1)} ETH${b1 > 0n ? ' 🌉' : ''}`; }
+    let line = `\n<code>${w.address}</code>\n   🟣 RH: ${ethShort(b2)} ETH${usdOf(b2, usd)}`;
+    if (l1bals) { const b1 = l1bals[i]; tL1 += b1; line += ` · ⟠ L1: ${ethShort(b1)} ETH${usdOf(b1, usd)}${b1 > 0n ? ' 🌉' : ''}`; }
     t += line;
   });
-  t += `\n\n<b>Total RH: ${fmt(tL2)} ETH</b>`;
-  if (l1bals) t += ` · <b>Total L1: ${fmt(tL1)} ETH</b>\n🌉 = ada ETH di Ethereum → /bridge ke Robinhood Chain`;
-  t += `\n\n🔑 /keys · backup wallets.json (chmod 600)`;
+  t += `\n\n<b>Total RH: ${ethShort(tL2)} ETH${usdOf(tL2, usd)}</b>`;
+  if (l1bals) t += `\n<b>Total L1: ${ethShort(tL1)} ETH${usdOf(tL1, usd)}</b>\n🌉 = ada ETH di Ethereum → /bridge ke Robinhood Chain`;
+  t += `\n\n🔑 /keys · harga ETH ${usd ? fmtUsd(usd) : '—'} · backup wallets.json`;
   return t;
 }
 
@@ -129,7 +133,7 @@ function keysMsg() {
 
 async function bridgeMsg() {
   if (!l1) return '⚠️ <b>L1_RPC belum aktif.</b> Set <code>L1_RPC</code> di seeder/.env untuk deteksi + bridge ETH dari Ethereum.';
-  const l1bals = await l1Balances();
+  const [l1bals, usd] = await Promise.all([l1Balances(), ethUsd()]);
   const min = ethers.parseEther(CFG.bridgeMinEth);
   const inboxSet = ethers.isAddress(CFG.l1InboxAddr);
   const ver = inboxSet ? await verifyInbox(l1, CFG.l1InboxAddr) : { ok: false, reason: 'belum di-set' };
@@ -138,10 +142,10 @@ async function bridgeMsg() {
   wallets.forEach((w, i) => {
     const b = l1bals[i];
     if (b >= min) { ready++; totalReady += b; }
-    rows += `<code>${w.address.slice(0, 12)}…</code>  ⟠ ${fmt(b)} ETH ${b >= min ? '✅ siap' : '—'}\n`;
+    rows += `<code>${w.address.slice(0, 12)}…</code>  ⟠ ${ethShort(b)} ETH${usdOf(b, usd)} ${b >= min ? '✅ siap' : '—'}\n`;
   });
-  let t = `<b>🌉 Bridge ETH → Robinhood Chain</b>\nEthereum L1 → RH Chain lewat <i>depositEth</i> resmi (address sama, ~10–15 menit).\n\n${rows}\nSiap bridge: <b>${ready}/${wallets.length}</b> wallet · ~${fmt(totalReady)} ETH\n`;
-  t += `\nInbox L1: ${inboxSet ? `<code>${CFG.l1InboxAddr}</code>\n${ver.ok ? '✓ kontrak terdeteksi di L1' : '⚠️ ' + ver.reason}` : '❌ <b>belum di-set</b>'}\n`;
+  let t = `<b>🌉 Bridge ETH → Robinhood Chain</b>\nEthereum L1 → RH Chain lewat <i>depositEth</i> resmi (address sama, ~10–15 menit).\n\n${rows}\nSiap bridge: <b>${ready}/${wallets.length}</b> wallet · ~${ethShort(totalReady)} ETH${usdOf(totalReady, usd)}\n`;
+  t += `\nInbox L1: ${inboxSet ? `<code>${CFG.l1InboxAddr}</code>\n${ver.ok ? '✓ kontrak terdeteksi di L1' : '⚠️ ' + esc(ver.reason)}` : '❌ <b>belum di-set</b>'}\n`;
   if (!inboxSet) {
     t += `\n⚠️ <b>WAJIB set alamat Inbox resmi dulu.</b> Ambil dari <b>docs.robinhood.com/chain/protocol-contracts/</b>, verifikasi di Etherscan/Blockscout, lalu:\n<code>echo 'L1_INBOX_ADDR=0x...' >> seeder/.env</code> lalu <code>pm2 restart robinfun-seeder-bot</code>.\n\n🚫 JANGAN pakai alamat dari sumber tak resmi (robinhood-bridge.app / robinbridge.xyz = <b>scam</b>). Salah alamat = ETH hilang permanen.`;
   } else if (!ver.ok) {
@@ -174,28 +178,36 @@ let bridging = false; // guard: never run two bridge passes at once (double-spen
 async function doBridgeAll(chatId) {
   if (!l1) { await send(chatId, 'L1_RPC belum aktif.'); return; }
   if (!ethers.isAddress(CFG.l1InboxAddr)) { await send(chatId, 'Inbox belum di-set. Lihat /bridge.'); return; }
+  // Claim the lock SYNCHRONOUSLY (before any await) so two rapid taps can't both
+  // pass the check — doBridgeAll is now fire-and-forget, so the poll loop no
+  // longer serializes it for us.
   if (bridging) { await send(chatId, '⏳ Bridge sedang berjalan — tunggu selesai dulu.'); return; }
-  const ver = await verifyInbox(l1, CFG.l1InboxAddr);
-  if (!ver.ok) { await send(chatId, `⚠️ Inbox gagal verifikasi: ${ver.reason}. Bridge dibatalkan demi keamanan.`); return; }
   bridging = true;
   try {
+    const ver = await verifyInbox(l1, CFG.l1InboxAddr);
+    if (!ver.ok) { await send(chatId, `⚠️ Inbox gagal verifikasi: ${esc(ver.reason)}. Bridge dibatalkan demi keamanan.`); return; }
     await send(chatId, '🌉 Mulai bridge dari Ethereum L1… (mohon tunggu, jangan spam)');
-    let done = 0, skipped = 0;
+    let done = 0, skipped = 0, errored = 0;
     for (const w of wallets) {
+      const tag = `<code>${w.address.slice(0, 12)}…</code>`;
       try {
         const r = await bridgeOne(w, l1, CFG.l1InboxAddr, CFG.bridgeMinEth);
-        if (r.ok) { done++; await send(chatId, `✅ <code>${w.address.slice(0, 12)}…</code> bridge <b>${fmt(r.bridged)} ETH</b>\ntx L1 <code>${r.hash}</code>`); }
+        if (r.ok && r.pending) { done++; await send(chatId, `⏳ ${tag} deposit terkirim (belum konfirmasi)\ntx L1 <code>${r.hash}</code>\nCek di explorer — JANGAN kirim ulang.`); }
+        else if (r.ok && r.unconfirmed) { done++; await send(chatId, `⏳ ${tag} terkirim, konfirmasi RPC gagal: ${esc(r.error)}\ntx L1 <code>${r.hash}</code>\nCek di explorer — JANGAN kirim ulang.`); }
+        else if (r.ok) { done++; await send(chatId, `✅ ${tag} bridge <b>${ethShort(r.bridged)} ETH</b>\ntx L1 <code>${r.hash}</code>`); }
         else skipped++;
-      } catch (e) { await send(chatId, `❌ <code>${w.address.slice(0, 12)}…</code>: ${esc(e.shortMessage || e.reason || e.message)}`); }
+      } catch (e) { errored++; await send(chatId, `❌ ${tag}: ${esc(e.shortMessage || e.reason || e.message)}`); }
     }
     await send(chatId, done
-      ? `Selesai — ${done} wallet di-bridge${skipped ? `, ${skipped} dilewati` : ''}. ETH muncul di Robinhood Chain ~10–15 menit, lalu /go untuk deploy.`
-      : 'Tidak ada wallet dengan cukup ETH di L1 untuk di-bridge.');
+      ? `Selesai — ${done} wallet di-bridge${skipped ? `, ${skipped} dilewati` : ''}${errored ? `, ${errored} gagal (lihat error di atas)` : ''}. ETH muncul di Robinhood Chain ~10–15 menit, lalu /go untuk deploy.`
+      : errored
+        ? `Bridge gagal untuk ${errored} wallet — lihat error di atas. Tidak ada ETH yang ter-bridge.`
+        : 'Tidak ada wallet dengan cukup ETH di L1 untuk di-bridge.');
   } finally { bridging = false; }
 }
 
 async function statusMsg() {
-  const bals = await balances();
+  const [bals, usd] = await Promise.all([balances(), ethUsd()]);
   const total = bals.reduce((a, b) => a + b, 0n);
   let deployFee = 0n; try { deployFee = await readDeployFee(factoryRead); } catch (_) {}
   const need = deployFee + ethers.parseEther(CFG.devBuyEth) + gasBuf;
@@ -205,7 +217,7 @@ async function statusMsg() {
   return `<b>📊 Status</b>
 Seeder: ${state.running ? '▶️ ON' : '⏸️ OFF'}
 Token dibuat: <b>${state.launched}</b>${CFG.maxTokens ? ` / ${CFG.maxTokens}` : ''}
-Wallet ber-ETH: ${funded}/${wallets.length} · total ${fmt(total)} ETH
+Wallet ber-ETH: ${funded}/${wallets.length} · total ${ethShort(total)} ETH${usdOf(total, usd)}
 betaMode: ${beta} · ${allow}
 interval ${CFG.intervalSec}s · dev-buy ${CFG.devBuyEth} ETH · levy ${CFG.levyBps / 100}%
 butuh ≥ ${fmt(need)} ETH/wallet untuk 1 launch`;
@@ -261,13 +273,13 @@ funder ${funder ? 'set (auto allow-list + fund)' : 'none (self-funded)'}`;
 }
 
 async function allowlistMsg() {
-  let c; try { c = await checkBeta(factoryRead, wallets); } catch (e) { return 'Gagal cek allow-list: ' + (e.shortMessage || e.message); }
+  let c; try { c = await checkBeta(factoryRead, wallets); } catch (e) { return 'Gagal cek allow-list: ' + esc(e.shortMessage || e.message); }
   if (!c.beta) return '✅ betaMode OFF — semua wallet bisa create. Tinggal isi ETH lalu /go.';
   if (!c.missing.length) return '✅ Semua wallet sudah di-allowlist. Tinggal isi ETH lalu /go.';
   let t = `⚠️ betaMode ON. ${c.missing.length} wallet BELUM di-allowlist (createToken akan revert):\n` + c.missing.map((w) => `<code>${w.address}</code>`).join('\n');
   if (funder && c.owner.toLowerCase() === funder.address.toLowerCase()) {
     try { const tx = await new ethers.Contract(CFG.factory, FACTORY_ABI, funder).setBetaAllowed(c.missing.map((w) => w.address), true); await tx.wait(); return '✅ Sudah di-allowlist otomatis via FUNDER_KEY.'; }
-    catch (e) { t += `\n\nGagal auto-allowlist: ${e.shortMessage || e.message}`; }
+    catch (e) { t += `\n\nGagal auto-allowlist: ${esc(e.shortMessage || e.message)}`; }
   } else {
     t += `\n\nFix di admin panel <b>robinfun.tech</b> → Allow-list → paste alamat → Allow. Atau matikan beta (go public).`;
   }
@@ -299,7 +311,8 @@ async function dispatch(chatId, cmd, args) {
     case '/wallets': await send(chatId, await walletsMsg()); break;
     case '/keys': case '/key': await send(chatId, keysMsg()); break;
     case '/bridge': await send(chatId, await bridgeMsg(), bridgeMenu()); break;
-    case '/bridge_go': await doBridgeAll(chatId); break;
+    // fire-and-forget: don't block the poll loop while deposits confirm on L1
+    case '/bridge_go': doBridgeAll(chatId).catch((e) => send(chatId, 'Bridge error: ' + esc(e.message || String(e)))); break;
     case '/bridge_help': await send(chatId, BRIDGE_HELP); break;
     case '/status': await send(chatId, await statusMsg(), menu()); break;
     case '/stats': await send(chatId, await statsMsg(), menu()); break;
@@ -317,7 +330,7 @@ async function dispatch(chatId, cmd, args) {
       if (!dest || !ethers.isAddress(dest)) { await send(chatId, 'Format: <code>/sweep 0xTujuan</code>'); break; }
       await send(chatId, '🧹 Sweeping…');
       const res = await sweepAll(wallets, provider, dest);
-      const lines = res.map((r) => r.sent !== undefined ? `${r.address.slice(0, 10)}… → ${fmt(r.sent)} ETH` : r.skip ? null : `${r.address.slice(0, 10)}… gagal: ${r.error}`).filter(Boolean);
+      const lines = res.map((r) => r.sent !== undefined ? `${r.address.slice(0, 10)}… → ${fmt(r.sent)} ETH` : r.skip ? null : `${r.address.slice(0, 10)}… gagal: ${esc(r.error)}`).filter(Boolean);
       await send(chatId, lines.length ? '✅ Sweep:\n' + lines.join('\n') : 'Tidak ada ETH untuk di-sweep.');
       break;
     }
@@ -327,20 +340,26 @@ async function dispatch(chatId, cmd, args) {
 
 async function handleUpdate(u) {
   if (u.callback_query) return handleCallback(u.callback_query);
-  const msg = u.message || u.edited_message;
-  if (!msg || !msg.text) return;
-  const chatId = msg.chat.id;
+  const msg = u.message;
+  if (!msg || !msg.text || !msg.from) return;
+  const chatId = msg.chat.id;      // reply destination
+  const uid = msg.from.id;         // authorization principal (the acting USER)
+  // auto-claim admin ONLY in a private chat, and claim the USER id (never a group id)
+  if (state.admins.length === 0 && msg.chat.type === 'private') {
+    state.admins.push(String(uid)); saveState();
+    await send(chatId, '✅ Kamu sekarang <b>admin</b> bot ini. Ketik /help.');
+  }
+  if (!isAdmin(uid)) { await send(chatId, '⛔ Bot ini privat.'); return; }
   const [cmdRaw, ...args] = msg.text.trim().split(/\s+/);
   const cmd = cmdRaw.toLowerCase().replace(/@.*$/, '');
-  if (state.admins.length === 0) { state.admins.push(String(chatId)); saveState(); await send(chatId, '✅ Kamu sekarang <b>admin</b> bot ini. Ketik /help.'); }
-  if (!isAdmin(chatId)) { await send(chatId, '⛔ Bot ini privat.'); return; }
   await dispatch(chatId, cmd, args);
 }
 
 async function handleCallback(cq) {
   const chatId = cq.message && cq.message.chat.id;
-  if (!chatId) return;
-  if (!isAdmin(chatId)) { await answerCb(cq.id, 'Bukan admin'); return; }
+  const uid = cq.from && cq.from.id;   // the user who actually pressed the button
+  if (!chatId || !uid) return;
+  if (!isAdmin(uid)) { await answerCb(cq.id, 'Bukan admin'); return; }
   await answerCb(cq.id);
   await dispatch(chatId, '/' + String(cq.data || '').toLowerCase(), []);
 }
@@ -387,21 +406,27 @@ tx <code>${r.txHash}</code>`);
 }
 
 // ---------------- L1 watcher: auto-detect ETH arriving on Ethereum ----------------
+// Baseline (state.l1seen) is persisted, so a pm2 restart with ETH already sitting
+// on L1 still nudges once, and known balances don't re-notify on every restart.
 async function l1Watcher() {
   if (!l1) return;
-  const seen = {};
   const min = ethers.parseEther(CFG.bridgeMinEth);
   for (;;) {
     try {
+      let changed = false;
       for (const w of wallets) {
         const b = await l1.getBalance(w.address).catch(() => null);
-        if (b === null) continue;
-        const prev = seen[w.address];
-        if (prev !== undefined && b > prev && b >= min) {
-          await broadcast(`💰 ETH masuk di <b>Ethereum L1</b>\n<code>${w.address.slice(0, 14)}…</code> = <b>${fmt(b)} ETH</b>\n🌉 /bridge untuk pindah ke Robinhood Chain.`);
+        if (b === null) continue; // failed read: don't touch baseline
+        const prevStr = state.l1seen[w.address];
+        const prev = prevStr !== undefined ? BigInt(prevStr) : undefined;
+        if (b >= min && (prev === undefined || b > prev)) {
+          const usd = await ethUsd();
+          const label = prev === undefined ? '⟠ ETH tersedia di <b>Ethereum L1</b>' : '💰 ETH masuk di <b>Ethereum L1</b>';
+          await broadcast(`${label}\n<code>${w.address.slice(0, 14)}…</code> = <b>${ethShort(b)} ETH${usdOf(b, usd)}</b>\n🌉 /bridge untuk pindah ke Robinhood Chain.`);
         }
-        seen[w.address] = b;
+        if (prevStr !== b.toString()) { state.l1seen[w.address] = b.toString(); changed = true; }
       }
+      if (changed) saveState();
     } catch (_) {}
     await sleep(120000); // every 2 min
   }
@@ -449,7 +474,7 @@ async function main() {
     { command: 'sweep', description: 'Tarik ETH sisa' },
   ] });
   if (state.admins.length) await broadcast('🤖 Robinfun seeder bot online. /help', menu());
-  else console.log('No admin yet — send any message to the bot to claim admin.');
+  else console.log('⚠️ No admin yet — the FIRST person to DM the bot IN A PRIVATE CHAT claims admin. Set TELEGRAM_ADMIN_IDS in seeder/.env to lock this down and close the claim window.');
   launchLoop().catch((e) => console.error('loop crashed:', e));
   l1Watcher().catch((e) => console.error('l1 watcher crashed:', e));
   await poll();
