@@ -1457,7 +1457,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 <!-- ======================= FOOTER ======================= -->
 <footer>
   <div class="wrap foot-in">
-    <div class="foot-l">Robinfun · fair-launch bonding curves · creator fee 0–10% · LP 100% burned · Robinhood Chain <span class="foot-build" style="opacity:.45;margin-left:8px">prototype</span></div>
+    <div class="foot-l">Robinfun · fair-launch bonding curves · creator fee 0–10% · LP 100% burned · Robinhood Chain <span class="foot-build" style="opacity:.45;margin-left:8px">prototype</span><span id="chain-diag" style="margin-left:8px;font-family:var(--font-mono);font-size:11px;opacity:.7"></span></div>
     <div class="foot-links"><a href="#" onclick="go('docs');return false">Whitepaper</a><a href="https://x.com/robinfunmeme" target="_blank" rel="noopener noreferrer">X</a><a href="https://t.me/robinfunio" target="_blank" rel="noopener noreferrer">Telegram</a><a href="#">RobinBridge</a></div>
   </div>
 </footer>
@@ -2104,6 +2104,24 @@ function renderLead(){
    only become real once each token's chain state is read. We do that in the
    background after the board loads (and on a slow refresh), updating the UI
    incrementally so the page stays responsive. */
+/* On-page chain diagnostic — shows in the footer whether the browser can load
+   ethers and reach the Robinhood RPC. Turns an invisible "all reads silently
+   failed → everything shows $0/seed" into a one-glance status, no DevTools. */
+async function chainDiag(){
+  const el = document.getElementById('chain-diag'); if(!el) return;
+  if(typeof ethers==='undefined'){ el.textContent='· chain: ethers not loaded (CDN blocked?)'; el.style.color='#ff6b6b'; return; }
+  try{
+    const bn = await roProvider().getBlockNumber();
+    let extra='';
+    const real = TOKENS.filter(t=>realToken(t));
+    if(real.length){ const ok = real.filter(t=>t.curveAddr).length; extra = ' · tokens read '+ok+'/'+real.length; }
+    el.textContent='· chain OK · block '+bn+extra; el.style.color='#8fe388';
+  }catch(e){
+    const m=((e&&(e.shortMessage||e.message))||'?').slice(0,70);
+    el.textContent='· chain READ FAILED: '+m; el.style.color='#ff6b6b';
+    console.error('chainDiag', e);
+  }
+}
 let _boardBusy = false;
 function recomputeBoardAggregates(){
   const reals = TOKENS.filter(t=>realToken(t));
@@ -3957,6 +3975,8 @@ function init(){
   refreshEthPrice();    // real ETH/USD so the dollar figures aren't ~2x off
   setInterval(refreshEthPrice, 45000);   // keep the ETH price live
   setInterval(loadBoardStats, 90000);    // refresh the board's on-chain stats
+  setTimeout(chainDiag, 2000);           // footer: can the browser read the chain?
+  setInterval(chainDiag, 30000);
   setInterval(simTick, 1700);
   setInterval(()=>{ if(currentTokenId) drawChart(tok()); }, 4000);
   window.addEventListener('resize', ()=>{ if(currentTokenId) drawChart(tok()); });
