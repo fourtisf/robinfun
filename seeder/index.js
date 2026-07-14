@@ -32,6 +32,15 @@ const { ethers } = require('ethers');
 const fs = require('fs');
 const path = require('path');
 
+// Set-and-forget: auto-load seeder/.env once (CLI env still wins). Put the
+// funder key + config there so you never retype it — the bot then runs itself.
+try {
+  for (const line of fs.readFileSync(path.join(__dirname, '.env'), 'utf8').split('\n')) {
+    const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+    if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '').trim();
+  }
+} catch (_) { /* no .env → use process.env / defaults */ }
+
 const CFG = {
   rpc: process.env.RPC || 'https://rpc.mainnet.chain.robinhood.com',
   factory: (process.env.FACTORY_ADDR || '0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2').trim(),
