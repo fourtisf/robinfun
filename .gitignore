@@ -18,6 +18,7 @@ server/package-lock.json
 
 # Seeder generated deployer wallets — PRIVATE KEYS, never commit
 seeder/wallets.json
+seeder/bot-state.json
 seeder/node_modules/
 
 # Editor

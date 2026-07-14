@@ -7,7 +7,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node index.js",
-    "dry": "DRY_RUN=1 node index.js"
+    "dry": "DRY_RUN=1 node index.js",
+    "bot": "node telegram.js"
   },
   "engines": { "node": ">=18" },
   "dependencies": {

@@ -1,0 +1,166 @@
+'use strict';
+/*
+ * Robinfun seeder — shared core (config, wallet gen, meme fetch, launch).
+ * Used by both the CLI (index.js) and the Telegram bot (telegram.js).
+ */
+const { ethers } = require('ethers');
+const fs = require('fs');
+const path = require('path');
+
+// auto-load seeder/.env once (real process env still wins)
+(function loadEnv() {
+  try {
+    for (const line of fs.readFileSync(path.join(__dirname, '.env'), 'utf8').split('\n')) {
+      const m = line.match(/^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)\s*$/);
+      if (m && process.env[m[1]] === undefined) process.env[m[1]] = m[2].replace(/^["']|["']$/g, '').trim();
+    }
+  } catch (_) {}
+})();
+
+const CFG = {
+  rpc: process.env.RPC || 'https://rpc.mainnet.chain.robinhood.com',
+  factory: (process.env.FACTORY_ADDR || '0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2').trim(),
+  funderKey: (process.env.FUNDER_KEY || process.env.PRIVATE_KEY || '').trim(),
+  numWallets: Math.min(20, Math.max(1, Number(process.env.NUM_WALLETS || 5))),
+  walletFile: process.env.WALLET_FILE || path.join(__dirname, 'wallets.json'),
+  backend: (process.env.BACKEND || 'http://127.0.0.1:3001').replace(/\/+$/, ''),
+  intervalSec: Math.max(5, Number(process.env.INTERVAL_SECONDS || 60)),
+  devBuyEth: String(process.env.DEV_BUY_ETH || '0.001'),
+  levyBps: Math.min(1000, Math.max(0, Number(process.env.CREATOR_LEVY_BPS || 100))),
+  budgetEth: String(process.env.BUDGET_CAP_ETH || '0.05'),
+  fundPerWalletEth: process.env.FUND_PER_WALLET_ETH || '',
+  maxTokens: Number(process.env.MAX_TOKENS || 0),
+  memeApi: process.env.MEME_API || 'https://meme-api.com/gimme',
+  dryRun: /^(1|true|yes)$/i.test(process.env.DRY_RUN || ''),
+  appUrl: (process.env.APP_URL || 'https://robinfun.io').replace(/\/+$/, ''),
+  // telegram control bot
+  tgToken: (process.env.TELEGRAM_TOKEN || process.env.BOT_TOKEN || '').trim(),
+  tgAdmins: (process.env.TELEGRAM_ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  stateFile: process.env.STATE_FILE || path.join(__dirname, 'bot-state.json'),
+};
+
+const FACTORY_ABI = [
+  'function createToken((string name,string symbol,string metadataURI,uint16 buyLevyBps,uint16 sellLevyBps,bool decayAtGraduation,bool renounceRateControl,uint256 devBuyMinTokensOut,bytes32 vanitySalt,uint256 maxDeployFee)) payable returns (address token, address curve)',
+  'function deployFee() view returns (uint256)',
+  'function betaMode() view returns (bool)',
+  'function owner() view returns (address)',
+  'function tradeAllowed(address) view returns (bool)',
+  'function setBetaAllowed(address[] who, bool allowed)',
+  'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
+];
+
+const PRE = ['Doge','Pepe','Wojak','Chad','Turbo','Giga','Baby','Based','Mega','Shib','Floki','Cyber','Rocket','Degen','Sigma','Ninja','Cosmic','Quantum','Hyper','Moon','Ser','Wen','Bonk','Wif','Fren','Comfy','Alpha','Vibe','Astro','Retro'];
+const POST = ['Inu','Cat','Frog','Moon','Rocket','Coin','Lord','King','Ape','Bull','Bonk','Elon','Mars','Pump','Fren','Wojak','Pepe','Doge','Meme','Chad','Whale','Hodl','Lambo','Wagmi','Pamp','Gains','Chan','Bro','Fud','Zilla'];
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+function genName() {
+  const name = (pick(PRE) + ' ' + pick(POST) + (Math.random() < 0.3 ? ' ' + Math.floor(Math.random() * 1000) : '')).slice(0, 64);
+  let ticker = (pick(PRE) + pick(POST)).toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 3 + Math.floor(Math.random() * 4));
+  if (ticker.length < 3) ticker = ('MEME' + ticker).slice(0, 5);
+  return { name, ticker };
+}
+
+async function fetchMeme() {
+  for (let i = 0; i < 4; i++) {
+    try {
+      const j = await (await fetch(CFG.memeApi, { signal: AbortSignal.timeout(8000) })).json();
+      if (!j || j.nsfw || j.spoiler) continue;
+      const url = j.url || (Array.isArray(j.preview) && j.preview[j.preview.length - 1]);
+      if (!url) continue;
+      const img = await fetch(url, { signal: AbortSignal.timeout(10000) });
+      const ct = (img.headers.get('content-type') || '').toLowerCase();
+      if (!/^image\/(png|jpe?g|gif|webp)/.test(ct)) continue;
+      const buf = Buffer.from(await img.arrayBuffer());
+      if (buf.length > 1_900_000 || buf.length < 200) continue;
+      return { dataUrl: `data:${ct.split(';')[0]};base64,${buf.toString('base64')}`, src: url, title: String(j.title || '') };
+    } catch (_) {}
+  }
+  return null;
+}
+
+async function postMeta(rec) {
+  try { const r = await fetch(CFG.backend + '/api/tokens', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(rec), signal: AbortSignal.timeout(20000) }); return r.ok; }
+  catch (_) { return false; }
+}
+
+const fmt = (wei) => ethers.formatEther(wei);
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+function makeProvider() { return new ethers.JsonRpcProvider(CFG.rpc, undefined, { batchMaxCount: 1, staticNetwork: true }); }
+
+// deployer wallets: generate once + persist (chmod 600), reuse forever
+function loadOrCreateWallets(provider) {
+  let saved = [];
+  try { saved = JSON.parse(fs.readFileSync(CFG.walletFile, 'utf8')); } catch (_) {}
+  if (!Array.isArray(saved)) saved = [];
+  let changed = false;
+  while (saved.length < CFG.numWallets) { const w = ethers.Wallet.createRandom(); saved.push({ address: w.address, privateKey: w.privateKey }); changed = true; }
+  saved = saved.slice(0, CFG.numWallets);
+  if (changed) { fs.writeFileSync(CFG.walletFile, JSON.stringify(saved, null, 2)); try { fs.chmodSync(CFG.walletFile, 0o600); } catch (_) {} }
+  return saved.map((s) => new ethers.Wallet(s.privateKey, provider));
+}
+
+async function readDeployFee(factoryRead) { try { return await factoryRead.deployFee(); } catch (_) { return 0n; } }
+
+async function checkBeta(factoryRead, wallets) {
+  let beta = false, owner = ethers.ZeroAddress;
+  try { [beta, owner] = await Promise.all([factoryRead.betaMode(), factoryRead.owner()]); } catch (_) {}
+  let allowed = wallets.map(() => true), missing = [];
+  if (beta) {
+    allowed = await Promise.all(wallets.map((w) => factoryRead.tradeAllowed(w.address).catch(() => false)));
+    missing = wallets.filter((_, i) => !allowed[i]);
+  }
+  return { beta, owner, allowed, missing };
+}
+
+// Launch one token from `wallet`. Returns a plain result object (no console I/O)
+// so callers can format for the terminal or Telegram.
+async function launchWith(wallet, provider, deployFee, devBuy) {
+  const factory = new ethers.Contract(CFG.factory, FACTORY_ABI, wallet);
+  const { name, ticker } = genName();
+  const meme = await fetchMeme();
+  const value = deployFee + devBuy;
+  const params = {
+    name, symbol: ticker, metadataURI: '',
+    buyLevyBps: CFG.levyBps, sellLevyBps: CFG.levyBps,
+    decayAtGraduation: false, renounceRateControl: false,
+    devBuyMinTokensOut: 0n, vanitySalt: ethers.ZeroHash, maxDeployFee: deployFee,
+  };
+  if (CFG.dryRun) return { ok: true, dry: true, name, ticker, memeSrc: meme ? meme.src : null, creator: wallet.address };
+
+  let receipt;
+  try { const tx = await factory.createToken(params, { value }); receipt = await tx.wait(); }
+  catch (e) { return { ok: false, name, ticker, creator: wallet.address, error: e.shortMessage || e.reason || e.message }; }
+
+  let ca = '';
+  for (const lg of receipt.logs) { try { const p = factory.interface.parseLog(lg); if (p && p.name === 'TokenCreated') { ca = p.args.token; break; } } catch (_) {} }
+  const gasCostWei = receipt.gasUsed * (receipt.gasPrice || 0n);
+
+  const posted = await postMeta({
+    name, ticker, ca,
+    description: (meme && meme.title ? meme.title : `${name} — a Robinfun fair launch`).slice(0, 280),
+    buyFee: CFG.levyBps / 100, sellFee: CFG.levyBps / 100,
+    creator: wallet.address, logo: meme ? meme.dataUrl : undefined,
+  });
+
+  return { ok: true, name, ticker, ca, gasCostWei, txHash: receipt.hash, posted, memeSrc: meme ? meme.src : null, creator: wallet.address };
+}
+
+// Reclaim leftover ETH from `wallets` to `dest`. Returns [{address, sent|skip|error}].
+async function sweepAll(wallets, provider, dest) {
+  const out = [];
+  const gas = ethers.parseEther('0.0003');
+  for (const w of wallets) {
+    try {
+      const bal = await provider.getBalance(w.address);
+      if (bal <= gas) { out.push({ address: w.address, skip: true, bal }); continue; }
+      const tx = await w.sendTransaction({ to: dest, value: bal - gas }); await tx.wait();
+      out.push({ address: w.address, sent: bal - gas, tx: tx.hash });
+    } catch (e) { out.push({ address: w.address, error: e.shortMessage || e.message }); }
+  }
+  return out;
+}
+
+module.exports = {
+  ethers, CFG, FACTORY_ABI, makeProvider,
+  genName, fetchMeme, postMeta, loadOrCreateWallets,
+  launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
+};
