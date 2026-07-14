@@ -14,7 +14,7 @@
      'unsafe-inline' is required because the markup uses inline on* handlers and
      an inline <style>; it does NOT weaken connect-src / object-src / base-uri,
      which are the directives that contain a compromise. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src https://rpc.mainnet.chain.robinhood.com https://api.coingecko.com https://api.coinbase.com https://robinfun.io; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.web3modal.org https://imagedelivery.net; connect-src https://rpc.mainnet.chain.robinhood.com https://api.coingecko.com https://api.coinbase.com https://robinfun.io wss://relay.walletconnect.org https://relay.walletconnect.org https://api.web3modal.org https://pulse.walletconnect.org https://verify.walletconnect.org https://verify.walletconnect.com; frame-src https://verify.walletconnect.com https://verify.walletconnect.org; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'">
 <title>Robinfun — Admin Console</title>
 <meta name="description" content="Owner-only control panel for the Robinfun launchpad on Robinhood Chain.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%230B0F0A%22%2F%3E%3Cpath%20fill%3D%22%23C6F23C%22%20d%3D%22M32%2012l16%209v18l-16%209-16-9V21z%22%20opacity%3D%22.9%22%2F%3E%3C%2Fsvg%3E">
@@ -216,6 +216,8 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
   <div class="net" id="netStat"><span class="led"></span><span id="netTxt">Not connected</span></div>
   <span class="gaschip" id="gasChip" hidden title="Connected wallet ETH — for gas">Ξ <b id="gasBal">—</b></span>
   <button class="btn sm" id="lockBtn" onclick="lockNow('manual')" hidden>🔒 Lock</button>
+  <button class="btn sm" id="qrBtn" onclick="connectWC()" title="Scan QR with Trust Wallet / any mobile wallet">▣ QR / Mobile</button>
+  <button class="btn sm" id="disconnectBtn" onclick="disconnectWallet()" hidden>Disconnect</button>
   <button class="btn primary" id="connectBtn" onclick="connect()">Connect wallet</button>
 </div></div>
 
@@ -676,6 +678,59 @@ async function connect(){
   }catch(e){ toast(errMsg(e),'err'); }
 }
 
+/* ---- WalletConnect v2 (QR) — connect a MOBILE wallet like Trust Wallet ----
+   Get a free projectId at https://cloud.reown.com and paste it below. Empty =
+   the QR button shows a hint. The 2 MB provider bundle is loaded LAZILY only
+   when you click the QR button, so the default page stays lean. The resulting
+   provider is EIP-1193, so it flows through the same connect() as MetaMask. */
+const WC_PROJECT_ID = '';   // <-- REQUIRED for QR / Trust Wallet. Free at cloud.reown.com
+let _wcProvider = null, _wcLoading = null;
+function loadWC(){
+  if(window.WCEthereumProvider) return Promise.resolve();
+  if(_wcLoading) return _wcLoading;
+  _wcLoading = new Promise((res, rej)=>{
+    const s = document.createElement('script');
+    s.src = 'vendor/wc-provider.js';
+    s.integrity = 'sha384-U0oqbgX4YE3xW7AG1Nhc8CoZNv8LWTHuGXZKEes5LUbfmF4cWYNO20lHdI1xv3Nx';
+    s.crossOrigin = 'anonymous';
+    s.onload = ()=>res(); s.onerror = ()=>rej(new Error('could not load WalletConnect'));
+    document.head.appendChild(s);
+  });
+  return _wcLoading;
+}
+async function connectWC(){
+  if(!WC_PROJECT_ID){ toast('QR login not set up — add WC_PROJECT_ID (free at cloud.reown.com) and redeploy','err'); return; }
+  const btn = document.getElementById('qrBtn'); const t0 = btn.textContent; btn.disabled = true; btn.textContent = 'Loading…';
+  try{
+    await loadWC();
+    _wcProvider = await window.WCEthereumProvider.init({
+      projectId: WC_PROJECT_ID,
+      chains: [4663],
+      optionalChains: [4663],
+      rpcMap: { 4663: CHAIN.rpcUrls[0] },
+      showQrModal: true,
+      qrModalOptions: { themeMode: 'dark' },
+      metadata: { name:'Robinfun Admin', description:'Robinfun launchpad admin console', url: location.origin, icons: [location.origin + '/favicon.ico'] },
+    });
+    btn.textContent = 'Scan the QR…';
+    await _wcProvider.connect();     // opens the QR modal; resolves once the phone approves
+    activeInjected = _wcProvider;    // EIP-1193 → the existing connect() flow does the rest
+    await connect();
+  }catch(e){ toast('QR connect failed: ' + (e && (e.message || e)), 'err'); logLine('WalletConnect — ' + (e && (e.message||e)), 'err'); }
+  finally{ btn.disabled = false; btn.textContent = t0; }
+}
+async function disconnectWallet(){
+  try{ if(_wcProvider && _wcProvider.disconnect) await _wcProvider.disconnect(); }catch(_){}
+  _wcProvider = null; activeInjected = null;
+  signer = provider = facW = rtrW = null; wallet = null; isOwner = false; ownerAddr = null; isProven = false;
+  try{ sessionStorage.removeItem(PROOF_KEY); }catch(_){}
+  const cb = document.getElementById('connectBtn'); if(cb) cb.textContent = 'Connect wallet';
+  const gc = document.getElementById('gasChip'); if(gc) gc.hidden = true;
+  setNet('', 'Not connected');
+  applyGate();
+  logLine('Disconnected', 'ok');
+}
+
 function setNet(state,txt){ const n=document.getElementById('netStat'); n.className='net '+(state||''); document.getElementById('netTxt').textContent=txt; }
 
 /* ---- owner gate ----
@@ -696,6 +751,7 @@ function applyGate(){
     if(b.id==='acceptFacBtn'||b.id==='acceptRtrBtn'){ b.disabled=!wallet; return; }  // pending owner ≠ current owner
     b.disabled=!enable;
   });
+  const db=document.getElementById('disconnectBtn'); if(db) db.hidden=!wallet;   // show Disconnect only while connected
   const hb=document.getElementById('tm-harvestBtn'); if(hb) hb.disabled=!enable;   // modal harvest, if open
 }
 

@@ -53,6 +53,7 @@ if [ -d "$ADMIN_WEBROOT" ]; then
   cp "$SRC_DIR/deploy/admin-hostinger/admin.html" "$ADMIN_WEBROOT/admin.html"
   mkdir -p "$ADMIN_WEBROOT/vendor"
   cp "$SRC_DIR/deploy/admin-hostinger/vendor/ethers-6.15.0.umd.min.js" "$ADMIN_WEBROOT/vendor/" 2>/dev/null || true
+  cp "$SRC_DIR/deploy/admin-hostinger/vendor/wc-provider.js" "$ADMIN_WEBROOT/vendor/" 2>/dev/null || true
   chown -R www-data:www-data "$ADMIN_WEBROOT" 2>/dev/null || true
   chmod -R a+rX "$ADMIN_WEBROOT" 2>/dev/null || true
 else
