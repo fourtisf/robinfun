@@ -2099,6 +2099,45 @@ function renderLead(){
     </div>`;
   }).join('');
 }
+/* ---------------- board: live on-chain stats -----------------
+   The homepage numbers (24h volume, per-token mcap/volume, "paid to creators")
+   only become real once each token's chain state is read. We do that in the
+   background after the board loads (and on a slow refresh), updating the UI
+   incrementally so the page stays responsive. */
+let _boardBusy = false;
+function recomputeBoardAggregates(){
+  const reals = TOKENS.filter(t=>realToken(t));
+  // Paid to creators, all-time = Σ each real token's creator earnings (ETH→USD).
+  if(reals.length) PAID_ALLTIME = reals.reduce((s,t)=>s+((t.earnedEth||0)*ETH_USD),0);
+}
+async function loadBoardStats(){
+  if(_boardBusy || typeof ethers==='undefined') return;
+  const reals = TOKENS.filter(t=>realToken(t)).slice(0,40);   // bound cost on large boards
+  if(!reals.length) return;
+  _boardBusy = true;
+  try{
+    // Phase 1 (cheap): curve/DEX state → real mcap + FeeRouter lifetime earnings.
+    for(const t of reals){
+      try{
+        if(await loadCurveState(t)){
+          if(t.graduated) await loadDexState(t);
+          try{
+            const fr = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, roProvider());
+            const v = Number(ethers.formatEther(await fr.creatorEarnedLifetime(t.ca)));
+            if(v>0) t.earnedEth = v;
+          }catch(_){}
+        }
+      }catch(_){}
+    }
+    recomputeBoardAggregates(); renderGrid(); renderStats();
+    // Phase 2 (heavier): per-token trade history → 24h + all-time volume.
+    for(const t of reals){
+      if(currentTokenId===t.id && t._loaded) continue;   // its own poll keeps it fresh
+      try{ await loadCurveTrades(t); }catch(_){}
+      recomputeBoardAggregates(); renderGrid(); renderStats();
+    }
+  }finally{ _boardBusy = false; }
+}
 
 /* ---------------- ticker tape ---------------- */
 function tapeItem(t, tr){
@@ -3423,6 +3462,7 @@ async function loadServerTokens(){
       LAUNCH_COUNT = TOKENS.length;
       if(wallet) seedMyTokens();   // mark my launches as mine for the Treasury
       renderGrid(); renderStats(); renderTape();
+      loadBoardStats();            // fill in real mcap / volume / creator fees (background)
     }
     if(pendingTokenId){   // resolve a deep-linked /token/<ca-or-id> once tokens arrive
       const t = tokenByRef(pendingTokenId);
@@ -3916,6 +3956,7 @@ function init(){
   setTimeout(refreshDeployFee, 1500);
   refreshEthPrice();    // real ETH/USD so the dollar figures aren't ~2x off
   setInterval(refreshEthPrice, 45000);   // keep the ETH price live
+  setInterval(loadBoardStats, 90000);    // refresh the board's on-chain stats
   setInterval(simTick, 1700);
   setInterval(()=>{ if(currentTokenId) drawChart(tok()); }, 4000);
   window.addEventListener('resize', ()=>{ if(currentTokenId) drawChart(tok()); });
