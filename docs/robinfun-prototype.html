@@ -268,7 +268,7 @@ body.light .stake-orbit text{fill:#3C9A1B}
 .lead-vol{font-family:var(--font-mono);font-size:12.5px;color:var(--cream-dim);text-align:right}
 
 /* big stat blocks */
-.stat-blocks{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-bottom:24px}
+.stat-blocks{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;margin-bottom:24px}
 .stat-block{
   border:1px solid var(--rule);border-radius:16px;background:var(--ledger);padding:24px 20px;text-align:center;
   position:relative;overflow:hidden;
@@ -879,7 +879,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
         <button onclick="toggleTheme();document.getElementById('nav').classList.remove('open')">◐&nbsp; Light / dark</button>
         <button onclick="toggleLang();document.getElementById('nav').classList.remove('open')">🌐&nbsp; Language · <span id="navLangLbl">EN</span></button>
         <a class="ntool-social" href="https://x.com/robinfunmeme" target="_blank" rel="noopener noreferrer">𝕏&nbsp; @robinfunmeme</a>
-        <a class="ntool-social" href="https://t.me/robinfunio" target="_blank" rel="noopener noreferrer">✈&nbsp; Telegram</a>
+        <a class="ntool-social" href="https://telegram.me/robinfunio" target="_blank" rel="noopener noreferrer">✈&nbsp; Telegram</a>
       </div>
     </nav>
     <div class="topbar-right">
@@ -887,7 +887,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <button class="tb-icon tb-lang" id="langBtn" onclick="toggleLang()" title="Language" aria-label="Switch language">EN</button>
       <button class="tb-icon" id="themeBtn" onclick="toggleTheme()" title="Toggle light / dark" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg></button>
       <a class="tb-icon tb-social" href="https://x.com/robinfunmeme" target="_blank" rel="noopener noreferrer" title="X — @robinfunmeme" aria-label="X (Twitter)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.9 2H22l-7.6 8.7L23.3 22h-6.9l-5.4-7.1L4.8 22H1.7l8.2-9.4L.9 2h7.1l4.9 6.5L18.9 2zm-1.2 18h1.9L7.1 4H5.1l12.6 16z"/></svg></a>
-      <a class="tb-icon tb-social" href="https://t.me/robinfunio" target="_blank" rel="noopener noreferrer" title="Telegram — t.me/robinfunio" aria-label="Telegram"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.94 4.15a.9.9 0 00-1.2-.86L2.9 10.3c-.86.34-.85 1.57.02 1.88l4.35 1.53 1.67 5.28c.19.6.94.8 1.4.38l2.44-2.24 4.42 3.26c.5.37 1.21.1 1.35-.5l3.4-15.4a.9.9 0 00-.01-.34zM9.2 14.3l-.28 3.5-1.02-3.24 8.36-5.36-7.04 5.1z"/></svg></a>
+      <a class="tb-icon tb-social" href="https://telegram.me/robinfunio" target="_blank" rel="noopener noreferrer" title="Telegram — t.me/robinfunio" aria-label="Telegram"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.94 4.15a.9.9 0 00-1.2-.86L2.9 10.3c-.86.34-.85 1.57.02 1.88l4.35 1.53 1.67 5.28c.19.6.94.8 1.4.38l2.44-2.24 4.42 3.26c.5.37 1.21.1 1.35-.5l3.4-15.4a.9.9 0 00-.01-.34zM9.2 14.3l-.28 3.5-1.02-3.24 8.36-5.36-7.04 5.1z"/></svg></a>
       <div class="tb-sep tb-social"></div>
       <button class="btn btn-line btn-mini tb-launch" data-i18n="btn.launch" onclick="go('create')">+ Launch Token</button>
       <button class="btn btn-gold btn-mini" id="walletBtn" onclick="connectWallet()">Connect wallet</button>
@@ -959,6 +959,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <!-- big stat blocks -->
       <div class="stat-blocks">
         <div class="stat-block"><div class="sb-v" id="st-vol">—</div><div class="sb-k">24h volume</div></div>
+        <div class="stat-block"><div class="sb-v" id="st-volall">—</div><div class="sb-k">All-time volume</div></div>
         <div class="stat-block"><div class="sb-v" id="st-launched">—</div><div class="sb-k">Tokens launched</div></div>
         <div class="stat-block hl"><div class="sb-v gold" id="st-paid">—</div><div class="sb-k">Paid to creators · all-time</div></div>
       </div>
@@ -1458,7 +1459,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 <footer>
   <div class="wrap foot-in">
     <div class="foot-l">Robinfun · fair-launch bonding curves · creator fee 0–10% · LP 100% burned · Robinhood Chain <span class="foot-build" style="opacity:.45;margin-left:8px">prototype</span><span id="chain-diag" style="margin-left:8px;font-family:var(--font-mono);font-size:11px;opacity:.7"></span></div>
-    <div class="foot-links"><a href="#" onclick="go('docs');return false">Whitepaper</a><a href="https://x.com/robinfunmeme" target="_blank" rel="noopener noreferrer">X</a><a href="https://t.me/robinfunio" target="_blank" rel="noopener noreferrer">Telegram</a><a href="#">RobinBridge</a></div>
+    <div class="foot-links"><a href="#" onclick="go('docs');return false">Whitepaper</a><a href="https://x.com/robinfunmeme" target="_blank" rel="noopener noreferrer">X</a><a href="https://telegram.me/robinfunio" target="_blank" rel="noopener noreferrer">Telegram</a><a href="#">RobinBridge</a></div>
   </div>
 </footer>
 
@@ -2081,9 +2082,13 @@ function renderGrid(){
 }
 function renderStats(){
   const vol = TOKENS.reduce((s,t)=>s+t.vol24,0);
+  const volAll = TOKENS.reduce((s,t)=>s+(t.volAll!=null ? t.volAll : t.vol24),0);
   document.getElementById('st-vol').textContent = fmtUsd(vol);
+  const sva = document.getElementById('st-volall'); if(sva) sva.textContent = fmtUsd(volAll);
   document.getElementById('st-launched').textContent = LAUNCH_COUNT.toLocaleString();
-  document.getElementById('st-paid').textContent = fmtUsdFull(PAID_ALLTIME);
+  // fmtUsdSmall (not fmtUsdFull): creator earnings on tiny 0.005-cap tokens are
+  // often sub-dollar and would otherwise round to $0.
+  document.getElementById('st-paid').textContent = PAID_ALLTIME>0 ? fmtUsdSmall(PAID_ALLTIME) : '$0';
   renderLead();
 }
 function renderLead(){
@@ -2750,14 +2755,18 @@ async function loadCurveTrades(t){
     const lastPx = evs.length ? evs[evs.length-1].priceEth : base;
     t.chg24 = base>0 ? (lastPx/base-1)*100 : 0;
 
-    /* real creator earnings: authoritative from the FeeRouter's lifetime
-       counter; fall back to 90% of the on-curve levy summed from events. */
-    t.earnedEth = evs.reduce((s,e)=> s+(e.levyEth||0), 0) * 0.9;
+    /* real creator earnings: take the LARGER of the two sources — the on-curve
+       levy summed from events (immediate, bonding-era) and the FeeRouter's
+       lifetime counter (also captures post-graduation harvested fees). Using max
+       avoids losing either: DEX-era fees the events miss, or bonding fees not yet
+       reflected in a stale counter read. */
+    const levyEarned = evs.reduce((s,e)=> s+(e.levyEth||0), 0) * 0.9;
+    let routerEarned = 0;
     try{
       const fr = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, ro);
-      const v = Number(ethers.formatEther(await fr.creatorEarnedLifetime(t.ca)));
-      if(v>0) t.earnedEth = v;
+      routerEarned = Number(ethers.formatEther(await fr.creatorEarnedLifetime(t.ca)));
     }catch(_){}
+    t.earnedEth = Math.max(levyEarned, routerEarned);
   }catch(e){ console.error('loadCurveTrades', e); }
 }
 let chartTf = 60;   // candle interval in SECONDS (1m default, pump.fun-style)
