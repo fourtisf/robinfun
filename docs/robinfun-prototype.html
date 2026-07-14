@@ -3682,20 +3682,24 @@ async function mineVanity(creator, suffix, onProgress){
   const coder = ethers.AbiCoder.defaultAbiCoder();
   const want = (''+suffix).toLowerCase();
   const t0 = Date.now();
-  // Start at 1, NOT 0: vanitySalt == 0 tells the factory "no vanity" and it
-  // deploys via a plain (non-deterministic) clone, so a mined 0 salt would NOT
-  // land at the predicted address.
-  let tries = 1;
+  // Start at a RANDOM offset (never 0). vanitySalt == 0 tells the factory "no
+  // vanity" so a mined 0 salt would NOT land at the predicted address. And if
+  // we always started at 1, the SAME wallet would mine the SAME first "…feed"
+  // address every launch — the second CREATE2 clone collides with the already
+  // deployed one and the factory reverts. A random base gives a fresh address
+  // on every launch.
+  const base = 1n + BigInt(Math.floor(Math.random()*1e15)) + (BigInt(Date.now())<<20n);
+  let done = 0;
   const HARD_CAP = 8_000_000;   // absolute upper bound
   const TIME_CAP = 30_000;      // ms — bail so a launch never hangs
-  while(tries < HARD_CAP){
-    for(let k=0;k<3000 && tries<HARD_CAP;k++,tries++){
-      const vanitySalt = ethers.zeroPadValue(ethers.toBeHex(BigInt(tries)), 32);
+  while(done < HARD_CAP){
+    for(let k=0;k<3000 && done<HARD_CAP;k++,done++){
+      const vanitySalt = ethers.zeroPadValue(ethers.toBeHex(base + BigInt(done)), 32);
       const salt = ethers.keccak256(coder.encode(['address','bytes32'], [creator, vanitySalt]));
       const addr = ethers.getCreate2Address(FACTORY_ADDR, salt, initHash);
-      if(addr.toLowerCase().endsWith(want)) return { vanitySalt, addr, tries };
+      if(addr.toLowerCase().endsWith(want)) return { vanitySalt, addr, tries: done };
     }
-    if(onProgress) onProgress(tries);
+    if(onProgress) onProgress(done);
     await new Promise(r=>setTimeout(r,0));       // yield so the tab stays responsive
     if(Date.now()-t0 > TIME_CAP) return null;
   }

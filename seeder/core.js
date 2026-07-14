@@ -267,12 +267,19 @@ async function mineVanity(provider, creator, suffix) {
   const coder = ethers.AbiCoder.defaultAbiCoder();
   const want = String(suffix).toLowerCase();
   const HARD_CAP = 8_000_000, TIME_CAP = 25_000, t0 = Date.now();
-  for (let tries = 1; tries < HARD_CAP; tries++) {
-    const vanitySalt = ethers.zeroPadValue(ethers.toBeHex(BigInt(tries)), 32);
+  // Start grinding at a RANDOM offset. If we always started at 1 the same
+  // creator would mine the SAME first "…feed" address every launch, so the
+  // second CREATE2 clone would collide with the already-deployed one and the
+  // factory reverts ("execution reverted: unknown custom error"). A random
+  // base makes every launch land on a fresh vanity address.
+  const base = 1n + BigInt(Math.floor(Math.random() * 1e15)) + (BigInt(Date.now()) << 20n);
+  for (let i = 0; i < HARD_CAP; i++) {
+    const n = base + BigInt(i);
+    const vanitySalt = ethers.zeroPadValue(ethers.toBeHex(n), 32);
     const salt = ethers.keccak256(coder.encode(['address', 'bytes32'], [creator, vanitySalt]));
     const addr = ethers.getCreate2Address(CFG.factory, salt, initHash);
-    if (addr.toLowerCase().endsWith(want)) return { vanitySalt, addr, tries };
-    if ((tries & 16383) === 0 && Date.now() - t0 > TIME_CAP) return null;   // bail so a launch never hangs
+    if (addr.toLowerCase().endsWith(want)) return { vanitySalt, addr, tries: i };
+    if ((i & 16383) === 0 && Date.now() - t0 > TIME_CAP) return null;   // bail so a launch never hangs
   }
   return null;
 }
