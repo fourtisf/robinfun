@@ -34,6 +34,9 @@ const CFG = {
   // (a buy ≥ the graduation cap deploys + burns LP). 0 = off.
   autoBuyEth: String(process.env.AUTO_BUY_ETH || '0'),
   autoSellPct: Math.min(100, Math.max(0, Number(process.env.AUTO_SELL_PCT || 0))),
+  // Vanity CA suffix (hex) — mine a salt so every token address ends in this,
+  // like the website's "…feed". Empty = off (random address). Longer = slower.
+  vanitySuffix: (process.env.VANITY_SUFFIX !== undefined ? process.env.VANITY_SUFFIX : 'feed').trim().toLowerCase().replace(/[^0-9a-f]/g, ''),
   budgetEth: String(process.env.BUDGET_CAP_ETH || '0.05'),
   fundPerWalletEth: process.env.FUND_PER_WALLET_ETH || '',
   maxTokens: Number(process.env.MAX_TOKENS || 0),
@@ -65,6 +68,7 @@ const FACTORY_ABI = [
   'function tradeAllowed(address) view returns (bool)',
   'function setBetaAllowed(address[] who, bool allowed)',
   'function curveOf(address token) view returns (address)',
+  'function tokenImplementation() view returns (address)',
   'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
 ];
 
@@ -232,6 +236,34 @@ async function checkBeta(factoryRead, wallets) {
   return { beta, owner, allowed, missing };
 }
 
+// Grind a vanity salt so the CREATE2 token address ends in `suffix` (hex), the
+// same way the website mines "…feed". Bound to `creator` on-chain (see the
+// factory's `_tokenSalt`) so a mined salt can't be front-run. Returns the salt,
+// or null on time-out (a launch must never hang).
+let _tokenImpl = null;
+async function getTokenImpl(provider) {
+  if (_tokenImpl) return _tokenImpl;
+  try { _tokenImpl = await new ethers.Contract(CFG.factory, FACTORY_ABI, provider).tokenImplementation(); } catch (_) { _tokenImpl = null; }
+  return _tokenImpl;
+}
+async function mineVanity(provider, creator, suffix) {
+  const impl = await getTokenImpl(provider);
+  if (!impl || !suffix) return null;
+  const initCode = '0x3d602d80600a3d3981f3363d3d373d3d3d363d73' + impl.slice(2).toLowerCase() + '5af43d82803e903d91602b57fd5bf3';
+  const initHash = ethers.keccak256(initCode);
+  const coder = ethers.AbiCoder.defaultAbiCoder();
+  const want = String(suffix).toLowerCase();
+  const HARD_CAP = 8_000_000, TIME_CAP = 25_000, t0 = Date.now();
+  for (let tries = 1; tries < HARD_CAP; tries++) {
+    const vanitySalt = ethers.zeroPadValue(ethers.toBeHex(BigInt(tries)), 32);
+    const salt = ethers.keccak256(coder.encode(['address', 'bytes32'], [creator, vanitySalt]));
+    const addr = ethers.getCreate2Address(CFG.factory, salt, initHash);
+    if (addr.toLowerCase().endsWith(want)) return { vanitySalt, addr, tries };
+    if ((tries & 16383) === 0 && Date.now() - t0 > TIME_CAP) return null;   // bail so a launch never hangs
+  }
+  return null;
+}
+
 // Launch one token from `wallet`. Returns a plain result object (no console I/O)
 // so callers can format for the terminal or Telegram.
 async function launchWith(wallet, provider, deployFee, devBuy) {
@@ -239,11 +271,14 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
   const { name, ticker } = genName();
   const meme = await fetchMeme();
   const value = deployFee + devBuy;
+  // Vanity CA (…feed) — mine a salt bound to this wallet, like the website.
+  let vanitySalt = ethers.ZeroHash;
+  if (CFG.vanitySuffix && !CFG.dryRun) { const mined = await mineVanity(provider, wallet.address, CFG.vanitySuffix); if (mined) vanitySalt = mined.vanitySalt; }
   const params = {
     name, symbol: ticker, metadataURI: '',
     buyLevyBps: CFG.buyLevyBps, sellLevyBps: CFG.sellLevyBps,
     decayAtGraduation: false, renounceRateControl: false,
-    devBuyMinTokensOut: 0n, vanitySalt: ethers.ZeroHash, maxDeployFee: deployFee,
+    devBuyMinTokensOut: 0n, vanitySalt, maxDeployFee: deployFee,
   };
   if (CFG.dryRun) return { ok: true, dry: true, name, ticker, memeSrc: meme ? meme.src : null, creator: wallet.address };
 

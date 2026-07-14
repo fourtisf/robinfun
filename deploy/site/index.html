@@ -3743,9 +3743,10 @@ async function realLaunch(meta){
       // what we just read, so a fee bump can't silently eat the dev buy.
       maxDeployFee: DEPLOY_FEE_WEI * 2n,
     };
-    // Vanity address: grind a salt in the browser so the token CA ends in
-    // "feed", then hand that salt to createToken (bound to the caller on-chain).
-    if(meta.vanity){
+    // Vanity address: ALWAYS grind a salt in the browser so the token CA ends in
+    // "feed" (mandatory brand suffix), then hand it to createToken (bound to the
+    // caller on-chain).
+    if(true){
       busy(true,'Mining …feed address…');
       const creator = await signer.getAddress();
       const mined = await mineVanity(creator, 'feed', n=>busy(true,'Mining …feed ('+n.toLocaleString()+')'));
