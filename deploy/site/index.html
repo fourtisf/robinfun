@@ -1934,6 +1934,9 @@ const PATH_TO_PAGE = {'':'home', 'create':'create', 'staking':'stake', 'whitepap
 let pendingTokenId = null;   // deep-linked /token/<id> awaiting the async server load
 let PROFILE_ADDR = null;     // address shown on the profile page (null → own wallet)
 function tokenById(id){ return TOKENS.find(t=>t.id===id); }
+function tokenByCa(ca){ const c=(ca||'').toLowerCase(); return c ? TOKENS.find(t=>t.ca && t.ca.toLowerCase()===c) : null; }
+function tokenByRef(ref){ return tokenByCa(ref) || tokenById(ref); }              // URL segment → token (CA or internal id)
+function tokenRef(t){ return (t && t.ca && /^0x[0-9a-fA-F]{40}$/.test(t.ca)) ? t.ca : (t ? t.id : ''); } // canonical URL handle = the CA once on-chain
 /* Mainnet private-beta notice — dismissible, remembered per browser. Key is
    bumped from the old testnet one so everyone sees the new real-ETH warning. */
 function dismissTestnet(){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); try{ localStorage.setItem('rf_beta_mainnet_dismissed','1'); }catch(e){} }
@@ -1946,10 +1949,11 @@ function setRoute(path, title){
 function routeFromLocation(){
   const segs = location.pathname.replace(/^\/+|\/+$/g,'').split('/');
   const first = decodeURIComponent(segs[0]||'');
-  if(first === 'token' && segs[1]){
-    const id = decodeURIComponent(segs[1]);
-    if(tokenById(id)) openToken(id, false);
-    else { pendingTokenId = id; go('home', false); }   // show board until tokens arrive
+  if((first === 'token' || first === 'coin') && segs[1]){
+    const ref = decodeURIComponent(segs[1]);
+    const t = tokenByRef(ref);                          // resolve by contract address OR internal id
+    if(t) openToken(t.id, false);
+    else { pendingTokenId = ref; go('home', false); }   // show board until tokens arrive
     return;
   }
   if(first === 'profile'){
@@ -1987,7 +1991,7 @@ function openToken(id, push){
   renderToken(true);
   const t = tokenById(id);
   const title = t ? ('$'+t.ticker+' — '+t.name+' · Robinfun') : 'Token · Robinfun';
-  push ? setRoute('/token/'+encodeURIComponent(id), title) : (document.title = title);
+  push ? setRoute('/token/'+encodeURIComponent(tokenRef(t) || id), title) : (document.title = title);
   window.scrollTo({top:0, behavior:'instant'});
 }
 
@@ -3279,8 +3283,9 @@ async function loadServerTokens(){
       if(wallet) seedMyTokens();   // mark my launches as mine for the Treasury
       renderGrid(); renderStats(); renderTape();
     }
-    if(pendingTokenId && tokenById(pendingTokenId)){   // resolve a deep-linked /token/<id>
-      const id = pendingTokenId; pendingTokenId = null; openToken(id, false);
+    if(pendingTokenId){   // resolve a deep-linked /token/<ca-or-id> once tokens arrive
+      const t = tokenByRef(pendingTokenId);
+      if(t){ pendingTokenId = null; openToken(t.id, false); }
     }
   }catch(e){ /* backend unreachable — keep the local board */ }
 }
