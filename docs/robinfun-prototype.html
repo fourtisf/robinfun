@@ -1480,7 +1480,21 @@ const fmtUsdSmall = v => v>=1 ? fmtUsdFull(v) : '$'+v.toFixed(v>=0.01?2:4);   //
 const rewardStr = eth => (+(eth||0).toFixed(6))+' ETH · '+fmtUsdSmall((eth||0)*ETH_USD);
 const fmtEth = n => n.toFixed(n<0.01?5:n<1?4:3)+' ETH';
 const fmtNum = n => n>=1e9?(n/1e9).toFixed(2)+'B':n>=1e6?(n/1e6).toFixed(2)+'M':n>=1e3?(n/1e3).toFixed(1)+'k':n.toFixed(0);
-const fmtPrice = p => p>=0.01 ? '$'+p.toFixed(4) : '$'+p.toFixed(8).replace(/0+$/,'').padEnd(9,'0');
+const fmtPrice = p => {
+  if(!(p>0)) return '$0.00';
+  if(p>=0.01) return '$'+p.toFixed(4);
+  // Sub-cent memecoin price: show it readably instead of rounding to $0.0000000.
+  // pump.fun-style subscript counts the run of leading zeros, e.g. $0.0₈2 for a
+  // ~$2-mcap token (price ≈ 2e-9), so there's always a real number + $ worth.
+  const [mant, expStr] = p.toExponential(2).split('e');
+  const zeros = -parseInt(expStr, 10) - 1;                 // leading zeros after '0.'
+  const digits = mant.replace('.', '').replace(/0+$/, '') || '0';
+  if(zeros >= 4){
+    const sub = String(zeros).split('').map(d => '₀₁₂₃₄₅₆₇₈₉'[+d]).join('');
+    return '$0.0' + sub + digits;
+  }
+  return '$' + p.toFixed(zeros + 3).replace(/0+$/, '').replace(/\.$/, '');
+};
 const shortAddr = a => a.slice(0,6)+'…'+a.slice(-4);
 const ago = ts => { const s=(Date.now()-ts)/1000; if(s<60)return Math.floor(s)+'s'; if(s<3600)return Math.floor(s/60)+'m'; if(s<86400)return Math.floor(s/3600)+'h'; return Math.floor(s/86400)+'d'; };
 const rnd = (a,b)=>a+Math.random()*(b-a);
