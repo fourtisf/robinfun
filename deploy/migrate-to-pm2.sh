@@ -40,6 +40,7 @@ dump_env_file(){
   done
 }
 BOT_ENVFILE="$(systemctl show robinfun-bot -p EnvironmentFile --value 2>/dev/null | awk 'NR==1{sub(/^-/,"",$1);print $1}')"
+[ -z "${BOT_ENVFILE:-}" ] && BOT_ENVFILE="$(grep -oP '^EnvironmentFile=-?\K.*' /etc/systemd/system/robinfun-bot.service 2>/dev/null | head -1 || true)"
 
 log "Building pm2 ecosystem from the running services (env preserved)"
 {
@@ -63,7 +64,7 @@ log "Building pm2 ecosystem from the running services (env preserved)"
   echo "      autorestart: true,"
   echo "      env: {"
   dump_env robinfun-bot
-  [ -n "${BOT_ENVFILE:-}" ] && dump_env_file "$BOT_ENVFILE"
+  if [ -n "${BOT_ENVFILE:-}" ]; then dump_env_file "$BOT_ENVFILE"; fi
   echo "      },"
   echo "    },"
   echo "  ],"
