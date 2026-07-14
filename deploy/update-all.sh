@@ -13,7 +13,7 @@ set -uo pipefail
 WEBROOT="${WEBROOT:-/var/www/robinfun}"
 ADMIN_WEBROOT="${ADMIN_WEBROOT:-/var/www/robinfun-admin}"
 SRC_DIR="${SRC_DIR:-/opt/robinfun}"
-BRANCH="${BRANCH:-claude/new-session-v8c9tt}"
+BRANCH="${BRANCH:-main}"
 REPO="${REPO:-https://github.com/fourtisf/robinfun.git}"
 
 log(){ printf '\n\033[1;32m==>\033[0m %s\n' "$*"; }
@@ -35,6 +35,11 @@ fi
 log "Republishing robinfun.io -> ${WEBROOT}"
 mkdir -p "$WEBROOT"
 cp "$SRC_DIR/deploy/site/index.html" "$WEBROOT/index.html"
+# Stamp the served page with the exact build so you can VERIFY the new version
+# is live (footer shows it). If the footer build doesn't change after a deploy,
+# something between here and the browser is caching (CDN/nginx), not the code.
+BUILD_ID="$(git -C "$SRC_DIR" rev-parse --short HEAD 2>/dev/null || echo unknown) · $(date -u +'%Y-%m-%d %H:%MZ')"
+sed -i "s|__BUILD__|build ${BUILD_ID}|g" "$WEBROOT/index.html"
 chown -R www-data:www-data "$WEBROOT" 2>/dev/null || true
 chmod -R a+rX "$WEBROOT" 2>/dev/null || true
 
@@ -72,4 +77,6 @@ log "Reloading nginx"
 nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || warn "nginx reload skipped (check 'nginx -t')."
 
 log "Done — the VPS now serves the latest build (site + admin + bots)."
-echo "  Hard-refresh the browser (Ctrl/Cmd+Shift+R) to bypass the cache."
+echo "  Serving: build ${BUILD_ID}"
+echo "  Open robinfun.io, hard-refresh (Ctrl/Cmd+Shift+R), and check the footer"
+echo "  shows this same build id. If it doesn't, a CDN/proxy is caching the page."
