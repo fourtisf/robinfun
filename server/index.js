@@ -18,6 +18,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const store = require('./store');   // MongoDB (if MONGODB_URI) or JSON-file fallback
+const stats = require('./stats');   // continuous on-chain board-stats indexer
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -125,6 +126,15 @@ app.get('/api/tokens', adminCors, (req, res) => {
   res.json(store.allTokens().slice().reverse());   // newest first
 });
 
+// Public: pre-computed board aggregates (24h vol, all-time vol, paid-to-creators)
+// + per-token mcap/volume, indexed server-side on a loop so the homepage is instant
+// instead of every browser reading the chain. Short cache — refreshed each cycle.
+app.options('/api/stats', adminCors);
+app.get('/api/stats', adminCors, (req, res) => {
+  res.set('Cache-Control', 'public, max-age=10');
+  res.json(stats.getStats());
+});
+
 app.get('/api/tokens/:id', (req, res) => {
   const t = store.findToken(req.params.id);
   if (!t) return res.status(404).json({ error: 'not found' });
@@ -209,4 +219,10 @@ if (SITE_DIR) {
 (async () => {
   await store.init({ dataDir: DATA_DIR, defaultSettings: DEFAULT_SETTINGS });
   app.listen(PORT, HOST, () => console.log(`robinfun-api listening on ${HOST}:${PORT} [store: ${store.backend()}]`));
+  // Kick off the continuous board-stats indexer (reads the chain server-side so
+  // GET /api/stats is instant for every browser). Disable with STATS_INDEXER=off.
+  if (!/^(0|off|false|no)$/i.test(process.env.STATS_INDEXER || '')) {
+    try { stats.startIndexer(() => store.allTokens()); console.log('board-stats indexer started'); }
+    catch (e) { console.error('stats indexer failed to start', e); }
+  }
 })().catch((e) => { console.error('fatal: store init failed', e); process.exit(1); });

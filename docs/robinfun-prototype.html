@@ -2225,6 +2225,34 @@ async function loadBoardStats(){
     recomputeBoardAggregates(); renderGrid(); renderStats(); saveBoardCache();
   }finally{ _boardBusy = false; }
 }
+/* INSTANT board stats: the backend indexes the chain continuously and serves
+   ready aggregates + per-token mcap/volume at /api/stats, so we just apply the
+   numbers — no per-token getLogs in the browser. Returns true if it covered any
+   token (so callers can skip the slow client-side fallback). */
+async function loadServerStats(){
+  try{
+    const r = await fetch(API+'/api/stats', {headers:{accept:'application/json'}});
+    if(!r.ok) return false;
+    const s = await r.json();
+    if(!s || !s.perToken) return false;
+    let hit = false;
+    for(const t of TOKENS){
+      const v = t.ca && s.perToken[t.ca.toLowerCase()]; if(!v) continue; hit = true;
+      if(v.mcapUsd>0) t.mcap = v.mcapUsd;
+      if(v.priceUsd>0) t.price = v.priceUsd;
+      if(v.vol24Usd!=null) t.vol24 = v.vol24Usd;
+      if(v.volAllUsd!=null) t.volAll = v.volAllUsd;
+      if(v.earnedEth!=null) t.earnedEth = v.earnedEth;
+      if(v.graduated!=null) t.graduated = v.graduated;
+    }
+    if(hit){ recomputeBoardAggregates(); renderGrid(); renderStats(); saveBoardCache(); }
+    return hit;
+  }catch(_){ return false; }
+}
+async function refreshBoard(){
+  const ok = await loadServerStats();
+  if(!ok) loadBoardStats();
+}
 
 /* ---------------- ticker tape ---------------- */
 function tapeItem(t, tr){
@@ -3554,7 +3582,7 @@ async function loadServerTokens(){
       if(wallet) seedMyTokens();   // mark my launches as mine for the Treasury
       restoreBoardCache();         // paint last-known mcap/volume INSTANTLY (survives refresh)
       renderGrid(); renderStats(); renderTape();
-      loadBoardStats();            // then refresh real mcap / volume / creator fees (background)
+      refreshBoard();              // pull server-computed stats (instant); falls back to on-chain sweep
     }
     if(pendingTokenId){   // resolve a deep-linked /token/<ca-or-id> once tokens arrive
       const t = tokenByRef(pendingTokenId);
@@ -4053,7 +4081,7 @@ function init(){
   setTimeout(refreshDeployFee, 1500);
   refreshEthPrice();    // real ETH/USD so the dollar figures aren't ~2x off
   setInterval(refreshEthPrice, 45000);   // keep the ETH price live
-  setInterval(loadBoardStats, 90000);    // refresh the board's on-chain stats
+  setInterval(refreshBoard, 25000);      // server-computed stats (instant); on-chain fallback if backend is down
   setTimeout(chainDiag, 2000);           // footer: can the browser read the chain?
   setInterval(chainDiag, 30000);
   setInterval(simTick, 1700);
