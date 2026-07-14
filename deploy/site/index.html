@@ -2091,8 +2091,8 @@ function sortTokens(list){
   }
 }
 function renderGrid(){
-  const q = (document.getElementById('search').value||'').toLowerCase();
-  let list = TOKENS.filter(t=> !q || t.name.toLowerCase().includes(q) || t.ticker.toLowerCase().includes(q));
+  const q = (document.getElementById('search').value||'').trim().toLowerCase();
+  let list = TOKENS.filter(t=> !q || t.name.toLowerCase().includes(q) || t.ticker.toLowerCase().includes(q) || (t.ca && t.ca.toLowerCase().includes(q)));
   list = sortTokens(list);
   const emptyMsg = filter==='watch'
       ? 'Your watchlist is empty — tap the ★ on any token to track it here.'
