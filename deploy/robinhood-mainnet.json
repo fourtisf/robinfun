@@ -4,18 +4,20 @@
   "chainIdHex": "0x1237",
   "rpc": "https://rpc.mainnet.chain.robinhood.com",
   "explorer": "https://robinhoodchain.blockscout.com",
-  "deployedAt": "2026-07-13",
-  "build": "mainnet private beta v2 — graduates to REAL Uniswap V2 (DexScreener/bot-trackable), betaMode allowlist, 0.001 ETH cap",
+  "deployedAt": "2026-07-14",
+  "build": "mainnet v3 — uniform 1% protocol fee (bonding + post-graduation), 0.005 ETH graduation cap, graduates to REAL Uniswap V2 (DexScreener/bot-trackable), betaMode allowlist",
   "deployFeeWei": "1000000000000000",
-  "graduationEthWei": "1000000000000000",
+  "graduationEthWei": "5000000000000000",
+  "protocolFeeBps": 100,
+  "curveFeeBps": 100,
   "betaMode": true,
   "allowlisted": ["0xA49dc277A65CCb35D94522cecDa19CA340AE991C"],
   "admin": "0xA49dc277A65CCb35D94522cecDa19CA340AE991C",
   "contracts": {
-    "factory": "0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2",
-    "feeRouter": "0x630216d06a54581e04c452892f69137e75ea45da",
-    "tokenImpl": "0xfdc16f1705fd9a320c08db278edb35bd86254f7f",
-    "curveImpl": "0x51efbe1f4baa601f7f7762e43babf1cc09094614",
+    "factory": "0xf0a093bc6ab5bb408ca1f084ec2161d879edaa57",
+    "feeRouter": "0x10343c9f38ca2a4f543318e378f84c58a4bd10d1",
+    "tokenImpl": "0x05991a8093ac57c3f219d4eaa4eb30808e9f8d17",
+    "curveImpl": "0xf85a0be0965e07090a5eddb008feec6d7562a8d9",
     "treasury": "0xA49dc277A65CCb35D94522cecDa19CA340AE991C"
   },
   "dex": {
@@ -24,6 +26,6 @@
     "router02": "0x89e5db8b5aa49aa85ac63f691524311aeb649eba",
     "weth9": "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
   },
-  "supersedes": "0xc8b95E3212d1876a2Ce1CD2876cAD23592cb0819 (mock-DEX beta — orphaned)",
-  "notes": "MAINNET private beta v2. Tokens graduate to REAL Uniswap V2 → appear on DexScreener + are bot-trackable AFTER graduation (pre-graduation they live on the bonding curve, like pump.fun before Raydium). betaMode ON — only the allowlisted wallet creates/trades; per-token cap 0.001 ETH. Admin/owner/treasury = the deployer 0xA49dc277 (this key was exposed during setup — rotate to a fresh/multisig before scaling). Go public: factory.setBetaMode(false)."
+  "supersedes": "factory 0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2 / feeRouter 0x630216d06a54581e04c452892f69137e75ea45da (beta v2, 0.5% post-grad fee, 0.001 ETH cap — tokens created there stay on it)",
+  "notes": "MAINNET v3. Uniform 1% protocol fee: 1% curve fee (bonding) AND 1% always-on fee post-graduation (PROTOCOL_FEE_BPS=100) — the platform takes 1% on every trade forever. Graduation cap 0.005 ETH so tokens graduate fast onto REAL Uniswap V2 (visible on DexScreener + bot-trackable). betaMode ON — only the allowlisted wallet creates/trades until setBetaMode(false). Admin/owner/treasury = the deployer 0xA49dc277 (this key was exposed during setup — ROTATE to a fresh/multisig before going public). Go public: factory.setBetaMode(false)."
 }

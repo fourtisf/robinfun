@@ -19,7 +19,7 @@ const path = require('path');
 
 const CFG = {
   rpc: process.env.RPC || 'https://rpc.mainnet.chain.robinhood.com',
-  factory: (process.env.FACTORY_ADDR || '0xfa5c740aec9d91cebdc9844e5ca6591f309a5dd2').trim(),
+  factory: (process.env.FACTORY_ADDR || '0xf0a093bc6ab5bb408ca1f084ec2161d879edaa57').trim(),
   funderKey: (process.env.FUNDER_KEY || process.env.PRIVATE_KEY || '').trim(),
   numWallets: Math.min(20, Math.max(1, Number(process.env.NUM_WALLETS || 5))),
   walletFile: process.env.WALLET_FILE || path.join(__dirname, 'wallets.json'),
