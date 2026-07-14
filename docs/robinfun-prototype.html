@@ -111,6 +111,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 }
 .nav button:hover{color:var(--cream);background:var(--ledger)}
 .nav button.active{color:var(--gilt-bright);background:var(--gilt-dim)}
+.nav-tools{display:none}   /* desktop: hidden; shown inside the open mobile menu */
 .topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px}
 .chain-badge{
   display:flex;align-items:center;gap:7px;padding:6px 11px;border:1px solid var(--rule-2);
@@ -289,7 +290,7 @@ body.light .stake-orbit text{fill:#3C9A1B}
   .banner-content{max-width:100%}
   .banner-art{opacity:.28;width:60%}
 }
-@media(max-width:560px){.stat-blocks{grid-template-columns:1fr}}
+/* .stat-blocks mobile layout handled in the responsive section below (compact 3-up) */
 
 /* ---------------- section frame ---------------- */
 .section{padding:26px 0 60px}
@@ -725,13 +726,59 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
     display:flex;position:absolute;top:62px;left:0;right:0;flex-direction:column;align-items:stretch;
     background:var(--ink-2);border-bottom:1px solid var(--rule);padding:10px 16px;gap:2px;
   }
+  .nav.open>button{padding:12px 13px;font-size:15px;text-align:left}   /* bigger tap targets */
   .chain-badge{display:none}
   .tb-launch{display:none}
+  /* secondary controls move into the hamburger menu on mobile → roomy top bar */
+  #langBtn,#themeBtn{display:none}
+  .nav.open .nav-tools{display:flex;flex-direction:column;border-top:1px solid var(--rule);margin-top:6px;padding-top:6px;gap:2px}
+  .nav-tools button,.nav-tools a{padding:12px 13px;font-size:14.5px;text-align:left;color:var(--cream-dim);border-radius:var(--r-sm);display:block}
+  .nav-tools button:hover,.nav-tools a:hover{color:var(--cream);background:var(--ledger)}
+  /* tighter, consistent gutters + header spacing on phones */
+  .wrap,.topbar-in{padding-left:16px;padding-right:16px}
+  .topbar-in{gap:12px}
+  .topbar-right{gap:7px}
+  .tb-icon{height:34px;min-width:34px}
+  #walletBtn{padding:8px 12px;font-size:13px}
   .fsearch{min-width:0;width:100%;margin-left:0}
   .stat-strip{grid-template-columns:1fr 1fr}
-  .hero{padding:40px 0 30px}
+  .hero{padding:22px 0 24px}
+  .hero-top{gap:14px;margin-bottom:14px}
+  .hero-banner{min-height:auto;padding:26px 22px 24px;border-radius:18px}
+  .banner-content{max-width:100%}
+  .banner-mark{width:46px;height:46px}
+  .banner-tag{font-size:16px}
+  .hero-cta{gap:10px}
+  .hero-lead{padding:16px}
   .field-row{grid-template-columns:1fr}
   .preset-row{grid-template-columns:1fr 1fr}
+}
+/* compact KPI row instead of three tall stacked cards */
+@media(max-width:560px){
+  .stat-blocks{grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:20px}
+  .stat-block{padding:15px 8px;border-radius:13px}
+  .stat-block .sb-v{font-size:clamp(19px,6.4vw,26px)}
+  .stat-block .sb-k{font-size:8.5px;letter-spacing:.03em;margin-top:6px;line-height:1.32}
+  .hero-desc{font-size:14px}
+}
+/* tightest phones */
+@media(max-width:420px){
+  .wrap,.topbar-in{padding-left:13px;padding-right:13px}
+  .topbar-in{gap:8px}
+  .topbar-right{gap:6px}
+  .brand-seal{width:26px;height:26px}
+  .brand-word{font-size:18px}
+  .tb-icon{height:32px;min-width:32px}
+  .tb-lang{padding:0 7px;font-size:11.5px}
+  #walletBtn{padding:8px 10px;font-size:12px}
+  .hamburger{padding:6px 5px;font-size:19px}
+  .banner-word{font-size:clamp(34px,11.5vw,46px)}
+  .banner-tag{font-size:15px}
+  .hero-cta .btn{flex:1 1 100%;width:100%}          /* full-width CTAs */
+  .lead-head,.lead-row{grid-template-columns:1fr 62px 54px;gap:8px}
+  .lead-logo{width:28px;height:28px;font-size:15px}
+  .lead-nm{font-size:12px}
+  .lead-mc,.lead-vol{font-size:11.5px}
 }
 @media (prefers-reduced-motion:reduce){
   .tape-track{animation:none}
@@ -825,6 +872,12 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <button data-nav="stake" data-i18n="nav.staking" onclick="go('stake')">Staking</button>
       <button data-nav="docs" data-i18n="nav.whitepaper" onclick="go('docs')">Whitepaper</button>
       <button data-i18n="nav.chain" onclick="toast('Robinhood Chain — L2 explorer &amp; bridge coming soon','')">Robinhood Chain</button>
+      <div class="nav-tools">
+        <button onclick="toggleTheme();document.getElementById('nav').classList.remove('open')">◐&nbsp; Light / dark</button>
+        <button onclick="toggleLang();document.getElementById('nav').classList.remove('open')">🌐&nbsp; Language · <span id="navLangLbl">EN</span></button>
+        <a class="ntool-social" href="https://x.com/robinfunio" target="_blank" rel="noopener noreferrer">𝕏&nbsp; @robinfunio</a>
+        <a class="ntool-social" href="https://t.me/robinfunio" target="_blank" rel="noopener noreferrer">✈&nbsp; Telegram</a>
+      </div>
     </nav>
     <div class="topbar-right">
       <span class="tb-eth" id="ethPx" title="Live ETH price · CoinGecko"><b>Ξ</b>&nbsp;$—</span>
@@ -1746,6 +1799,7 @@ function applyLang(l){
   document.querySelectorAll('[data-i18n-html]').forEach(e=>{ const v=d[e.getAttribute('data-i18n-html')]; if(v!=null) e.innerHTML=v; });
   const wb=document.getElementById('walletBtn'); if(wb && !wallet) wb.textContent=d['btn.connect'];
   document.getElementById('langBtn').textContent = l==='en'?'EN':'中';
+  const nl=document.getElementById('navLangLbl'); if(nl) nl.textContent = l==='en'?'EN':'中文';
 }
 function toggleLang(){ applyLang(LANG==='en'?'zh':'en'); }
 
