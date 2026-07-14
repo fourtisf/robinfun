@@ -255,6 +255,20 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
     <button class="btn sm" onclick="refreshAll()">↻ Refresh</button>
   </div>
 
+  <!-- ============ BOARD TOKENS (backend metadata) ============ -->
+  <div class="sec-label">Board tokens · robinfun.io (delete)</div>
+  <div class="card danger">
+    <h2>🗑 Board tokens · robinfun.io</h2>
+    <div class="desc">These are the token cards shown on the <b>robinfun.io board</b> (backend metadata — name, ticker, logo, socials). Deleting one removes it from the board only; the on-chain contract is permanent and cannot be deleted. Use this to clear test/testnet launches. Requires <code>ADMIN_SECRET</code>.</div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="field"><label>Admin secret</label><input type="password" id="board-secret" placeholder="ADMIN_SECRET" autocomplete="off"></div>
+      <button class="btn" id="boardReloadBtn" onclick="loadBoardTokens()">↻ Reload list</button>
+      <button class="btn danger" id="boardWipeBtn" onclick="deleteAllBoardTokens()">Delete ALL</button>
+    </div>
+    <div id="board-list" class="cur" style="max-height:340px;overflow:auto;padding:6px 12px">Click <b>Reload list</b> to load the board tokens.</div>
+    <div class="hint" id="board-hint"></div>
+  </div>
+
   <!-- ============ BETA GATE ============ -->
   <div class="sec-label">Access control</div>
   <div class="card">
@@ -327,19 +341,6 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
       <button class="btn primary" id="gradlpBtn" onclick="doSetGradLp()">Save threshold</button>
     </div>
     <div class="hint" id="gradlp-hint"></div>
-  </div>
-
-  <!-- ============ BOARD TOKENS (backend metadata) ============ -->
-  <div class="card danger">
-    <h2>🗑 Board tokens · robinfun.io</h2>
-    <div class="desc">These are the token cards shown on the <b>robinfun.io board</b> (backend metadata — name, ticker, logo, socials). Deleting one removes it from the board only; the on-chain contract is permanent and cannot be deleted. Use this to clear test/testnet launches. Requires <code>ADMIN_SECRET</code>.</div>
-    <div class="row" style="margin-bottom:10px">
-      <div class="field"><label>Admin secret</label><input type="password" id="board-secret" placeholder="ADMIN_SECRET" autocomplete="off"></div>
-      <button class="btn" id="boardReloadBtn" onclick="loadBoardTokens()">↻ Reload list</button>
-      <button class="btn danger" id="boardWipeBtn" onclick="deleteAllBoardTokens()">Delete ALL</button>
-    </div>
-    <div id="board-list" class="cur" style="max-height:340px;overflow:auto;padding:6px 12px">Click <b>Reload list</b> to load the board tokens.</div>
-    <div class="hint" id="board-hint"></div>
   </div>
 
   <!-- ============ TREASURY / REVENUE ============ -->
