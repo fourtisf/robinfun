@@ -1467,7 +1467,7 @@ const START_ETH = 0.02, GRAD_ETH = 0.22;   // beta curve mcap (ETH): 0.05-ETH gr
 // A token "GRADUATES" (earns the ◆ GRADUATED badge on robinfun) only once its
 // Uniswap ETH-side liquidity reaches this. Leaving the curve (contract-graduated)
 // just LISTS it on the DEX; the graduated badge is a real-liquidity milestone.
-const GRAD_LP_ETH = 2.6;
+let GRAD_LP_ETH = 2.6;   // overridable live from the backend (GET /api/settings), set in the admin panel
 let START_CAP = Math.round(START_ETH*ETH_USD), GRAD_CAP = Math.round(GRAD_ETH*ETH_USD);
 const fmtUsd = n => n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n>=1e3 ? '$'+(n/1e3).toFixed(1)+'k' : '$'+n.toFixed(0);
 const fmtUsdFull = n => '$'+Math.round(n).toLocaleString('en-US');
@@ -3310,6 +3310,14 @@ function tokenFromRecord(rec){
   t.ca = rec.ca || '';
   return t;
 }
+async function loadSettings(){
+  try{
+    const r = await fetch(API+'/api/settings', {headers:{accept:'application/json'}});
+    if(!r.ok) return;
+    const s = await r.json();
+    if(s && Number(s.gradLpEth) > 0){ GRAD_LP_ETH = Number(s.gradLpEth); if(currentTokenId) renderToken(); renderGrid(); }
+  }catch(_){}
+}
 async function loadServerTokens(){
   try{
     const r = await fetch(API+'/api/tokens', {headers:{accept:'application/json'}});
@@ -3814,6 +3822,7 @@ function init(){
   renderStats();
   renderGrid();
   renderTape();
+  loadSettings();       // pull the graduated-LP threshold (and any settings) from the backend
   loadServerTokens();   // pull persisted launches from the backend (async)
   routeFromLocation();  // show the page that matches the current URL (deep links / refresh)
   refreshDeployFee();   // show the real on-chain deploy fee (retry once ethers loads)

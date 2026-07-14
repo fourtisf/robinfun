@@ -14,7 +14,7 @@
      'unsafe-inline' is required because the markup uses inline on* handlers and
      an inline <style>; it does NOT weaken connect-src / object-src / base-uri,
      which are the directives that contain a compromise. -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src https://rpc.mainnet.chain.robinhood.com https://api.coingecko.com https://api.coinbase.com; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data:; connect-src https://rpc.mainnet.chain.robinhood.com https://api.coingecko.com https://api.coinbase.com https://robinfun.io; base-uri 'none'; form-action 'none'; frame-ancestors 'none'; object-src 'none'">
 <title>Robinfun — Admin Console</title>
 <meta name="description" content="Owner-only control panel for the Robinfun launchpad on Robinhood Chain.">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%230B0F0A%22%2F%3E%3Cpath%20fill%3D%22%23C6F23C%22%20d%3D%22M32%2012l16%209v18l-16%209-16-9V21z%22%20opacity%3D%22.9%22%2F%3E%3C%2Fsvg%3E">
@@ -315,6 +315,18 @@ textarea{resize:vertical;min-height:74px;line-height:1.5}
       <button class="btn primary" id="capBtn" onclick="doSetCap()">Set graduation cap</button>
     </div>
     <div class="hint" id="cap-preview"></div>
+  </div>
+
+  <div class="card">
+    <h2>🏆 Graduated badge threshold</h2>
+    <div class="desc">The Uniswap ETH-side liquidity a token must reach for robinfun.io to show the <b>◆ GRADUATED</b> badge. Below it, tokens show <b>◆ LISTED</b> with progress toward this. This is a <b>website display</b> setting (not on-chain) stored in the backend — it applies to everyone on the next page load. Requires <code>ADMIN_SECRET</code> (same as delete).</div>
+    <div class="cur">Current: <b id="c-gradlp">—</b> ETH LP</div>
+    <div class="row" style="margin-bottom:10px">
+      <div class="field"><label>New threshold (ETH LP)</label><input type="number" id="gradlp-in" step="0.1" min="0" placeholder="2.6"></div>
+      <div class="field"><label>Admin secret</label><input type="password" id="gradlp-secret" placeholder="ADMIN_SECRET" autocomplete="off"></div>
+      <button class="btn primary" id="gradlpBtn" onclick="doSetGradLp()">Save threshold</button>
+    </div>
+    <div class="hint" id="gradlp-hint"></div>
   </div>
 
   <!-- ============ TREASURY / REVENUE ============ -->
@@ -1019,6 +1031,25 @@ async function doSetCap(){
   let p; try{ p=capToParams(v); }catch(_){ toast('Bad number','err'); return; }
   await send('Set graduation cap '+v+' ETH', ()=>facW.setCurveParams({ virtualEth:p.veth, virtualToken:p.vtok, graduationEth:p.grad }));
 }
+/* Graduated-badge LP threshold — a BACKEND setting (not on-chain), POSTed to the
+   robinfun.io API with the ADMIN_SECRET. robinfun.io reads it on load. */
+async function loadGradLp(){
+  try{ const r=await fetch(APP+'api/settings',{headers:{accept:'application/json'}}); if(!r.ok) return; const s=await r.json(); if(s&&s.gradLpEth) setV('c-gradlp', s.gradLpEth); }catch(_){}
+}
+async function doSetGradLp(){
+  const v=document.getElementById('gradlp-in').value.trim();
+  const secret=document.getElementById('gradlp-secret').value;
+  if(v===''||isNaN(v)||Number(v)<=0){ toast('Enter an ETH-LP threshold','err'); return; }
+  if(!secret){ toast('Enter the ADMIN_SECRET','err'); return; }
+  const btn=document.getElementById('gradlpBtn'); btn.disabled=true;
+  try{
+    const r=await fetch(APP+'api/settings',{method:'POST',headers:{'content-type':'application/json','x-admin-secret':secret},body:JSON.stringify({gradLpEth:Number(v)})});
+    const j=await r.json().catch(()=>({}));
+    if(r.ok){ toast('Graduated threshold → '+Number(v)+' ETH LP','ok'); setV('c-gradlp', Number(v)); document.getElementById('gradlp-hint').textContent='✓ Saved. Live on robinfun.io on next page load.'; document.getElementById('gradlp-secret').value=''; }
+    else { toast('Failed: '+(j.error||('HTTP '+r.status)),'err'); }
+  }catch(e){ toast('Network error: '+(e.message||e),'err'); }
+  finally{ btn.disabled=false; }
+}
 /* Echo the FULL new address back for character-by-character comparison before
    signing — the cheapest defence against address-poisoning / clipboard swaps. */
 function confirmAddr(action, a){ return confirm(action+'\n\n'+a+'\n\nCheck every character against your source. Proceed?'); }
@@ -1290,6 +1321,7 @@ function enterConsole(){
 async function boot(){
   setT('f-addr', shortAddr(FACTORY_ADDR)); setT('r-addr', shortAddr(FEEROUTER_ADDR));
   refreshEthPrice();
+  loadGradLp();         // show the current graduated-badge LP threshold from the backend
   await refreshAll();   // read-only view works before connecting a wallet
   const inj=pickInjected();
   if(inj){ try{ const accs=await inj.request({ method:'eth_accounts' }); if(accs&&accs.length){ activeInjected=inj; connect(); } }catch(_){} }

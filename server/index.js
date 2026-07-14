@@ -42,6 +42,22 @@ function save(db) {
 }
 const db = load();
 
+// ---------------------------------------------------------------- settings store
+// Small operator-tunable settings the frontend reads on load (e.g. the ETH-LP
+// milestone a token must reach to earn the "GRADUATED" badge on robinfun.io).
+const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const DEFAULT_SETTINGS = { gradLpEth: 2.6 };
+function loadSettings() { try { return { ...DEFAULT_SETTINGS, ...JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) }; } catch { return { ...DEFAULT_SETTINGS }; } }
+function saveSettings(s) { const tmp = SETTINGS_FILE + '.' + process.pid + '.tmp'; fs.writeFileSync(tmp, JSON.stringify(s)); fs.renameSync(tmp, SETTINGS_FILE); }
+let settings = loadSettings();
+// Constant-time admin check, shared by the settings + delete endpoints.
+function adminOk(req) {
+  const secret = process.env.ADMIN_SECRET || '';
+  if (!secret) return false;
+  const given = req.get('x-admin-secret') || '';
+  return given.length === secret.length && crypto.timingSafeEqual(Buffer.from(given), Buffer.from(secret));
+}
+
 // ---------------------------------------------------------------- helpers
 // SVG is intentionally NOT allowed: an <svg> served same-origin can execute
 // script if opened directly, which would be stored XSS. Raster only.
@@ -86,6 +102,37 @@ app.set('trust proxy', 1);              // behind nginx → real client IP in re
 app.use(express.json({ limit: '6mb' }));
 
 app.get('/api/health', (req, res) => res.json({ ok: true, tokens: db.tokens.length }));
+
+// CORS for the settings endpoints only — the admin console lives on a different
+// origin (robinfun.tech) and needs to GET/POST here. Everything else stays same-origin.
+const ADMIN_ORIGIN = process.env.ADMIN_ORIGIN || 'https://robinfun.tech';
+function settingsCors(req, res, next) {
+  const origin = req.get('origin') || '';
+  if (origin === ADMIN_ORIGIN) {
+    res.set('Access-Control-Allow-Origin', ADMIN_ORIGIN);
+    res.set('Vary', 'Origin');
+    res.set('Access-Control-Allow-Headers', 'content-type, x-admin-secret');
+    res.set('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  }
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+}
+app.options('/api/settings', settingsCors);
+// Public: the frontend reads these on load.
+app.get('/api/settings', settingsCors, (req, res) => res.json(settings));
+// Admin: change a setting (same x-admin-secret as delete). e.g. { gradLpEth: 2.6 }
+app.post('/api/settings', settingsCors, (req, res) => {
+  if (!process.env.ADMIN_SECRET) return res.status(503).json({ error: 'settings locked (set ADMIN_SECRET)' });
+  if (!adminOk(req)) return res.status(403).json({ error: 'forbidden' });
+  const b = req.body || {};
+  if (b.gradLpEth !== undefined) {
+    const g = Number(b.gradLpEth);
+    if (!(g > 0 && g <= 1000)) return res.status(400).json({ error: 'gradLpEth must be 0-1000' });
+    settings.gradLpEth = g;
+  }
+  saveSettings(settings);
+  res.json({ ok: true, settings });
+});
 
 app.get('/api/tokens', (req, res) => {
   res.json(db.tokens.slice().reverse());   // newest first

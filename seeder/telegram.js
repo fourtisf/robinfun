@@ -18,7 +18,7 @@ const fs = require('fs');
 const {
   ethers, CFG, FACTORY_ABI, makeProvider, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
-  makeL1Provider, verifyInbox, bridgeOne,
+  makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -96,6 +96,8 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 <b>/wallets</b> — alamat + saldo di Robinhood Chain & Ethereum L1
 <b>/bridge</b> — pindah ETH dari Ethereum L1 → Robinhood Chain
 <b>/keys</b> — 🔑 private key wallet (RAHASIA)
+<b>/buy</b> 0xCA 0.01 — bot beli token (dorong ke graduated)
+<b>/sell</b> 0xCA 50 — bot jual 50% token
 <b>/go</b> · <b>/stop</b> — mulai / berhenti auto-launch
 <b>/status</b> — status seeder + saldo
 <b>/stats</b> — jumlah token dibuat + total market cap
@@ -304,6 +306,44 @@ async function doStop(chatId) {
   await send(chatId, '⏸️ <b>Seeder OFF</b> — berhenti launch.', menu());
 }
 
+// ---------------- bot trading: buy / sell a token ----------------
+let trading = false; // one on-chain trade at a time (avoid nonce clashes across wallets)
+async function doBuy(chatId, args) {
+  const ca = args[0]; const eth = args[1];
+  if (!ca || !ethers.isAddress(ca) || !eth || !(Number(eth) > 0)) { await send(chatId, 'Format: <code>/buy 0xCONTRACT 0.01</code> — beli 0.01 ETH token itu.'); return; }
+  if (trading) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
+  trading = true;
+  try {
+    const need = ethers.parseEther(String(eth)) + gasBuf;
+    const bals = await balances();
+    const i = bals.findIndex((b) => b >= need);
+    if (i < 0) { await send(chatId, `Nggak ada wallet dengan ≥ ${fmt(need)} ETH. Isi ETH dulu (/wallets).`); return; }
+    const w = wallets[i];
+    await send(chatId, `🟢 BUY ${eth} ETH · <code>${ca.slice(0, 12)}…</code> · dari <code>${w.address.slice(0, 10)}…</code>`);
+    const r = await botBuy(w, provider, ca, eth);
+    await send(chatId, `✅ Beli di ${r.venue === 'curve' ? 'bonding curve' : 'Uniswap'}${r.pending ? ' (terkirim, belum konfirmasi)' : ''}\ntx <code>${r.hash}</code>`);
+  } catch (e) { await send(chatId, `❌ Buy gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
+  finally { trading = false; }
+}
+async function doSell(chatId, args) {
+  const ca = args[0]; const pct = args[1] || '100';
+  if (!ca || !ethers.isAddress(ca) || !(Number(pct) > 0 && Number(pct) <= 100)) { await send(chatId, 'Format: <code>/sell 0xCONTRACT 50</code> — jual 50% dari tiap wallet yang punya (default 100%).'); return; }
+  if (trading) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
+  trading = true;
+  try {
+    await send(chatId, `🔴 SELL ${pct}% · <code>${ca.slice(0, 12)}…</code> · dari wallet yang punya…`);
+    let done = 0;
+    for (const w of wallets) {
+      try {
+        const r = await botSell(w, provider, ca, pct);
+        if (r.skip) continue;
+        if (r.ok) { done++; await send(chatId, `✅ ${w.address.slice(0, 10)}… jual di ${r.venue === 'curve' ? 'curve' : 'Uniswap'}${r.pending ? ' (terkirim)' : ''}\ntx <code>${r.hash}</code>`); }
+      } catch (e) { await send(chatId, `❌ ${w.address.slice(0, 10)}…: ${esc(e.shortMessage || e.reason || e.message)}`); }
+    }
+    if (!done) await send(chatId, 'Nggak ada wallet yang pegang token ini.');
+  } finally { trading = false; }
+}
+
 // ---------------- command dispatch (shared by text + buttons) ----------------
 async function dispatch(chatId, cmd, args) {
   switch (cmd) {
@@ -325,6 +365,8 @@ async function dispatch(chatId, cmd, args) {
     case '/interval': await setCfg(chatId, 'intervalSec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 5, 'interval (detik)'); break;
     case '/levy': await setCfg(chatId, 'levyBps', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 1000, 'levy (bps)'); break;
     case '/max': await setCfg(chatId, 'maxTokens', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0, 'max tokens'); break;
+    case '/buy': doBuy(chatId, args).catch((e) => send(chatId, 'Buy error: ' + esc(e.message || String(e)))); break;
+    case '/sell': doSell(chatId, args).catch((e) => send(chatId, 'Sell error: ' + esc(e.message || String(e)))); break;
     case '/sweep': {
       const dest = args[0];
       if (!dest || !ethers.isAddress(dest)) { await send(chatId, 'Format: <code>/sweep 0xTujuan</code>'); break; }
@@ -464,6 +506,8 @@ async function main() {
     { command: 'wallets', description: 'Alamat + saldo (RH Chain & Ethereum L1)' },
     { command: 'bridge', description: 'Bridge ETH: Ethereum L1 -> Robinhood Chain' },
     { command: 'keys', description: '🔑 Private key wallet (RAHASIA)' },
+    { command: 'buy', description: 'Bot beli token: /buy 0xCA 0.01' },
+    { command: 'sell', description: 'Bot jual token: /sell 0xCA 50' },
     { command: 'go', description: 'Mulai auto-launch token' },
     { command: 'stop', description: 'Berhenti launch' },
     { command: 'status', description: 'Status seeder & saldo' },

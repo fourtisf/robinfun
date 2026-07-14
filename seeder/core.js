@@ -45,6 +45,9 @@ const CFG = {
   // unverified value here.
   l1InboxAddr: (process.env.L1_INBOX_ADDR || '').trim(),
   bridgeMinEth: String(process.env.BRIDGE_MIN_ETH || '0.003'),
+  // DEX (Uniswap V2 on Robinhood Chain) — for buying/selling graduated tokens
+  dexRouter: (process.env.DEX_ROUTER || '0x89e5db8b5aa49aa85ac63f691524311aeb649eba').trim(),
+  weth: (process.env.WETH || '0x0bd7d308f8e1639fab988df18a8011f41eacad73').trim(),
 };
 
 const FACTORY_ABI = [
@@ -54,6 +57,7 @@ const FACTORY_ABI = [
   'function owner() view returns (address)',
   'function tradeAllowed(address) view returns (bool)',
   'function setBetaAllowed(address[] who, bool allowed)',
+  'function curveOf(address token) view returns (address)',
   'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
 ];
 
@@ -62,6 +66,19 @@ const CURVE_ABI = [
   'function currentPrice() view returns (uint256)',
   'function graduated() view returns (bool)',
   'function graduationProgress() view returns (uint256 collected, uint256 target)',
+  'function buy(uint256 minTokensOut, uint256 deadline) payable returns (uint256)',
+  'function sell(uint256 tokensIn, uint256 minEthOut, uint256 deadline) returns (uint256)',
+];
+
+const ROUTER_ABI = [
+  'function swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline) payable',
+  'function swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)',
+];
+
+const ERC20_ABI = [
+  'function balanceOf(address) view returns (uint256)',
+  'function approve(address spender, uint256 amount) returns (bool)',
+  'function allowance(address owner, address spender) view returns (uint256)',
 ];
 
 const PRE = ['Doge','Pepe','Wojak','Chad','Turbo','Giga','Baby','Based','Mega','Shib','Floki','Cyber','Rocket','Degen','Sigma','Ninja','Cosmic','Quantum','Hyper','Moon','Ser','Wen','Bonk','Wif','Fren','Comfy','Alpha','Vibe','Astro','Retro'];
@@ -256,10 +273,64 @@ async function sweepAll(wallets, provider, dest) {
   return out;
 }
 
+// ---- bot trading: buy/sell a token, auto-routing curve (bonding) vs DEX (graduated) ----
+async function resolveCurve(provider, ca) {
+  try { const c = await new ethers.Contract(CFG.factory, FACTORY_ABI, provider).curveOf(ca); return (c && c !== ethers.ZeroAddress) ? c : ''; } catch (_) { return ''; }
+}
+async function isGraduated(provider, curveAddr) {
+  try { return await new ethers.Contract(curveAddr, CURVE_ABI, provider).graduated(); } catch (_) { return false; }
+}
+async function waitBounded(tx) { // never hang the bot on a stuck tx
+  try { return await tx.wait(1, 180000); } catch (e) { if (e && e.code === 'TIMEOUT') return null; throw e; }
+}
+async function ensureApprove(wallet, ca, spender, amount) {
+  const erc = new ethers.Contract(ca, ERC20_ABI, wallet);
+  const cur = await erc.allowance(wallet.address, spender).catch(() => 0n);
+  if (cur < amount) { const tx = await erc.approve(spender, ethers.MaxUint256); await tx.wait(); }
+}
+
+// Buy `ethAmount` ETH of token `ca` from `wallet`. Curve buy while bonding,
+// Uniswap swap once graduated. Returns {ok, venue, hash, pending} | throws.
+async function botBuy(wallet, provider, ca, ethAmount) {
+  const value = ethers.parseEther(String(ethAmount));
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const curveAddr = await resolveCurve(provider, ca);
+  const grad = curveAddr ? await isGraduated(provider, curveAddr) : true;
+  if (curveAddr && !grad) {
+    const tx = await new ethers.Contract(curveAddr, CURVE_ABI, wallet).buy(0n, deadline, { value });
+    return { ok: true, venue: 'curve', hash: tx.hash, pending: !(await waitBounded(tx)) };
+  }
+  const tx = await new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet)
+    .swapExactETHForTokensSupportingFeeOnTransferTokens(0n, [CFG.weth, ca], wallet.address, deadline, { value });
+  return { ok: true, venue: 'dex', hash: tx.hash, pending: !(await waitBounded(tx)) };
+}
+
+// Sell `pct`% (1-100) of the wallet's balance of token `ca`. Auto-routes.
+async function botSell(wallet, provider, ca, pct) {
+  const erc = new ethers.Contract(ca, ERC20_ABI, wallet);
+  const bal = await erc.balanceOf(wallet.address);
+  const p = Math.max(1, Math.min(100, Math.round(Number(pct) || 0)));
+  const amount = (bal * BigInt(p)) / 100n;
+  if (amount <= 0n) return { skip: true, reason: 'saldo token 0' };
+  const deadline = Math.floor(Date.now() / 1000) + 600;
+  const curveAddr = await resolveCurve(provider, ca);
+  const grad = curveAddr ? await isGraduated(provider, curveAddr) : true;
+  if (curveAddr && !grad) {
+    await ensureApprove(wallet, ca, curveAddr, amount);
+    const tx = await new ethers.Contract(curveAddr, CURVE_ABI, wallet).sell(amount, 0n, deadline);
+    return { ok: true, venue: 'curve', sold: amount, hash: tx.hash, pending: !(await waitBounded(tx)) };
+  }
+  await ensureApprove(wallet, ca, CFG.dexRouter, amount);
+  const tx = await new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet)
+    .swapExactTokensForETHSupportingFeeOnTransferTokens(amount, 0n, [ca, CFG.weth], wallet.address, deadline);
+  return { ok: true, venue: 'dex', sold: amount, hash: tx.hash, pending: !(await waitBounded(tx)) };
+}
+
 module.exports = {
-  ethers, CFG, FACTORY_ABI, CURVE_ABI, INBOX_ABI, makeProvider,
+  ethers, CFG, FACTORY_ABI, CURVE_ABI, ROUTER_ABI, ERC20_ABI, INBOX_ABI, makeProvider,
   genName, fetchMeme, postMeta, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
+  resolveCurve, isGraduated, botBuy, botSell,
 };
