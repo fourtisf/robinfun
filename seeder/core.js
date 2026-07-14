@@ -49,6 +49,13 @@ const FACTORY_ABI = [
   'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
 ];
 
+const CURVE_ABI = [
+  'function marketCapEth() view returns (uint256)',
+  'function currentPrice() view returns (uint256)',
+  'function graduated() view returns (bool)',
+  'function graduationProgress() view returns (uint256 collected, uint256 target)',
+];
+
 const PRE = ['Doge','Pepe','Wojak','Chad','Turbo','Giga','Baby','Based','Mega','Shib','Floki','Cyber','Rocket','Degen','Sigma','Ninja','Cosmic','Quantum','Hyper','Moon','Ser','Wen','Bonk','Wif','Fren','Comfy','Alpha','Vibe','Astro','Retro'];
 const POST = ['Inu','Cat','Frog','Moon','Rocket','Coin','Lord','King','Ape','Bull','Bonk','Elon','Mars','Pump','Fren','Wojak','Pepe','Doge','Meme','Chad','Whale','Hodl','Lambo','Wagmi','Pamp','Gains','Chan','Bro','Fud','Zilla'];
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
@@ -100,6 +107,31 @@ function loadOrCreateWallets(provider) {
 
 async function readDeployFee(factoryRead) { try { return await factoryRead.deployFee(); } catch (_) { return 0n; } }
 
+// live ETH→USD (CoinGecko, Coinbase fallback), cached 60s
+let _ethUsd = 0, _ethUsdAt = 0;
+async function ethUsd() {
+  const now = Date.now();
+  if (_ethUsd && now - _ethUsdAt < 60000) return _ethUsd;
+  const sources = [
+    { url: 'https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd', pick: (j) => j && j.ethereum && j.ethereum.usd },
+    { url: 'https://api.coinbase.com/v2/prices/ETH-USD/spot', pick: (j) => j && j.data && parseFloat(j.data.amount) },
+  ];
+  for (const s of sources) {
+    try { const j = await (await fetch(s.url, { signal: AbortSignal.timeout(6000) })).json(); const v = s.pick(j); if (v) { _ethUsd = Number(v); _ethUsdAt = now; return _ethUsd; } } catch (_) {}
+  }
+  return _ethUsd || 0;
+}
+
+// market cap (in ETH wei) + graduation state for a token's bonding curve
+async function tokenStats(curveAddr, provider) {
+  if (!curveAddr || !ethers.isAddress(curveAddr)) return { mcEth: 0n, graduated: false };
+  try {
+    const c = new ethers.Contract(curveAddr, CURVE_ABI, provider);
+    const [mcEth, graduated] = await Promise.all([c.marketCapEth().catch(() => 0n), c.graduated().catch(() => false)]);
+    return { mcEth, graduated };
+  } catch (_) { return { mcEth: 0n, graduated: false }; }
+}
+
 async function checkBeta(factoryRead, wallets) {
   let beta = false, owner = ethers.ZeroAddress;
   try { [beta, owner] = await Promise.all([factoryRead.betaMode(), factoryRead.owner()]); } catch (_) {}
@@ -130,8 +162,8 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
   try { const tx = await factory.createToken(params, { value }); receipt = await tx.wait(); }
   catch (e) { return { ok: false, name, ticker, creator: wallet.address, error: e.shortMessage || e.reason || e.message }; }
 
-  let ca = '';
-  for (const lg of receipt.logs) { try { const p = factory.interface.parseLog(lg); if (p && p.name === 'TokenCreated') { ca = p.args.token; break; } } catch (_) {} }
+  let ca = '', curve = '';
+  for (const lg of receipt.logs) { try { const p = factory.interface.parseLog(lg); if (p && p.name === 'TokenCreated') { ca = p.args.token; curve = p.args.curve; break; } } catch (_) {} }
   const gasCostWei = receipt.gasUsed * (receipt.gasPrice || 0n);
 
   const posted = await postMeta({
@@ -141,7 +173,7 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
     creator: wallet.address, logo: meme ? meme.dataUrl : undefined,
   });
 
-  return { ok: true, name, ticker, ca, gasCostWei, txHash: receipt.hash, posted, memeSrc: meme ? meme.src : null, creator: wallet.address };
+  return { ok: true, name, ticker, ca, curve, gasCostWei, txHash: receipt.hash, posted, memeSrc: meme ? meme.src : null, creator: wallet.address };
 }
 
 // Reclaim leftover ETH from `wallets` to `dest`. Returns [{address, sent|skip|error}].
@@ -160,7 +192,8 @@ async function sweepAll(wallets, provider, dest) {
 }
 
 module.exports = {
-  ethers, CFG, FACTORY_ABI, makeProvider,
+  ethers, CFG, FACTORY_ABI, CURVE_ABI, makeProvider,
   genName, fetchMeme, postMeta, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
+  ethUsd, tokenStats,
 };

@@ -2,14 +2,14 @@
 /*
  * Robinfun seeder — Telegram control bot.
  *
- * Control the seeder entirely from Telegram: see the deployer wallets to fund,
- * start/stop launching, tweak config, view the last tokens. Uses long-polling
- * (getUpdates) so it works behind a firewall — no webhook / open port needed.
+ * Control the seeder from Telegram: see the deployer wallets to fund, /go,
+ * /stop, /status, /stats (tokens created + market cap), /last (MC history),
+ * live config, /allowlist, /sweep. Uses long-polling (getUpdates) so it works
+ * behind a firewall — no webhook / open port needed. Inline buttons included.
  *
  * Setup (seeder/.env, git-ignored):
  *   TELEGRAM_TOKEN=123456:ABC...     ← from @BotFather (revoke + regenerate if leaked)
- *   TELEGRAM_ADMIN_IDS=              ← optional; if blank, the FIRST user to
- *                                      message the bot auto-claims admin.
+ *   TELEGRAM_ADMIN_IDS=              ← optional; blank = first messager claims admin
  *
  * Run:  node telegram.js   (or via deploy/bootstrap-seeder-tg.sh under pm2)
  */
@@ -17,7 +17,7 @@
 const fs = require('fs');
 const {
   ethers, CFG, FACTORY_ABI, makeProvider, loadOrCreateWallets,
-  launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
+  launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -25,6 +25,7 @@ if (!CFG.tgToken) {
   process.exit(1);
 }
 const API = `https://api.telegram.org/bot${CFG.tgToken}`;
+const START = Date.now();
 
 // ---------------- persisted state ----------------
 const state = {
@@ -41,7 +42,6 @@ function loadState() {
     if (!Array.isArray(state.admins)) state.admins = [];
     if (!Array.isArray(state.last)) state.last = [];
     if (!state.cfg) state.cfg = { devBuyEth: CFG.devBuyEth, intervalSec: CFG.intervalSec, levyBps: CFG.levyBps, maxTokens: CFG.maxTokens };
-    // env-provided admins are always merged in
     if (CFG.tgAdmins.length) state.admins = Array.from(new Set([...state.admins.map(String), ...CFG.tgAdmins.map(String)]));
   } catch (_) {}
 }
@@ -62,9 +62,18 @@ async function tg(method, params) {
   } catch (e) { return { ok: false, error: String(e.message || e) }; }
 }
 const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+const fmtUsd = (n) => n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? '$' + (n / 1e3).toFixed(1) + 'k' : '$' + n.toFixed(0);
 async function send(chatId, text, extra) { return tg('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(extra || {}) }); }
-async function broadcast(text) { for (const id of state.admins) { await send(id, text); } }
+async function broadcast(text, extra) { for (const id of state.admins) { await send(id, text, extra); } }
+async function answerCb(id, text) { return tg('answerCallbackQuery', { callback_query_id: id, ...(text ? { text } : {}) }); }
 const isAdmin = (id) => state.admins.map(String).includes(String(id));
+function menu() {
+  return { reply_markup: { inline_keyboard: [
+    [{ text: state.running ? '⏸️ Stop' : '▶️ Go', callback_data: state.running ? 'stop' : 'go' }, { text: '📊 Status', callback_data: 'status' }],
+    [{ text: '💰 Wallets', callback_data: 'wallets' }, { text: '📈 Stats', callback_data: 'stats' }],
+    [{ text: '🆕 History (MC)', callback_data: 'last' }, { text: '⚙️ Config', callback_data: 'config' }],
+  ] } };
+}
 
 // ---------------- shared runtime ----------------
 const provider = makeProvider();
@@ -77,11 +86,11 @@ const balances = () => Promise.all(wallets.map((w) => provider.getBalance(w.addr
 const HELP = `<b>🤖 Robinfun Seeder Bot</b>
 Bot bikin ${wallets.length} wallet sendiri. Tugasmu cuma isi ETH, lalu /go.
 
-<b>/wallets</b> — 5 alamat wallet + saldo (kirim ETH ke sini)
-<b>/go</b> — mulai auto-launch token tiap ${CFG.intervalSec}s
-<b>/stop</b> — berhenti launch
+<b>/wallets</b> — alamat wallet + saldo (kirim ETH ke sini)
+<b>/go</b> · <b>/stop</b> — mulai / berhenti auto-launch
 <b>/status</b> — status seeder + saldo
-<b>/last</b> — token terakhir yang di-launch
+<b>/stats</b> — jumlah token dibuat + total market cap
+<b>/last</b> — history token terakhir + MC per token
 <b>/config</b> — lihat setelan
 <b>/allowlist</b> — cek/allowlist wallet (mode beta)
 <b>/sweep 0x…</b> — tarik ETH sisa ke wallet-mu
@@ -110,18 +119,48 @@ async function statusMsg() {
   try { const c = await checkBeta(factoryRead, wallets); beta = c.beta ? 'ON' : 'OFF'; allow = c.missing.length ? `${wallets.length - c.missing.length}/${wallets.length} allowed` : 'semua allowed'; } catch (_) {}
   return `<b>📊 Status</b>
 Seeder: ${state.running ? '▶️ ON' : '⏸️ OFF'}
-Launched: <b>${state.launched}</b>${CFG.maxTokens ? ` / ${CFG.maxTokens}` : ''}
+Token dibuat: <b>${state.launched}</b>${CFG.maxTokens ? ` / ${CFG.maxTokens}` : ''}
 Wallet ber-ETH: ${funded}/${wallets.length} · total ${fmt(total)} ETH
 betaMode: ${beta} · ${allow}
 interval ${CFG.intervalSec}s · dev-buy ${CFG.devBuyEth} ETH · levy ${CFG.levyBps / 100}%
 butuh ≥ ${fmt(need)} ETH/wallet untuk 1 launch`;
 }
 
-function lastMsg() {
+async function lastMsg() {
   if (!state.last.length) return 'Belum ada token yang di-launch. /go dulu.';
-  const rows = state.last.slice(-10).reverse().map((t, i) =>
-    `${i + 1}. <b>${esc(t.name)}</b> $${esc(t.ticker)}\n   CA <code>${t.ca || '-'}</code>\n   creator <code>${(t.creator || '').slice(0, 12)}…</code>`);
-  return `<b>🆕 ${Math.min(10, state.last.length)} token terakhir</b> (total ${state.launched})\n\n` + rows.join('\n');
+  const items = state.last.slice(-10).reverse();
+  const usd = await ethUsd();
+  const stats = await Promise.all(items.map((t) => tokenStats(t.curve, provider)));
+  const rows = items.map((t, i) => {
+    const s = stats[i];
+    const mcEth = Number(ethers.formatEther(s.mcEth || 0n));
+    const mcTxt = `${mcEth.toFixed(4)} ETH${usd ? ` ≈ ${fmtUsd(mcEth * usd)}` : ''}`;
+    return `${i + 1}. <b>${esc(t.name)}</b> $${esc(t.ticker)}${s.graduated ? ' 🎓' : ''}\n   MC ${mcTxt}\n   CA <code>${t.ca || '-'}</code>`;
+  });
+  return `<b>🆕 History — ${items.length} token terakhir</b> (total ${state.launched})\n\n` + rows.join('\n');
+}
+
+async function statsMsg() {
+  const usd = await ethUsd();
+  const sample = state.last.filter((t) => t.curve).slice(-20);
+  const stats = await Promise.all(sample.map((t) => tokenStats(t.curve, provider)));
+  let totalMc = 0n, grad = 0;
+  stats.forEach((s) => { totalMc += (s.mcEth || 0n); if (s.graduated) grad++; });
+  const mcEth = Number(ethers.formatEther(totalMc));
+  const per = {};
+  state.last.forEach((t) => { const k = t.creator || '?'; per[k] = (per[k] || 0) + 1; });
+  const perLines = Object.entries(per).map(([a, c]) => `  <code>${a.slice(0, 10)}…</code> ${c}`).join('\n') || '  —';
+  const up = Math.floor((Date.now() - START) / 1000);
+  const upStr = up >= 3600 ? `${Math.floor(up / 3600)}j ${Math.floor((up % 3600) / 60)}m` : `${Math.floor(up / 60)}m`;
+  return `<b>📈 Statistik</b>
+Total token dibuat: <b>${state.launched}</b>
+Graduated 🎓: ${grad}/${sample.length} (dari ${sample.length} terakhir)
+Total MC (${sample.length} terakhir): <b>${mcEth.toFixed(4)} ETH</b>${usd ? ` ≈ ${fmtUsd(mcEth * usd)}` : ''}
+Harga ETH: ${usd ? fmtUsd(usd) : '—'}
+Seeder: ${state.running ? '▶️ ON' : '⏸️ OFF'} · uptime ${upStr}
+
+<b>Per wallet (dari histori):</b>
+${perLines}`;
 }
 
 function configMsg() {
@@ -145,7 +184,7 @@ async function allowlistMsg() {
     try { const tx = await new ethers.Contract(CFG.factory, FACTORY_ABI, funder).setBetaAllowed(c.missing.map((w) => w.address), true); await tx.wait(); return '✅ Sudah di-allowlist otomatis via FUNDER_KEY.'; }
     catch (e) { t += `\n\nGagal auto-allowlist: ${e.shortMessage || e.message}`; }
   } else {
-    t += `\n\nFix di admin panel <b>robinfun.tech</b> → Allow-list → paste alamat di atas → Allow. Atau matikan beta (go public).`;
+    t += `\n\nFix di admin panel <b>robinfun.tech</b> → Allow-list → paste alamat → Allow. Atau matikan beta (go public).`;
   }
   return t;
 }
@@ -157,34 +196,27 @@ async function setCfg(chatId, key, val, ok, label) {
   await send(chatId, `✅ ${label} = <b>${state.cfg[key]}</b>`);
 }
 
-// ---------------- command router ----------------
-async function handleUpdate(u) {
-  const msg = u.message || u.edited_message;
-  if (!msg || !msg.text) return;
-  const chatId = msg.chat.id;
-  const [cmdRaw, ...args] = msg.text.trim().split(/\s+/);
-  const cmd = cmdRaw.toLowerCase().replace(/@.*$/, '');
+async function doGo(chatId) {
+  if (state.running) { await send(chatId, '▶️ Seeder sudah ON.', menu()); return; }
+  state.running = true; saveState();
+  await send(chatId, `▶️ <b>Seeder ON</b> — launch tiap ${CFG.intervalSec}s dari wallet yang ada ETH-nya.`, menu());
+}
+async function doStop(chatId) {
+  if (!state.running) { await send(chatId, '⏸️ Seeder sudah OFF.', menu()); return; }
+  state.running = false; saveState();
+  await send(chatId, '⏸️ <b>Seeder OFF</b> — berhenti launch.', menu());
+}
 
-  // first user to talk claims admin (when none configured)
-  if (state.admins.length === 0) {
-    state.admins.push(String(chatId)); saveState();
-    await send(chatId, '✅ Kamu sekarang <b>admin</b> bot ini. Ketik /help.');
-  }
-  if (!isAdmin(chatId)) { await send(chatId, '⛔ Bot ini privat.'); return; }
-
+// ---------------- command dispatch (shared by text + buttons) ----------------
+async function dispatch(chatId, cmd, args) {
   switch (cmd) {
-    case '/start': case '/help': await send(chatId, HELP); break;
+    case '/start': case '/help': await send(chatId, HELP, menu()); break;
     case '/wallets': await send(chatId, walletsMsg(await balances())); break;
-    case '/status': await send(chatId, await statusMsg()); break;
-    case '/go': case '/run':
-      if (state.running) await send(chatId, '▶️ Seeder sudah ON.');
-      else { state.running = true; saveState(); await send(chatId, `▶️ <b>Seeder ON</b> — launch tiap ${CFG.intervalSec}s dari wallet yang ada ETH-nya. /stop untuk berhenti.`); }
-      break;
-    case '/stop': case '/pause':
-      if (!state.running) await send(chatId, '⏸️ Seeder sudah OFF.');
-      else { state.running = false; saveState(); await send(chatId, '⏸️ <b>Seeder OFF</b> — berhenti launch.'); }
-      break;
-    case '/last': await send(chatId, lastMsg()); break;
+    case '/status': await send(chatId, await statusMsg(), menu()); break;
+    case '/stats': await send(chatId, await statsMsg(), menu()); break;
+    case '/go': case '/run': await doGo(chatId); break;
+    case '/stop': case '/pause': await doStop(chatId); break;
+    case '/last': case '/history': await send(chatId, await lastMsg(), menu()); break;
     case '/config': await send(chatId, configMsg()); break;
     case '/allowlist': await send(chatId, await allowlistMsg()); break;
     case '/devbuy': await setCfg(chatId, 'devBuyEth', args[0], (v) => /^\d*\.?\d+$/.test(v) && Number(v) > 0, 'dev-buy (ETH)'); break;
@@ -204,12 +236,32 @@ async function handleUpdate(u) {
   }
 }
 
+async function handleUpdate(u) {
+  if (u.callback_query) return handleCallback(u.callback_query);
+  const msg = u.message || u.edited_message;
+  if (!msg || !msg.text) return;
+  const chatId = msg.chat.id;
+  const [cmdRaw, ...args] = msg.text.trim().split(/\s+/);
+  const cmd = cmdRaw.toLowerCase().replace(/@.*$/, '');
+  if (state.admins.length === 0) { state.admins.push(String(chatId)); saveState(); await send(chatId, '✅ Kamu sekarang <b>admin</b> bot ini. Ketik /help.'); }
+  if (!isAdmin(chatId)) { await send(chatId, '⛔ Bot ini privat.'); return; }
+  await dispatch(chatId, cmd, args);
+}
+
+async function handleCallback(cq) {
+  const chatId = cq.message && cq.message.chat.id;
+  if (!chatId) return;
+  if (!isAdmin(chatId)) { await answerCb(cq.id, 'Bukan admin'); return; }
+  await answerCb(cq.id);
+  await dispatch(chatId, '/' + String(cq.data || '').toLowerCase(), []);
+}
+
 // ---------------- launch loop (gated by state.running) ----------------
 async function launchLoop() {
   let rr = 0, warned = false;
   for (;;) {
     if (!state.running) { warned = false; await sleep(3000); continue; }
-    if (CFG.maxTokens && state.launched >= CFG.maxTokens) { state.running = false; saveState(); await broadcast(`🛑 MAX_TOKENS ${CFG.maxTokens} tercapai. Seeder OFF.`); continue; }
+    if (CFG.maxTokens && state.launched >= CFG.maxTokens) { state.running = false; saveState(); await broadcast(`🛑 MAX_TOKENS ${CFG.maxTokens} tercapai. Seeder OFF.`, menu()); continue; }
     let deployFee = 0n; try { deployFee = await readDeployFee(factoryRead); } catch (_) {}
     const devBuy = ethers.parseEther(CFG.devBuyEth);
     const need = deployFee + devBuy + gasBuf;
@@ -227,12 +279,14 @@ async function launchLoop() {
     const r = await launchWith(chosen, provider, deployFee, devBuy);
     if (r.ok) {
       state.launched++;
-      state.last.push({ name: r.name, ticker: r.ticker, ca: r.ca, tx: r.txHash, creator: r.creator });
+      state.last.push({ name: r.name, ticker: r.ticker, ca: r.ca, curve: r.curve, tx: r.txHash, creator: r.creator });
       if (state.last.length > 50) state.last = state.last.slice(-50);
       saveState();
+      let mcTxt = '';
+      try { const s = await tokenStats(r.curve, provider); const usd = await ethUsd(); const mcEth = Number(ethers.formatEther(s.mcEth || 0n)); mcTxt = `\nMC ${mcEth.toFixed(4)} ETH${usd ? ` ≈ ${fmtUsd(mcEth * usd)}` : ''}`; } catch (_) {}
       await broadcast(`✅ <b>#${state.launched} ${esc(r.name)}</b> $${esc(r.ticker)}
 CA <code>${r.ca || '(parse gagal)'}</code>
-creator <code>${r.creator}</code>
+creator <code>${r.creator}</code>${mcTxt}
 dev-buy ${CFG.devBuyEth} ETH · levy ${CFG.levyBps / 100}% · gas ${fmt(r.gasCostWei)} ETH
 board ${r.posted ? 'posted ✓' : 'POST gagal'} · logo ${r.memeSrc ? 'yes' : 'none'}
 tx <code>${r.txHash}</code>`);
@@ -246,30 +300,43 @@ tx <code>${r.txHash}</code>`);
 // ---------------- long-poll updates ----------------
 async function poll() {
   let offset = 0;
-  console.log('🤖 Telegram bot online — long-polling…');
+  console.log('🤖 Long-polling for Telegram updates…');
   for (;;) {
-    const r = await tg('getUpdates', { offset, timeout: 50, allowed_updates: ['message'] });
+    const r = await tg('getUpdates', { offset, timeout: 50, allowed_updates: ['message', 'callback_query'] });
     if (r && r.ok && Array.isArray(r.result)) {
       for (const u of r.result) { offset = u.update_id + 1; try { await handleUpdate(u); } catch (e) { console.error('handle error:', e.message); } }
     } else {
-      await sleep(2000); // transient error / conflict — back off
+      await sleep(2000); // transient error / bad token — back off
     }
   }
 }
 
 async function main() {
+  const me = await tg('getMe');
+  if (me && me.ok) {
+    console.log(`🤖 Bot @${me.result.username} online (id ${me.result.id}).`);
+  } else {
+    console.error('════════════════════════════════════════════════════');
+    console.error('❌ TELEGRAM TOKEN REJECTED — bot cannot talk to Telegram.');
+    console.error('   Response:', JSON.stringify(me));
+    console.error('   Fix: put your REAL @BotFather token in seeder/.env as');
+    console.error('        TELEGRAM_TOKEN=123456:ABC...   (not a placeholder)');
+    console.error('   then:  pm2 restart robinfun-seeder-bot');
+    console.error('════════════════════════════════════════════════════');
+  }
   await tg('setMyCommands', { commands: [
     { command: 'help', description: 'Bantuan & daftar perintah' },
     { command: 'wallets', description: 'Alamat wallet (kirim ETH ke sini)' },
     { command: 'go', description: 'Mulai auto-launch token' },
     { command: 'stop', description: 'Berhenti launch' },
     { command: 'status', description: 'Status seeder & saldo' },
-    { command: 'last', description: 'Token terakhir' },
+    { command: 'stats', description: 'Jumlah token dibuat + market cap' },
+    { command: 'last', description: 'History token terakhir + MC' },
     { command: 'config', description: 'Lihat setelan' },
     { command: 'allowlist', description: 'Cek/allowlist wallet (beta)' },
     { command: 'sweep', description: 'Tarik ETH sisa' },
   ] });
-  if (state.admins.length) await broadcast('🤖 Robinfun seeder bot online. /help');
+  if (state.admins.length) await broadcast('🤖 Robinfun seeder bot online. /help', menu());
   else console.log('No admin yet — send any message to the bot to claim admin.');
   launchLoop().catch((e) => console.error('loop crashed:', e));
   await poll();
