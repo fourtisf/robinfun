@@ -683,8 +683,15 @@ async function connect(){
    the QR button shows a hint. The 2 MB provider bundle is loaded LAZILY only
    when you click the QR button, so the default page stays lean. The resulting
    provider is EIP-1193, so it flows through the same connect() as MetaMask. */
-const WC_PROJECT_ID = '';   // <-- REQUIRED for QR / Trust Wallet. Free at cloud.reown.com
+const WC_PROJECT_ID = '';   // optional hard-code; otherwise paste once in the browser (saved to localStorage)
 let _wcProvider = null, _wcLoading = null;
+// WalletConnect v2 REQUIRES a free projectId (cloud.reown.com) — same as every
+// dApp that offers WalletConnect. To avoid a code edit + redeploy, we accept it
+// once via a prompt and remember it locally.
+function wcProjectId(){
+  if(WC_PROJECT_ID) return WC_PROJECT_ID;
+  try{ return (localStorage.getItem('robinfun_wc_pid')||'').trim(); }catch(_){ return ''; }
+}
 function loadWC(){
   if(window.WCEthereumProvider) return Promise.resolve();
   if(_wcLoading) return _wcLoading;
@@ -699,12 +706,18 @@ function loadWC(){
   return _wcLoading;
 }
 async function connectWC(){
-  if(!WC_PROJECT_ID){ toast('QR login not set up — add WC_PROJECT_ID (free at cloud.reown.com) and redeploy','err'); return; }
+  let pid = wcProjectId();
+  if(!pid){
+    pid = (prompt('Paste your WalletConnect Project ID.\n\nGet one FREE (30 sec) at cloud.reown.com → New Project → copy the Project ID.\nIt is saved in this browser so you only paste it once.')||'').trim();
+    if(!pid){ toast('QR needs a WalletConnect Project ID — free at cloud.reown.com','err'); return; }
+    try{ localStorage.setItem('robinfun_wc_pid', pid); }catch(_){}
+    toast('Project ID saved — reconnecting…','ok');
+  }
   const btn = document.getElementById('qrBtn'); const t0 = btn.textContent; btn.disabled = true; btn.textContent = 'Loading…';
   try{
     await loadWC();
     _wcProvider = await window.WCEthereumProvider.init({
-      projectId: WC_PROJECT_ID,
+      projectId: pid,
       chains: [4663],
       optionalChains: [4663],
       rpcMap: { 4663: CHAIN.rpcUrls[0] },
