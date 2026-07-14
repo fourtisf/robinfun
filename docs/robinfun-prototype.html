@@ -486,7 +486,7 @@ body.light .stake-orbit text{fill:#3C9A1B}
   content:"CREATOR FEE";position:absolute;top:-9px;left:16px;background:var(--ledger);
   padding:0 9px;font-family:var(--font-mono);font-size:10px;letter-spacing:.2em;color:var(--gilt);
 }
-.preset-row{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:18px}
+.preset-row{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:18px}
 .preset{
   padding:10px 6px;border:1px solid var(--rule);border-radius:var(--r-sm);text-align:center;transition:all .15s;
 }
@@ -1062,18 +1062,19 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
         <div class="panel panel-pad levy-box">
           <div class="preset-row">
             <button class="preset" data-p="0" onclick="setPreset(0,0,this)"><div class="p-n">0 / 0</div><div class="p-l">No fee</div></button>
+            <button class="preset sel" data-p="0.5" onclick="setPreset(0.5,0.5,this)"><div class="p-n">0.5 / 0.5</div><div class="p-l">Recommended</div></button>
             <button class="preset" data-p="1" onclick="setPreset(1,1,this)"><div class="p-n">1 / 1</div><div class="p-l">Chill</div></button>
-            <button class="preset sel" data-p="3" onclick="setPreset(3,3,this)"><div class="p-n">3 / 3</div><div class="p-l">Standard</div></button>
-            <button class="preset" data-p="5" onclick="setPreset(5,5,this)"><div class="p-n">5 / 5</div><div class="p-l">Degen</div></button>
+            <button class="preset" data-p="2" onclick="setPreset(2,2,this)"><div class="p-n">2 / 2</div><div class="p-l">Standard</div></button>
+            <button class="preset" data-p="5" onclick="setPreset(5,5,this)"><div class="p-n">5 / 5</div><div class="p-l">Max</div></button>
             <button class="preset" data-p="c" onclick="markCustom(this)"><div class="p-n">?/?</div><div class="p-l">Custom</div></button>
           </div>
           <div class="slider-row">
-            <div class="slider-head"><span class="sl">Buy fee</span><span class="sv" id="v-buy">3%</span></div>
-            <input type="range" id="r-buy" min="0" max="10" step="0.5" value="3" oninput="onSlider()">
+            <div class="slider-head"><span class="sl">Buy fee</span><span class="sv" id="v-buy">0.5%</span></div>
+            <input type="range" id="r-buy" min="0" max="10" step="0.5" value="0.5" oninput="onSlider()">
           </div>
           <div class="slider-row">
-            <div class="slider-head"><span class="sl">Sell fee</span><span class="sv" id="v-sell">3%</span></div>
-            <input type="range" id="r-sell" min="0" max="10" step="0.5" value="3" oninput="onSlider()">
+            <div class="slider-head"><span class="sl">Sell fee</span><span class="sv" id="v-sell">0.5%</span></div>
+            <input type="range" id="r-sell" min="0" max="10" step="0.5" value="0.5" oninput="onSlider()">
           </div>
           <p class="tax-warn" id="taxWarn">High fees (&gt;5%) tend to suppress volume — you may earn more with a lower rate.</p>
           <div class="field">
@@ -1094,13 +1095,6 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
               <div class="sw-d">Locks the fee permanently. Without this, you can lower rates later — but never raise them.</div>
             </div>
             <label class="switch"><input type="checkbox" id="c-renounce"><span class="track"></span></label>
-          </div>
-          <div class="switch-row">
-            <div>
-              <div class="sw-t">Vanity address — ends in <span class="mono" style="color:var(--gold)">…feed</span></div>
-              <div class="sw-d">Robinfun's signature. Your browser grinds a salt (a few seconds) so the token's contract address ends in <span class="mono">feed</span> — no extra gas, no extra fee.</div>
-            </div>
-            <label class="switch"><input type="checkbox" id="c-vanity" checked><span class="track"></span></label>
           </div>
         </div>
 
@@ -3318,8 +3312,9 @@ function onSlider(fromPreset){
   document.getElementById('taxWarn').classList.toggle('show', Math.max(b,s)>5);
   if(!fromPreset){
     document.querySelectorAll('.preset').forEach(p=>p.classList.remove('sel'));
-    const match = [['0',0,0],['3',3,3],['5',5,5]].find(m=>m[1]===b&&m[2]===s);
-    document.querySelector('.preset[data-p="'+(match?match[0]:'c')+'"]').classList.add('sel');
+    const match = [['0',0,0],['0.5',0.5,0.5],['1',1,1],['2',2,2],['5',5,5]].find(m=>m[1]===b&&m[2]===s);
+    const pbtn = document.querySelector('.preset[data-p="'+(match?match[0]:'c')+'"]');
+    if(pbtn) pbtn.classList.add('sel');
   }
   projector();
 }
@@ -3430,7 +3425,7 @@ async function deploy(){
     sellTax: parseFloat(document.getElementById('r-sell').value),
     decay: document.getElementById('c-decay').checked,
     renounced: document.getElementById('c-renounce').checked,
-    vanity: !!(document.getElementById('c-vanity') && document.getElementById('c-vanity').checked),
+    vanity: false, // vanity …feed address feature removed
     devBuy,
   };
   if(chainReady()) return realLaunch(meta);
