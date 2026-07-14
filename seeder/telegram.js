@@ -18,7 +18,7 @@ const fs = require('fs');
 const {
   ethers, CFG, FACTORY_ABI, makeProvider, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
-  makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings,
+  makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, randEthStr,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -63,6 +63,7 @@ function applyCfg() {
   if (state.cfg.peerBuyEth !== undefined) CFG.peerBuyEth = String(state.cfg.peerBuyEth);
   if (state.cfg.sellAfterSec !== undefined) CFG.sellAfterSec = Math.max(0, Number(state.cfg.sellAfterSec) || 0);
   if (state.cfg.sellPct !== undefined) CFG.sellPct = Math.min(100, Math.max(0, Number(state.cfg.sellPct) || 0));
+  ['devBuyMin', 'devBuyMax', 'peerBuyMin', 'peerBuyMax'].forEach((k) => { if (state.cfg[k] !== undefined) CFG[k] = String(state.cfg[k]); });
 }
 loadState(); applyCfg();
 
@@ -119,7 +120,9 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 /devbuy 0.001 · /interval 60 · /max 0
 /buyfee 100 · /sellfee 100 · /levy 100 (set dua-duanya)
 /autobuy 0.02 · /autosell 30  (wallet launcher beli/jual sendiri)
-/peerbuyers 3 · /peerbuy 0.002  (wallet LAIN otomatis beli → volume + banyak holder)
+/peerbuyers 3  (jml wallet LAIN yg otomatis beli → volume + banyak holder)
+/peerrange 0.001 0.01  (tiap wallet beli ACAK 0.001–0.01 ETH) · /peerbuy = fixed
+/devrange 0.001 0.005  (dev-buy ACAK) · /devbuy = fixed
 /sellafter 300 · /sellpct 50  (jual otomatis setelah 300s; 0=off)
 
 Alur: <b>/wallets → kirim ETH (L1) → /bridge → /go</b> ✅`;
@@ -279,11 +282,11 @@ function configMsg() {
   return `<b>⚙️ Config</b>
 factory <code>${CFG.factory}</code>
 wallets ${wallets.length}
-dev-buy ${CFG.devBuyEth} ETH  <i>(/devbuy)</i>
+dev-buy ${Number(CFG.devBuyMax) > 0 ? `${CFG.devBuyMin || CFG.devBuyEth}–${CFG.devBuyMax} ETH (acak)` : `${CFG.devBuyEth} ETH`}  <i>(/devbuy /devrange)</i>
 interval ${CFG.intervalSec}s  <i>(/interval)</i>
 buy fee ${(CFG.buyLevyBps / 100)}%  <i>(/buyfee)</i> · sell fee ${(CFG.sellLevyBps / 100)}%  <i>(/sellfee)</i>
 auto-buy ${CFG.autoBuyEth} ETH  <i>(/autobuy)</i> · auto-sell ${CFG.autoSellPct}%  <i>(/autosell)</i>
-peer-buy ${CFG.peerBuyers} wallet × ${CFG.peerBuyEth} ETH  <i>(/peerbuyers /peerbuy)</i>
+peer-buy ${CFG.peerBuyers} wallet × ${Number(CFG.peerBuyMax) > 0 ? `${CFG.peerBuyMin || CFG.peerBuyEth}–${CFG.peerBuyMax} ETH (acak)` : `${CFG.peerBuyEth} ETH`}  <i>(/peerbuyers /peerbuy /peerrange)</i>
 sell-after ${CFG.sellAfterSec ? CFG.sellAfterSec + 's · ' + CFG.sellPct + '%' : 'off'}  <i>(/sellafter /sellpct)</i>
 max tokens ${CFG.maxTokens || '∞'}  <i>(/max)</i>
 backend ${CFG.backend}
@@ -391,6 +394,14 @@ async function dispatch(chatId, cmd, args) {
     case '/autosell': await setCfg(chatId, 'autoSellPct', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 100, 'auto-sell (%)'); break;
     case '/peerbuyers': await setCfg(chatId, 'peerBuyers', args[0], (v) => Number.isInteger(Number(v)) && Number(v) >= 0 && Number(v) <= 20, 'peer buyers (jumlah wallet)'); break;
     case '/peerbuy': await setCfg(chatId, 'peerBuyEth', args[0], (v) => /^\d*\.?\d+$/.test(v) && Number(v) > 0, 'peer-buy (ETH/wallet)'); break;
+    case '/devrange': case '/peerrange': {
+      const isDev = cmd === '/devrange', lbl = isDev ? 'dev-buy' : 'peer-buy';
+      if (args[0] === 'off') { state.cfg[isDev ? 'devBuyMin' : 'peerBuyMin'] = ''; state.cfg[isDev ? 'devBuyMax' : 'peerBuyMax'] = ''; applyCfg(); saveState(); await send(chatId, `✅ ${lbl} acak OFF (pakai jumlah fixed).`); break; }
+      const mn = args[0], mx = args[1], num = (v) => /^\d*\.?\d+$/.test(v);
+      if (!num(mn) || !num(mx) || Number(mx) < Number(mn) || Number(mx) <= 0) { await send(chatId, `❌ Format: ${cmd} <min> <max>  (mis. ${cmd} 0.001 0.01) · atau ${cmd} off`); break; }
+      state.cfg[isDev ? 'devBuyMin' : 'peerBuyMin'] = String(mn); state.cfg[isDev ? 'devBuyMax' : 'peerBuyMax'] = String(mx); applyCfg(); saveState();
+      await send(chatId, `✅ ${lbl} acak = <b>${mn}–${mx} ETH</b>${isDev ? '' : ' per wallet'}`); break;
+    }
     case '/sellafter': await setCfg(chatId, 'sellAfterSec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0, 'sell-after (detik, 0=off)'); break;
     case '/sellpct': await setCfg(chatId, 'sellPct', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0 && Number(v) <= 100, 'sell (%)'); break;
     case '/max': await setCfg(chatId, 'maxTokens', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0, 'max tokens'); break;
@@ -442,7 +453,10 @@ async function launchLoop() {
     if (!state.running) { warned = false; await sleep(3000); continue; }
     if (CFG.maxTokens && state.launched >= CFG.maxTokens) { state.running = false; saveState(); await broadcast(`🛑 MAX_TOKENS ${CFG.maxTokens} tercapai. Seeder OFF.`, menu()); continue; }
     let deployFee = 0n; try { deployFee = await readDeployFee(factoryRead); } catch (_) {}
-    const devBuy = ethers.parseEther(CFG.devBuyEth);
+    // Dev buy: random in [DEV_BUY_MIN, DEV_BUY_MAX] when a max is set, else fixed.
+    let devBuyStr = CFG.devBuyEth;
+    if (Number(CFG.devBuyMax) > 0) { const mn = Number(CFG.devBuyMin) > 0 ? CFG.devBuyMin : CFG.devBuyEth; devBuyStr = randEthStr(mn, CFG.devBuyMax) || CFG.devBuyEth; }
+    const devBuy = ethers.parseEther(devBuyStr);
     const need = deployFee + devBuy + gasBuf;
     let chosen = null;
     for (let k = 0; k < wallets.length; k++) {
@@ -463,23 +477,26 @@ async function launchLoop() {
       saveState();
       const usd = await ethUsd();
       const u = (e) => usd ? ` ≈ ${fmtUsd(e * usd)}` : '';
-      // ---- multi-wallet volume: OTHER funded wallets buy the new token ----
+      // ---- multi-wallet volume: OTHER funded wallets buy RANDOM amounts ----
+      const pMin = Number(CFG.peerBuyMin) > 0 ? CFG.peerBuyMin : CFG.peerBuyEth;
+      const pMax = Number(CFG.peerBuyMax) > 0 ? CFG.peerBuyMax : CFG.peerBuyEth;
       let peer = [];
       if (CFG.peerBuyers > 0 && r.ca) {
         const buyers = wallets.filter((w) => w.address !== chosen.address).slice(0, CFG.peerBuyers);
-        peer = await seedVolume(provider, buyers, r.ca, CFG.peerBuyEth);
+        peer = await seedVolume(provider, buyers, r.ca, pMin, pMax);
       }
       const peerOk = peer.filter((p) => p.ok).length;
-      const peerEth = peerOk * Number(CFG.peerBuyEth);
+      const peerEth = peer.reduce((s, p) => s + (p.eth || 0), 0);        // sum of the actual random buys
+      const peerRange = Number(pMin) === Number(pMax) ? `${pMin}` : `${pMin}–${pMax}`;
       // ---- market cap AFTER the buys (reflects the pump) ----
       let mcEth = 0; try { const s = await tokenStats(r.curve, provider); mcEth = Number(ethers.formatEther(s.mcEth || 0n)); } catch (_) {}
-      const devBuyEth = Number(CFG.devBuyEth), gasEth = Number(ethers.formatEther(r.gasCostWei || 0n)), deployEth = Number(ethers.formatEther(deployFee));
+      const devBuyEth = Number(devBuyStr), gasEth = Number(ethers.formatEther(r.gasCostWei || 0n)), deployEth = Number(ethers.formatEther(deployFee));
       const totalEth = deployEth + devBuyEth + gasEth + peerEth;
       await broadcast(`✅ <b>#${state.launched} ${esc(r.name)}</b> $${esc(r.ticker)}
 CA <code>${r.ca || '(parse gagal)'}</code>
 creator <code>${r.creator}</code>
 💰 dev-buy <b>${devBuyEth} ETH</b>${u(devBuyEth)}
-👥 peer-buy <b>${peerOk}/${peer.length} wallet</b> × ${CFG.peerBuyEth} = <b>${peerEth.toFixed(4)} ETH</b>${u(peerEth)}
+👥 peer-buy <b>${peerOk}/${peer.length} wallet</b> (acak ${peerRange} ETH) = <b>${peerEth.toFixed(4)} ETH</b>${u(peerEth)}
 📈 MC <b>${mcEth.toFixed(4)} ETH</b>${u(mcEth)}
 ⛽ gas ${gasEth.toFixed(6)} ETH${u(gasEth)} · deploy ${deployEth} ETH
 🧾 total keluar <b>${totalEth.toFixed(5)} ETH</b>${u(totalEth)}
@@ -576,7 +593,9 @@ async function main() {
     { command: 'autobuy', description: 'Wallet launcher beli sendiri (ETH): /autobuy 0.02' },
     { command: 'autosell', description: 'Wallet launcher jual sendiri (%): /autosell 30' },
     { command: 'peerbuyers', description: 'Jml wallet lain yg auto-beli: /peerbuyers 3' },
-    { command: 'peerbuy', description: 'ETH per wallet peer-buy: /peerbuy 0.002' },
+    { command: 'peerbuy', description: 'ETH per wallet (fixed): /peerbuy 0.002' },
+    { command: 'peerrange', description: 'Peer-buy ACAK min-max: /peerrange 0.001 0.01' },
+    { command: 'devrange', description: 'Dev-buy ACAK min-max: /devrange 0.001 0.005' },
     { command: 'sellafter', description: 'Auto-jual setelah N detik (0=off): /sellafter 300' },
     { command: 'sellpct', description: 'Persen dijual saat sell terjadwal: /sellpct 50' },
     { command: 'allowlist', description: 'Cek/allowlist wallet (beta)' },

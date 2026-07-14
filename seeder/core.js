@@ -41,6 +41,12 @@ const CFG = {
   peerBuyEth: String(process.env.PEER_BUY_ETH || '0.002'),
   sellAfterSec: Math.max(0, Number(process.env.SELL_AFTER_SEC || 0)),
   sellPct: Math.min(100, Math.max(0, Number(process.env.SELL_PCT || 50))),
+  // Random buy sizes: when a MAX is set, each buy is a random ETH amount in
+  // [MIN, MAX] (organic-looking volume) instead of the fixed amount above.
+  devBuyMin: String(process.env.DEV_BUY_MIN || ''),
+  devBuyMax: String(process.env.DEV_BUY_MAX || ''),
+  peerBuyMin: String(process.env.PEER_BUY_MIN || ''),
+  peerBuyMax: String(process.env.PEER_BUY_MAX || ''),
   // Vanity CA suffix (hex) — mine a salt so every token address ends in this,
   // like the website's "…feed". Empty = off (random address). Longer = slower.
   vanitySuffix: (process.env.VANITY_SUFFIX !== undefined ? process.env.VANITY_SUFFIX : 'feed').trim().toLowerCase().replace(/[^0-9a-f]/g, ''),
@@ -390,17 +396,26 @@ async function botSell(wallet, provider, ca, pct) {
   return { ok: true, venue: 'dex', sold: amount, hash: tx.hash, pending: !(await waitBounded(tx)) };
 }
 
-// Multi-wallet volume: each of `buyers` buys `perBuyEth` of `ca`. Skips any
-// wallet without enough ETH. Returns per-wallet results (never throws).
-async function seedVolume(provider, buyers, ca, perBuyEth) {
+// A random ETH amount in [min, max] as a 6-dp string (min==max → fixed). Returns
+// null if the range is invalid.
+function randEthStr(min, max) {
+  const a = Number(min), b = Number(max);
+  if (!(a >= 0) || !(b > 0) || b < a) return null;
+  return (a + Math.random() * (b - a)).toFixed(6);
+}
+// Multi-wallet volume: each of `buyers` buys a RANDOM amount in [minEth, maxEth]
+// of `ca` (pass min==max for a fixed size). Skips any wallet without enough ETH.
+// Returns per-wallet results incl. the ETH spent (never throws).
+async function seedVolume(provider, buyers, ca, minEth, maxEth) {
   const out = [];
-  const need = ethers.parseEther(String(perBuyEth)) + ethers.parseEther('0.0002'); // buy + gas headroom
   for (const w of buyers) {
+    const ethStr = randEthStr(minEth, maxEth) || String(minEth || '0');
     try {
+      const need = ethers.parseEther(ethStr) + ethers.parseEther('0.0002'); // buy + gas headroom
       const bal = await provider.getBalance(w.address).catch(() => 0n);
-      if (bal < need) { out.push({ address: w.address, skip: true }); continue; }
-      await botBuy(w, provider, ca, ethers.parseEther(String(perBuyEth)));
-      out.push({ address: w.address, ok: true });
+      if (bal < need || Number(ethStr) <= 0) { out.push({ address: w.address, skip: true }); continue; }
+      await botBuy(w, provider, ca, ethers.parseEther(ethStr));
+      out.push({ address: w.address, ok: true, eth: Number(ethStr) });
     } catch (e) { out.push({ address: w.address, ok: false, error: e.shortMessage || e.message }); }
   }
   return out;
@@ -421,5 +436,5 @@ module.exports = {
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
-  resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings,
+  resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, randEthStr,
 };
