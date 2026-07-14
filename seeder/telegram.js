@@ -548,12 +548,21 @@ async function launchLoop() {
       }
       // ---- market cap + graduation status AFTER the buys ----
       let mcEth = 0, graduated = false; try { const s = await tokenStats(r.curve, provider); mcEth = Number(ethers.formatEther(s.mcEth || 0n)); graduated = !!s.graduated; } catch (_) {}
-      const devBuyEth = Number(devBuyStr), gasEth = Number(ethers.formatEther(r.gasCostWei || 0n)), deployEth = Number(ethers.formatEther(deployFee));
+      // Dev-buy: report what ACTUALLY entered the curve. The curve caps a buy at
+      // the graduation cap and refunds the surplus, so the intended amount (e.g.
+      // 0.03 ETH) is often far above the real spend (e.g. 0.005 ETH).
+      const devIntended = Number(devBuyStr);
+      const devBuyEth = r.devBuyActualWei !== undefined ? Number(ethers.formatEther(r.devBuyActualWei)) : devIntended;
+      const refunded = Math.max(0, devIntended - devBuyEth);
+      const gasEth = Number(ethers.formatEther(r.gasCostWei || 0n)), deployEth = Number(ethers.formatEther(deployFee));
       const totalEth = deployEth + devBuyEth + gasEth + peerEth;
+      const devLine = refunded > 1e-6
+        ? `💰 dev-buy <b>${devBuyEth.toFixed(6)} ETH</b>${u(devBuyEth)}  <i>(diminta ${devIntended} — sisa ${refunded.toFixed(6)} ETH refund, kena cap graduasi)</i>`
+        : `💰 dev-buy <b>${devBuyEth.toFixed(6)} ETH</b>${u(devBuyEth)}`;
       await broadcast(`✅ <b>#${state.launched} ${esc(r.name)}</b> $${esc(r.ticker)}
 CA <code>${r.ca || '(parse gagal)'}</code>
 creator <code>${r.creator}</code>
-💰 dev-buy <b>${devBuyEth} ETH</b>${u(devBuyEth)}
+${devLine}
 ${peerLine}
 📈 MC <b>${mcEth.toFixed(4)} ETH</b>${u(mcEth)}
 ${graduated ? '🎓 <b>GRADUATED</b> — LP sudah di Uniswap (burned)' : '◈ masih di bonding curve (belum graduate)'}

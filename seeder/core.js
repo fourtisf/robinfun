@@ -311,6 +311,11 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
   };
   if (CFG.dryRun) return { ok: true, dry: true, name, ticker, memeSrc: meme ? meme.src : null, creator: wallet.address };
 
+  // Snapshot the wallet balance so we can report the ACTUAL dev-buy. The curve
+  // caps a buy at the graduation cap and refunds the surplus to the creator, so
+  // the intended `devBuy` (e.g. 0.03 ETH) can differ wildly from what really
+  // entered the curve (e.g. 0.005 ETH). netOut = deployFee + gas + actualDevBuy.
+  const balBefore = await provider.getBalance(wallet.address).catch(() => null);
   let receipt;
   try { const tx = await factory.createToken(params, { value }); receipt = await tx.wait(); }
   catch (e) { return { ok: false, name, ticker, creator: wallet.address, error: e.shortMessage || e.reason || e.message }; }
@@ -318,6 +323,18 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
   let ca = '', curve = '';
   for (const lg of receipt.logs) { try { const p = factory.interface.parseLog(lg); if (p && p.name === 'TokenCreated') { ca = p.args.token; curve = p.args.curve; break; } } catch (_) {} }
   const gasCostWei = receipt.gasUsed * (receipt.gasPrice || 0n);
+
+  // Actual dev-buy = what really left the wallet minus gas and the deploy fee
+  // (the graduation-cap refund already came back). Falls back to the intended
+  // amount if the balance read failed. Read AFTER the tx, BEFORE any auto-trade.
+  let devBuyActualWei = devBuy;
+  if (balBefore !== null) {
+    try {
+      const balAfter = await provider.getBalance(wallet.address);
+      const a = (balBefore - balAfter) - gasCostWei - deployFee;
+      if (a >= 0n && a <= devBuy) devBuyActualWei = a;   // sanity-clamp to [0, intended]
+    } catch (_) {}
+  }
 
   const posted = await postMeta({
     name, ticker, ca,
@@ -341,7 +358,7 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
     }
   } catch (e) { trade.error = e.shortMessage || e.message; }
 
-  return { ok: true, name, ticker, ca, curve, gasCostWei, txHash: receipt.hash, posted, memeSrc: meme ? meme.src : null, creator: wallet.address, trade };
+  return { ok: true, name, ticker, ca, curve, gasCostWei, txHash: receipt.hash, posted, memeSrc: meme ? meme.src : null, creator: wallet.address, trade, devBuyIntendedWei: devBuy, devBuyActualWei };
 }
 
 // Reclaim leftover ETH from `wallets` to `dest`. Returns [{address, sent|skip|error}].
