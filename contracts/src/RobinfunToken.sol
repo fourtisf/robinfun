@@ -42,13 +42,14 @@ contract RobinfunToken is ERC20Upgradeable, ERC20PermitUpgradeable {
     /// @notice Hard cap on either levy: 10% (enforced again by the factory).
     uint16 public constant MAX_LEVY_BPS = 1_000;
 
-    /// @notice Always-on protocol fee (0.5%) charged on post-graduation DEX
+    /// @notice Always-on protocol fee (1%) charged on post-graduation DEX
     ///         trades, on top of any creator levy — so Robinfun keeps earning
     ///         forever on every token, even ones launched with a 0/0 levy.
-    ///         (Pre-graduation, the bonding curve's flat 1% covers the protocol;
-    ///         this only applies once the token trades on the AMM pair.) The
-    ///         skim goes to the FeeRouter and is 100% protocol revenue.
-    uint16 public constant PROTOCOL_FEE_BPS = 50;
+    ///         Matches the bonding curve's flat 1% so the protocol takes a
+    ///         uniform 1% on every trade, in both phases, forever. This only
+    ///         applies once the token trades on the AMM pair; the skim goes to
+    ///         the FeeRouter and is 100% protocol revenue.
+    uint16 public constant PROTOCOL_FEE_BPS = 100;
 
     uint16 private constant BPS = 10_000;
 

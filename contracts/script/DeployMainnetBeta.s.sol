@@ -44,13 +44,15 @@ contract DeployMainnetBeta is Script {
         address tester = vm.envOr("BETA_TESTER", address(0xA49dc277A65CCb35D94522cecDa19CA340AE991C));
         uint256 deployFee = vm.envOr("DEPLOY_FEE", uint256(0.001 ether));
 
-        // BETA SAFETY CAP — see contract docs. graduationEth IS the per-token
-        // at-risk cap (invariant reserveEth <= graduationEth). 0.001 ETH default.
-        // virtualEth is the full-size 1.122 ETH scaled by the same 1/2600 as the
-        // cap, so the curve SHAPE (price multiple, % of supply sold) is identical
-        // to production, just denominated 2600x smaller.
-        uint256 graduationEth = vm.envOr("GRADUATION_ETH", uint256(0.001 ether));
-        uint256 virtualEth = vm.envOr("VIRTUAL_ETH", uint256(1.122 ether) / 2600);
+        // graduationEth is the graduation cap AND the per-token at-risk cap
+        // (invariant reserveEth <= graduationEth). Default 0.005 ETH so tokens
+        // graduate fast onto the real Uniswap pair (visible on DexScreener,
+        // snipeable) — the platform then earns its uniform 1% on DEX trades.
+        // virtualEth is DERIVED from the cap (cap * 1122/2600) so the curve
+        // SHAPE (price multiple, % of supply sold) stays identical to the
+        // production 11x shape at any cap. Override any of these via env.
+        uint256 graduationEth = vm.envOr("GRADUATION_ETH", uint256(0.005 ether));
+        uint256 virtualEth = vm.envOr("VIRTUAL_ETH", (graduationEth * 1122) / 2600);
         uint256 virtualToken = vm.envOr("VIRTUAL_TOKEN", uint256(1_080_000_000e18));
         IBondingCurve.CurveParams memory params = IBondingCurve.CurveParams({
             virtualEth: uint128(virtualEth),
