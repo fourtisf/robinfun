@@ -571,7 +571,7 @@ input[type=range]::-moz-range-thumb{
 .chart-tools .tf.active{color:var(--gilt-bright);border-color:var(--rule-2);background:var(--ink-2)}
 .chart-wrap{position:relative;width:100%;height:360px}
 #chart{width:100%;height:100%;display:block}
-.stat-strip{display:grid;grid-template-columns:repeat(4,1fr);gap:1px;background:var(--rule);border-top:1px solid var(--rule);margin-top:14px}
+.stat-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:1px;background:var(--rule);border-top:1px solid var(--rule);margin-top:14px}
 .stat-cell{background:var(--ledger);padding:11px 13px}
 .stat-cell .k{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--cream-mute)}
 .stat-cell .v{font-family:var(--font-mono);font-size:14.5px;font-weight:600;margin-top:3px}
@@ -610,6 +610,9 @@ input[type=range]::-moz-range-thumb{
 .subtabs button{padding:11px 16px;font-size:13.5px;font-weight:600;color:var(--cream-mute);border-bottom:2px solid transparent}
 .subtabs button.active{color:var(--cream);border-color:var(--gilt)}
 .trades-table{width:100%;border-collapse:collapse;font-family:var(--font-mono);font-size:12px}
+/* Trades panel scrolls so the full history is reachable; header stays pinned. */
+.trades-scroll{max-height:440px;overflow-y:auto}
+.trades-table thead th{position:sticky;top:0;z-index:1;background:var(--ledger)}
 .trades-table th{
   text-align:left;font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--cream-mute);
   font-weight:500;padding:10px 14px;border-bottom:1px solid var(--rule);
@@ -1161,6 +1164,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
           <div class="stat-strip">
             <div class="stat-cell"><div class="k">Market cap</div><div class="v" id="ts-mcap">—</div></div>
             <div class="stat-cell"><div class="k">24h volume</div><div class="v" id="ts-vol">—</div></div>
+            <div class="stat-cell"><div class="k">All-time vol</div><div class="v" id="ts-volall">—</div></div>
             <div class="stat-cell"><div class="k">Holders</div><div class="v" id="ts-holders">—</div></div>
             <div class="stat-cell"><div class="k">Creator rewards</div><div class="v gold" id="ts-earned">—</div></div>
           </div>
@@ -1174,7 +1178,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
             <button data-st="holders" onclick="setSubtab('holders')">Holders</button>
             <button data-st="thread" onclick="setSubtab('thread')">Thread</button>
           </div>
-          <div id="subtab-trades">
+          <div id="subtab-trades" class="trades-scroll">
             <table class="trades-table">
               <thead><tr><th>Time</th><th>Side</th><th>ETH</th><th>Tokens</th><th class="levy-col" style="color:#C6F23C">Fee</th><th>Wallet</th></tr></thead>
               <tbody id="tradesBody"></tbody>
@@ -2320,6 +2324,7 @@ function renderToken(fresh){
   c.className = 'tok-chg '+(pending?'':(t.chg24>=0?'up':'down'));
   document.getElementById('ts-mcap').textContent = pending ? '—' : fmtUsd(t.mcap);
   document.getElementById('ts-vol').textContent = pending ? '—' : fmtUsd(t.vol24);
+  document.getElementById('ts-volall').textContent = pending ? '—' : fmtUsd(t.volAll!=null ? t.volAll : (t.vol24||0));
   document.getElementById('ts-holders').textContent = pending ? '—' : t.holders.toLocaleString();
   document.getElementById('ts-earned').textContent = pending ? '—' : rewardStr(t.earnedEth);
   /* curve / graduation progress — 3 phases:
@@ -2347,7 +2352,7 @@ function renderToken(fresh){
   document.getElementById('li-sell').textContent = t.sellTax+'%';
   document.getElementById('li-decay').textContent = t.decay? 'halves to '+(t.buyTax/2)+'/'+(t.sellTax/2) : 'unchanged';
   document.getElementById('li-ren').textContent = t.renounced? 'renounced — locked' : 'lower-only';
-  document.getElementById('li-dest').textContent = t.mine? 'your wallet' : t.creator;
+  document.getElementById('li-dest').innerHTML = destHtml(t);
   document.getElementById('li-earned').textContent = pending ? '—' : rewardStr(t.earnedEth);
   document.getElementById('fee-note').textContent = side==='buy'
     ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
@@ -2395,6 +2400,26 @@ function legacyCopy(text, ok){
     if(good){ ok(); return; }
   }catch(e){}
   toast('Copy failed — address: '+text,'seal');
+}
+/* Click-to-copy any wallet address (used by the creator-fee "Destination" row). */
+function copyAddr(addr){
+  const done = ()=>toast('Address copied — <b>'+shortAddr(addr)+'</b>','gold');
+  if(navigator.clipboard && navigator.clipboard.writeText){
+    navigator.clipboard.writeText(addr).then(done).catch(()=>legacyCopy(addr, done));
+  }else{
+    legacyCopy(addr, done);
+  }
+}
+/* Creator-fee destination as a copyable, shortened address (prefers the
+   authoritative on-chain creator once loaded). Falls back to the stored label. */
+function destHtml(t){
+  const addr = (t._creatorAddr) || (t.creator || '');
+  if(/^0x[0-9a-fA-F]{40}$/.test(addr)){
+    return '<span onclick="copyAddr(\''+addr+'\')" title="Click to copy" style="cursor:pointer">'+
+      shortAddr(addr)+' <span style="opacity:.55">⧉</span></span>'+
+      (t.mine? ' <span style="color:var(--cream-mute);font-weight:400">· you</span>' : '');
+  }
+  return t.mine ? 'your wallet' : (addr || '—');
 }
 
 /* ---------------- candles ---------------- */
@@ -2579,31 +2604,75 @@ async function loadCurveTrades(t){
     const ro = roProvider();
     const curve = new ethers.Contract(t.curveAddr, CURVE_ABI, ro);
     const head = await ro.getBlockNumber();
-    // Some RPCs cap eth_getLogs to a few thousand blocks and reject a wide
-    // range outright (even when it would return nothing). Try widest→narrow;
-    // a freshly launched token's events are always in the most recent blocks.
-    let buys=[], sells=[], got=false;
-    for(const span of [200000, 45000, 9000, 2000, 500]){
-      try{
-        const from = Math.max(0, head - span);
-        [buys, sells] = await Promise.all([
-          curve.queryFilter(curve.filters.Buy(), from, head),
-          curve.queryFilter(curve.filters.Sell(), from, head),
-        ]);
-        got=true; break;
-      }catch(_){ /* range rejected — try a smaller window */ }
+    // Probe (once) the widest eth_getLogs window this RPC will accept. Some nodes
+    // cap the block span and reject anything wider; others take a huge range.
+    if(!t._logChunk){
+      for(const c of [90000, 45000, 18000, 7000, 2500, 800]){
+        try{ await curve.queryFilter(curve.filters.Buy(), Math.max(0, head-c), head); t._logChunk = c; break; }catch(_){}
+      }
     }
-    if(!got){ console.error('loadCurveTrades: all getLogs ranges rejected'); return; }
-    // Creator address (once) — used to tag the dev wallet in the trades table.
+    const chunk = t._logChunk;
+    if(!chunk){ console.error('loadCurveTrades: getLogs rejected at every window'); return; }
+    // Raw-log cache keyed "block:index:side" so repeat polls dedupe and stay cheap.
+    if(!t._rawCurve) t._rawCurve = new Map();
+    const add = (e,buy)=> t._rawCurve.set(e.blockNumber+':'+e.index+':'+(buy?'b':'s'), {a:e.args, block:e.blockNumber, li:e.index, buy});
+    const scan = async (lo,hi)=>{
+      try{
+        const [b,s] = await Promise.all([
+          curve.queryFilter(curve.filters.Buy(), lo, hi),
+          curve.queryFilter(curve.filters.Sell(), lo, hi),
+        ]);
+        b.forEach(e=>add(e,true)); s.forEach(e=>add(e,false));
+        return true;
+      }catch(_){ return false; }
+    };
+    if(t._scannedLo===undefined){
+      // First load — PAGE BACKWARD from head in accepted-size windows, merging
+      // every window's logs. Stop after a short run of empty windows once we've
+      // seen activity (we've paged past the token's launch), or at a bounded
+      // floor. The old code broke on the first non-throwing span, so on a
+      // range-capped RPC it could settle on a window too RECENT to contain an
+      // older/graduated token's events → empty logs → $0 volume + a blank chart.
+      const FLOOR = Math.max(0, head - Math.min(2000000, chunk*30));
+      let seen=false, empty=0, lo=head, errored=false;
+      for(let hi=head; hi>FLOOR; hi-=chunk){
+        lo = Math.max(FLOOR, hi-chunk);
+        const before = t._rawCurve.size;
+        if(!(await scan(lo, hi))) errored=true;
+        if(t._rawCurve.size>before){ seen=true; empty=0; }
+        else if(seen && ++empty>=3) break;
+        if(lo===FLOOR) break;
+      }
+      if(seen || !errored) t._scannedLo = lo;   // don't lock in a fully-failed sweep
+    }else{
+      // Incremental — refresh only the newest window and merge any new trades.
+      await scan(Math.max(0, head-chunk), head);
+    }
+    // Creator address (once) — the on-chain fee destination + dev-wallet tag.
     if(!t._creatorAddr){ try{ t._creatorAddr = (await new ethers.Contract(t.ca, ['function creator() view returns (address)'], ro).creator()).toLowerCase(); }catch(_){} }
     const px = a => Number(ethers.formatEther(a.virtualEthReserve)) / Number(ethers.formatUnits(a.virtualTokenReserve, 18));
     const evs = [];
-    for(const e of buys){ const a=e.args; evs.push({block:e.blockNumber, li:e.index, buy:true,
-      eth:Number(ethers.formatEther(a.grossEth)), tokens:Number(ethers.formatUnits(a.tokensOut,18)),
-      levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.recipient), full:a.recipient.toLowerCase(), priceEth:px(a)}); }
-    for(const e of sells){ const a=e.args; evs.push({block:e.blockNumber, li:e.index, buy:false,
-      eth:Number(ethers.formatEther(a.netEth)), tokens:Number(ethers.formatUnits(a.tokensIn,18)),
-      levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.trader), full:a.trader.toLowerCase(), priceEth:px(a)}); }
+    let openEv = null;   // earliest curve event; its pre-trade price seeds the chart
+    for(const r of t._rawCurve.values()){
+      const a=r.a;
+      const vE=Number(ethers.formatEther(a.virtualEthReserve)), vT=Number(ethers.formatUnits(a.virtualTokenReserve,18));
+      let prePx;
+      if(r.buy){
+        // buy: reserves after = before + net / - tokensOut → reconstruct "before".
+        const net=Number(ethers.formatEther(a.netEth)), out=Number(ethers.formatUnits(a.tokensOut,18));
+        prePx = (vT+out)>0 ? (vE-net)/(vT+out) : px(a);
+        evs.push({block:r.block, li:r.li, buy:true, eth:Number(ethers.formatEther(a.grossEth)), tokens:out,
+          levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.recipient), full:a.recipient.toLowerCase(), priceEth:px(a), prePx});
+      }else{
+        // sell: reserves after = before - gross / + tokensIn → reconstruct "before".
+        const gross=Number(ethers.formatEther(a.grossEth)), tin=Number(ethers.formatUnits(a.tokensIn,18));
+        prePx = (vT-tin)>0 ? (vE+gross)/(vT-tin) : px(a);
+        evs.push({block:r.block, li:r.li, buy:false, eth:Number(ethers.formatEther(a.netEth)), tokens:tin,
+          levyEth:Number(ethers.formatEther(a.levyEth)), wallet:shortAddr(a.trader), full:a.trader.toLowerCase(), priceEth:px(a), prePx});
+      }
+      if(!openEv || r.block<openEv.block || (r.block===openEv.block && r.li<openEv.li)) openEv = {block:r.block, li:r.li, prePx};
+    }
+    t._openPx = (openEv && isFinite(openEv.prePx) && openEv.prePx>0) ? openEv.prePx*ETH_USD : null;
     // Post-graduation: merge DEX swaps so the table, volume and chart keep going.
     if(t.graduated){ const dex = await loadDexTrades(t); for(const d of dex) evs.push(d); }
     evs.sort((x,y)=> x.block-y.block || x.li-y.li);
@@ -2615,6 +2684,7 @@ async function loadCurveTrades(t){
     t._series = evs.map(e=> e.priceEth*ETH_USD);
     t._priceSeries = evs.map(e=> ({ts:e.ts, px:e.priceEth*ETH_USD, vol:(e.eth||0)*ETH_USD}));   // timestamped + volume for candles
     t.vol24 = evs.filter(e=> Date.now()-e.ts < 864e5).reduce((s,e)=> s+e.eth, 0)*ETH_USD;
+    t.volAll = evs.reduce((s,e)=> s+e.eth, 0)*ETH_USD;   // all-time traded volume (USD)
 
     /* real holder distribution — net token flow per wallet across curve + DEX
        trades (buys credit, sells debit). Approximates current balances. */
@@ -2670,18 +2740,22 @@ function buildCandlesFromTrades(t){
   const first = keys[0], last = keys[keys.length-1];
   const span = (last-first)/tf;
   const out = [];
-  let carry = map.get(first).o;
+  // Open the FIRST candle at the pre-launch curve price (t._openPx), not at its
+  // own first trade — so an opening dev buy renders as a green candle rising
+  // from the launch price instead of a single flat dot.
+  let carry = (t._openPx!=null && isFinite(t._openPx) && t._openPx>0) ? t._openPx : map.get(first).o;
+  const seat = b => { b.o = carry; b.l = Math.min(b.l, b.o); b.h = Math.max(b.h, b.o); carry = b.c; };
   if(span <= 400){
     // Fill gaps with flat candles so the axis is continuous (like a real chart).
     for(let k=first; k<=last; k+=tf){
       const b = map.get(k);
-      if(b){ b.o = carry; out.push(b); carry = b.c; }
+      if(b){ seat(b); out.push(b); }
       else { out.push({t:k, o:carry, h:carry, l:carry, c:carry, v:0}); }
     }
   }else{
     // Too many empty intervals for this timeframe — just the traded buckets,
     // opened continuously (avoids generating thousands of flat candles).
-    for(const k of keys){ const b = map.get(k); b.o = carry; out.push(b); carry = b.c; }
+    for(const k of keys){ const b = map.get(k); seat(b); out.push(b); }
   }
   // Pin the last close to the live price — and widen high/low to include it,
   // else close>high (or <low) violates the candlestick invariant and the chart
@@ -2734,9 +2808,11 @@ async function refreshReal(t, withTrades){
   /* trade-derived stats — written AFTER loadCurveTrades so they reflect the
      real on-chain history (volume, holders, 24h change, creator fees). */
   document.getElementById('ts-vol').textContent = fmtUsd(t.vol24||0);
+  document.getElementById('ts-volall').textContent = fmtUsd(t.volAll||0);
   document.getElementById('ts-holders').textContent = (t.holders||1).toLocaleString();
   document.getElementById('ts-earned').textContent = rewardStr(t.earnedEth);
   const le = document.getElementById('li-earned'); if(le) le.textContent = rewardStr(t.earnedEth);
+  { const ld = document.getElementById('li-dest'); if(ld) ld.innerHTML = destHtml(t); }   // now that the on-chain creator is known
   const cg = document.getElementById('tk-chg');
   if(cg){ cg.textContent = ((t.chg24||0)>=0?'+':'')+(t.chg24||0).toFixed(1)+'% · 24h'; cg.className = 'tok-chg '+((t.chg24||0)>=0?'up':'down'); }
   buildCandlesFromTrades(t); drawChart(t);
@@ -2781,11 +2857,31 @@ async function loadDexTrades(t){
     const ro = roProvider();
     const pair = new ethers.Contract(t._pair, ['event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)'], ro);
     const head = await ro.getBlockNumber();
-    let swaps=[], got=false;
-    for(const span of [200000,45000,9000,2000,500]){
-      try{ swaps = await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-span), head); got=true; break; }catch(_){}
+    // Range-capped-RPC pattern (same as the curve): probe the widest accepted
+    // window, then PAGE BACKWARD merging each window into a persistent cache so
+    // repeat polls stay cheap. Don't stop on the first non-throwing but too-
+    // recent span — that would miss older swaps → $0 volume.
+    let chunk = t._logChunk;
+    if(!chunk){ for(const c of [90000,45000,18000,7000,2500,800]){ try{ await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-c), head); chunk=c; break; }catch(_){} } }
+    if(!chunk) return [];
+    if(!t._rawDex) t._rawDex = new Map();
+    const addSwap = e => t._rawDex.set(e.blockNumber+':'+e.index, e);
+    if(t._dexScannedLo===undefined){
+      const FLOOR = Math.max(0, head - Math.min(2000000, chunk*30));
+      let seen=false, empty=0, lo=head, errored=false;
+      for(let hi=head; hi>FLOOR; hi-=chunk){
+        lo = Math.max(FLOOR, hi-chunk);
+        const before = t._rawDex.size;
+        try{ (await pair.queryFilter(pair.filters.Swap(), lo, hi)).forEach(addSwap); }catch(_){ errored=true; if(lo===FLOOR) break; continue; }
+        if(t._rawDex.size>before){ seen=true; empty=0; } else if(seen && ++empty>=3) break;
+        if(lo===FLOOR) break;
+      }
+      if(seen || !errored) t._dexScannedLo = lo;   // don't lock in a fully-failed sweep
+    }else{
+      try{ (await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-chunk), head)).forEach(addSwap); }catch(_){}
     }
-    if(!got) return [];
+    const swaps = [...t._rawDex.values()];
+    if(!swaps.length) return [];
     const tokenIs0 = t._tok0===t.ca.toLowerCase();
     const out=[];
     for(const e of swaps){
@@ -2804,9 +2900,10 @@ async function loadDexTrades(t){
       out.push({block:e.blockNumber, li:e.index, buy, eth, tokens, levyEth:0, wallet:shortAddr(a.to), full:a.to.toLowerCase(), txh:e.transactionHash, priceEth:(eth/tokens), dex:true});
     }
     // Resolve the real trader (tx.from) for each swap — one getTransaction per
-    // unique tx. Cheap for a beta; makes sells show the seller, not the router.
-    const txs = [...new Set(out.map(o=>o.txh))];
-    const froms = {};
+    // unique tx, cached across polls so we never re-fetch a resolved sender.
+    if(!t._dexFroms) t._dexFroms = {};
+    const froms = t._dexFroms;
+    const txs = [...new Set(out.map(o=>o.txh))].filter(h=>!(h in froms));
     await Promise.all(txs.map(async h=>{ try{ const tx=await ro.getTransaction(h); if(tx&&tx.from) froms[h]=tx.from.toLowerCase(); }catch(_){} }));
     for(const o of out){ const f=froms[o.txh]; if(f){ o.full=f; o.wallet=shortAddr(f); } }
     return out;
@@ -3017,7 +3114,12 @@ function tradeRow(t,tr,isNew){
   </tr>`;
 }
 function renderTrades(t){
-  document.getElementById('tradesBody').innerHTML = t.trades.slice(0,26).map(tr=>tradeRow(t,tr)).join('');
+  // Show the full trade history (newest first); the panel scrolls. Cap at 1000
+  // rows only as a DOM-size backstop — far beyond any beta token's activity.
+  const rows = (t.trades||[]);
+  document.getElementById('tradesBody').innerHTML = rows.length
+    ? rows.slice(0,1000).map(tr=>tradeRow(t,tr)).join('')
+    : '<tr><td colspan="6" style="padding:16px;color:var(--cream-mute)">No trades yet — be the first to buy.</td></tr>';
 }
 function renderHolders(t){
   const rows = [];
@@ -3121,13 +3223,16 @@ function setSide(s){
   if(s!=='buy'){
     qr.innerHTML = ['25%','50%','75%','100%'].map(v=>`<button onclick="setAmtPct('${v}')">${v}</button>`).join('');
   }else if(grad){
-    qr.innerHTML = [0.001,0.005,0.02,0.05].map(chip).join('');   // post-grad DEX buy
+    qr.innerHTML = [0.1,0.2,0.5,1.0].map(chip).join('');   // post-grad DEX buy
   }else{
     const g = gradBuyEth(t);   // gross ETH to graduate this curve (null for sim)
-    if(g && g>0){
+    // On a live curve near its (small) graduation cap, cap the chips at what
+    // actually graduates it — anything more is refunded on-chain. Otherwise use
+    // the standard 0.1 / 0.2 / 0.5 / 1 ETH presets.
+    if(g && g>0 && g < 0.1){
       qr.innerHTML = chip(g*0.25) + chip(g*0.5) + chip(g) + `<button onclick="setAmtMax()">Max</button>`;
     }else{
-      qr.innerHTML = [0.05,0.1,0.5,1.0].map(chip).join('');
+      qr.innerHTML = [0.1,0.2,0.5,1.0].map(chip).join('');
     }
   }
   if(t) document.getElementById('fee-note').textContent = s==='buy'
