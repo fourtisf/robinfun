@@ -1464,6 +1464,10 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
    ================================================================ */
 let ETH_USD = 1800;                                    // refreshed live from a price API on load
 const START_ETH = 0.02, GRAD_ETH = 0.22;   // beta curve mcap (ETH): 0.05-ETH graduation cap, same 11x shape
+// A token "GRADUATES" (earns the ◆ GRADUATED badge on robinfun) only once its
+// Uniswap ETH-side liquidity reaches this. Leaving the curve (contract-graduated)
+// just LISTS it on the DEX; the graduated badge is a real-liquidity milestone.
+const GRAD_LP_ETH = 2.6;
 let START_CAP = Math.round(START_ETH*ETH_USD), GRAD_CAP = Math.round(GRAD_ETH*ETH_USD);
 const fmtUsd = n => n>=1e6 ? '$'+(n/1e6).toFixed(2)+'M' : n>=1e3 ? '$'+(n/1e3).toFixed(1)+'k' : '$'+n.toFixed(0);
 const fmtUsdFull = n => '$'+Math.round(n).toLocaleString('en-US');
@@ -2005,11 +2009,18 @@ function stampHtml(t, small){
   const cls = hot ? 'stamp hot' : 'stamp';
   return '<span class="'+cls+'" title="Buy '+t.buyTax+'% / Sell '+t.sellTax+'% — routed to the creator wallet">'+t.buyTax+'/'+t.sellTax+' FEE</span>';
 }
-/* Prominent bonding/graduation status badge shown next to the ticker. */
+/* ---- token phase: BONDING (curve) → LISTED (on DEX, LP<threshold) → GRADUATED (LP>=threshold).
+   t.graduated is the CONTRACT flag (drives trading); robinGrad() is display-only. */
+function lpEth(t){ return (t.graduated && t._dexREth) ? t._dexREth : 0; }
+function robinGrad(t){ if(!t.graduated) return false; return realToken(t) ? lpEth(t) >= GRAD_LP_ETH : true; }
+function lpPct(t){ return Math.min(100, lpEth(t) / GRAD_LP_ETH * 100); }
+
+/* Prominent bonding/listed/graduated status badge shown next to the ticker. */
 function bondBadge(t){
-  if(t.graduated) return '<span class="stamp grad" title="Graduated — trading on Uniswap, LP burned">◆ GRADUATED</span>';
+  if(robinGrad(t)) return '<span class="stamp grad" title="Graduated — '+GRAD_LP_ETH+'+ ETH liquidity on Uniswap">◆ GRADUATED</span>';
+  if(t.graduated) return '<span class="stamp bond" title="Listed on Uniswap — graduates at '+GRAD_LP_ETH+' ETH LP">◆ LISTED · '+lpPct(t).toFixed(0)+'%</span>';
   const prog = (realToken(t) && t.gradTargetEth) ? Math.min(100,(t.reserveEth||0)/t.gradTargetEth*100) : Math.min(100,(t.mcap||0)/GRAD_CAP*100);
-  return '<span class="stamp bond" title="On the bonding curve — graduates to Uniswap at 100%">◈ BONDING · '+prog.toFixed(0)+'%</span>';
+  return '<span class="stamp bond" title="On the bonding curve — lists on Uniswap at 100%">◈ BONDING · '+prog.toFixed(0)+'%</span>';
 }
 function cardHtml(t){
   const prog = Math.min(100, Math.max(0,(t.mcap-0)/(GRAD_CAP)*100));
@@ -2021,7 +2032,7 @@ function cardHtml(t){
     <div class="tcard-top">
       <div class="tlogo">${tLogo(t)}</div>
       <div style="min-width:0;flex:1">
-        <div class="tname-row"><span class="tname">${t.name}</span><span class="tticker">$${t.ticker}</span>${t.graduated?'<span class="grad-pill">◆ GRAD</span>':'<span class="bond-pill">◈ BONDING</span>'}</div>
+        <div class="tname-row"><span class="tname">${t.name}</span><span class="tticker">$${t.ticker}</span>${robinGrad(t)?'<span class="grad-pill">◆ GRAD</span>':t.graduated?'<span class="bond-pill">◆ LISTED</span>':'<span class="bond-pill">◈ BONDING</span>'}</div>
         <div style="margin-top:5px">${stampHtml(t)}</div>
       </div>
     </div>
@@ -2030,9 +2041,11 @@ function cardHtml(t){
       <span class="tmcap"><span>MCAP</span>${fmtUsd(t.mcap)}</span>
       <span class="tchg ${chgCls}">${chgTxt}</span>
     </div>
-    ${t.graduated
-      ? '<div class="curve"><div class="curve-bar"><div class="curve-fill grad" style="width:100%"></div></div><div class="curve-lbl"><span>Uniswap · LP burned</span><span>curve closed</span></div></div>'
-      : `<div class="curve"><div class="curve-bar"><div class="curve-fill" style="width:${prog}%"></div></div><div class="curve-lbl"><span>${prog.toFixed(0)}% to graduation</span><span>${fmtUsd(GRAD_CAP)}</span></div></div>`}
+    ${robinGrad(t)
+      ? '<div class="curve"><div class="curve-bar"><div class="curve-fill grad" style="width:100%"></div></div><div class="curve-lbl"><span>◆ Graduated · '+GRAD_LP_ETH+'+ ETH LP</span><span>Uniswap</span></div></div>'
+      : t.graduated
+        ? `<div class="curve"><div class="curve-bar"><div class="curve-fill" style="width:${lpPct(t)}%"></div></div><div class="curve-lbl"><span>${lpPct(t).toFixed(0)}% to graduated</span><span>${GRAD_LP_ETH} ETH LP</span></div></div>`
+        : `<div class="curve"><div class="curve-bar"><div class="curve-fill" style="width:${prog}%"></div></div><div class="curve-lbl"><span>${prog.toFixed(0)}% to Uniswap</span><span>${fmtUsd(GRAD_CAP)}</span></div></div>`}
     <div class="tcard-foot">
       <span>${t.holders.toLocaleString()} holders · ${ago(t.created)} old</span>
       <span class="earn">${t.earnedEth>0? '⛁ '+t.earnedEth.toFixed(2)+' ETH to dev':''}</span>
@@ -2045,9 +2058,9 @@ function sortTokens(list){
     case 'new': return l.sort((a,b)=>b.created-a.created);
     case 'lastTrade': return l.sort((a,b)=>b.lastTrade-a.lastTrade);
     case 'mcap': return l.sort((a,b)=>b.mcap-a.mcap);
-    case 'graduated': return l.filter(t=>t.graduated).sort((a,b)=>b.vol24-a.vol24);
+    case 'graduated': return l.filter(t=>robinGrad(t)).sort((a,b)=>b.vol24-a.vol24);
     case 'watch': return l.filter(t=>WATCH.has(t.id)).sort((a,b)=>b.lastTrade-a.lastTrade);
-    case 'soon': return l.filter(t=>!t.graduated).sort((a,b)=>b.mcap-a.mcap);
+    case 'soon': return l.filter(t=>!robinGrad(t)).sort((a,b)=>b.mcap-a.mcap);
     default: return l.sort((a,b)=>(b.vol24*(1+b.chg24/200))-(a.vol24*(1+a.chg24/200)));
   }
 }
@@ -2285,9 +2298,11 @@ function renderToken(fresh){
   document.getElementById('tk-ca').innerHTML = (realToken(t)? t.ca.slice(0,6)+'…'+t.ca.slice(-4) : '0x'+t.id.padEnd(4,'f')+'…4f2')+' <span style="opacity:.6">⧉</span>';
   document.getElementById('tk-creator').textContent = t.mine? 'you' : t.creator;
   document.getElementById('tk-age').textContent = '· launched '+ago(t.created)+' ago';
-  document.getElementById('tk-status').innerHTML = t.graduated
-    ? '<span class="up">◆ graduated — trading on Uniswap, LP burned</span>'
-    : '<span class="gold">◈ on the bonding curve</span>';
+  document.getElementById('tk-status').innerHTML = robinGrad(t)
+    ? '<span class="up">◆ graduated — '+GRAD_LP_ETH+'+ ETH liquidity on Uniswap</span>'
+    : t.graduated
+      ? '<span class="gold">◆ listed on Uniswap · '+lpEth(t).toFixed(3)+'/'+GRAD_LP_ETH+' ETH LP to graduate</span>'
+      : '<span class="gold">◈ on the bonding curve</span>';
   const lc = document.getElementById('tk-links'); if(lc) lc.innerHTML = tokenLinks(t);
   document.getElementById('tk-price').textContent = fmtPrice(t.price);
   // For a real token whose chain data hasn't loaded yet, show placeholders
@@ -2300,13 +2315,24 @@ function renderToken(fresh){
   document.getElementById('ts-vol').textContent = pending ? '—' : fmtUsd(t.vol24);
   document.getElementById('ts-holders').textContent = pending ? '—' : t.holders.toLocaleString();
   document.getElementById('ts-earned').textContent = pending ? '—' : rewardStr(t.earnedEth);
-  /* curve */
-  const prog = Math.min(100, t.mcap/GRAD_CAP*100);
+  /* curve / graduation progress — bonding → Uniswap · listed → LP toward GRAD_LP_ETH · graduated */
   const fill = document.getElementById('tk-fill');
-  fill.style.width = (t.graduated?100:prog)+'%';
-  fill.className = 'curve-fill'+(t.graduated?' grad':'');
-  document.getElementById('tk-curvelbl').textContent = t.graduated? 'curve complete' : fmtUsd(t.mcap)+' · '+prog.toFixed(0)+'%';
-  const gl0 = document.getElementById('tk-gradlbl'); if(gl0) gl0.textContent = t.graduated? 'graduated' : 'graduates at ~'+fmtUsd(GRAD_CAP);
+  const cl = document.getElementById('tk-curvelbl');
+  const gl0 = document.getElementById('tk-gradlbl');
+  if(robinGrad(t)){
+    fill.style.width = '100%'; fill.className = 'curve-fill grad';
+    if(cl) cl.textContent = 'graduated'; if(gl0) gl0.textContent = GRAD_LP_ETH+'+ ETH LP';
+  } else if(t.graduated){
+    const p = lpPct(t);
+    fill.style.width = p+'%'; fill.className = 'curve-fill';
+    if(cl) cl.textContent = lpEth(t).toFixed(3)+' / '+GRAD_LP_ETH+' ETH LP · '+p.toFixed(0)+'%';
+    if(gl0) gl0.textContent = 'graduates at '+GRAD_LP_ETH+' ETH LP';
+  } else {
+    const prog = Math.min(100, t.mcap/GRAD_CAP*100);
+    fill.style.width = prog+'%'; fill.className = 'curve-fill';
+    if(cl) cl.textContent = fmtUsd(t.mcap)+' · '+prog.toFixed(0)+'%';
+    if(gl0) gl0.textContent = 'lists on Uniswap at 100%';
+  }
   /* fee record */
   document.getElementById('li-buy').textContent = t.buyTax+'%';
   document.getElementById('li-sell').textContent = t.sellTax+'%';
@@ -2672,16 +2698,29 @@ async function refreshReal(t, withTrades){
   if(t.graduated){ await loadDexState(t); if(currentTokenId!==t.id) return; }
   document.getElementById('tk-price').textContent = fmtPrice(t.price);
   document.getElementById('ts-mcap').textContent = fmtUsd(t.mcap);
-  document.getElementById('tk-status').innerHTML = t.graduated
-    ? '<span class="up">◆ graduated — trading on Uniswap, LP burned</span>'
-    : '<span class="gold">◈ on the bonding curve</span>';
+  document.getElementById('tk-status').innerHTML = robinGrad(t)
+    ? '<span class="up">◆ graduated — '+GRAD_LP_ETH+'+ ETH liquidity on Uniswap</span>'
+    : t.graduated
+      ? '<span class="gold">◆ listed on Uniswap · '+lpEth(t).toFixed(3)+'/'+GRAD_LP_ETH+' ETH LP to graduate</span>'
+      : '<span class="gold">◈ on the bonding curve</span>';
   { const bb = document.getElementById('tk-bond'); if(bb) bb.innerHTML = bondBadge(t); }
-  const prog = t.gradTargetEth ? Math.min(100, t.reserveEth/t.gradTargetEth*100) : 0;
   const fill = document.getElementById('tk-fill');
-  fill.style.width = (t.graduated?100:prog)+'%'; fill.className = 'curve-fill'+(t.graduated?' grad':'');
-  document.getElementById('tk-curvelbl').textContent = t.graduated
-    ? 'curve complete' : t.reserveEth.toFixed(4)+' ETH raised · '+prog.toFixed(0)+'%';
-  const gl = document.getElementById('tk-gradlbl'); if(gl) gl.textContent = 'graduates at '+t.gradTargetEth+' ETH';
+  const cl = document.getElementById('tk-curvelbl');
+  const gl = document.getElementById('tk-gradlbl');
+  if(robinGrad(t)){
+    fill.style.width='100%'; fill.className='curve-fill grad';
+    if(cl) cl.textContent='graduated'; if(gl) gl.textContent=GRAD_LP_ETH+'+ ETH LP';
+  } else if(t.graduated){
+    const p = lpPct(t);
+    fill.style.width=p+'%'; fill.className='curve-fill';
+    if(cl) cl.textContent=lpEth(t).toFixed(3)+' / '+GRAD_LP_ETH+' ETH LP · '+p.toFixed(0)+'%';
+    if(gl) gl.textContent='graduates at '+GRAD_LP_ETH+' ETH LP';
+  } else {
+    const prog = t.gradTargetEth ? Math.min(100, t.reserveEth/t.gradTargetEth*100) : 0;
+    fill.style.width=prog+'%'; fill.className='curve-fill';
+    if(cl) cl.textContent=t.reserveEth.toFixed(4)+' ETH raised · '+prog.toFixed(0)+'%';
+    if(gl) gl.textContent='lists on Uniswap at '+(t.gradTargetEth||'')+' ETH';
+  }
   if(withTrades){ await loadCurveTrades(t); if(currentTokenId!==t.id) return; t._loaded = true; renderTrades(t); renderRealHolders(t); }
   /* trade-derived stats — written AFTER loadCurveTrades so they reflect the
      real on-chain history (volume, holders, 24h change, creator fees). */
@@ -3625,7 +3664,7 @@ function renderTreasury(){
     <div class="t-row">
       <div class="t-tok"><div class="tlogo">${tLogo(t)}</div>
         <div style="min-width:0"><div style="font-weight:600;font-size:14px">${t.name} <span class="tticker">$${t.ticker}</span></div>
-        <div style="margin-top:3px">${stampHtml(t)} ${t.graduated?'<span class="mono up" style="font-size:9.5px">◆ GRADUATED</span>':''}</div></div>
+        <div style="margin-top:3px">${stampHtml(t)} ${robinGrad(t)?'<span class="mono up" style="font-size:9.5px">◆ GRADUATED</span>':t.graduated?'<span class="mono" style="font-size:9.5px;opacity:.7">◆ LISTED</span>':''}</div></div>
       </div>
       <div><div class="cell-k">24h volume</div><div class="cell-v">${fmtUsd(t.vol24)}</div></div>
       <div><div class="cell-k">Earned all-time</div><div class="cell-v">${t.earnedEth.toFixed(3)} Ξ</div></div>
