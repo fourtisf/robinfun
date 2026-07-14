@@ -488,6 +488,16 @@ async function launchLoop() {
       const peerOk = peer.filter((p) => p.ok).length;
       const peerEth = peer.reduce((s, p) => s + (p.eth || 0), 0);        // sum of the actual random buys
       const peerRange = Number(pMin) === Number(pMax) ? `${pMin}` : `${pMin}–${pMax}`;
+      // Clear peer-buy line: explain OFF / skips (no ETH) / errors so it's obvious.
+      let peerLine;
+      if (CFG.peerBuyers <= 0) {
+        peerLine = '👥 peer-buy <b>OFF</b> — ketik <code>/peerbuyers 3</code> supaya wallet lain ikut beli';
+      } else {
+        const skip = peer.filter((p) => p.skip).length, fail = peer.filter((p) => !p.ok && !p.skip).length;
+        peerLine = `👥 peer-buy <b>${peerOk}/${peer.length} wallet</b> beli (acak ${peerRange} ETH) = <b>${peerEth.toFixed(4)} ETH</b>${u(peerEth)}`;
+        if (skip) peerLine += `\n   ⚠️ ${skip} wallet skip (ETH kurang — isi /wallets)`;
+        if (fail) peerLine += `\n   ❌ ${fail} gagal: ${esc(((peer.find((p) => p.error) || {}).error || '?')).slice(0, 90)}`;
+      }
       // ---- market cap + graduation status AFTER the buys ----
       let mcEth = 0, graduated = false; try { const s = await tokenStats(r.curve, provider); mcEth = Number(ethers.formatEther(s.mcEth || 0n)); graduated = !!s.graduated; } catch (_) {}
       const devBuyEth = Number(devBuyStr), gasEth = Number(ethers.formatEther(r.gasCostWei || 0n)), deployEth = Number(ethers.formatEther(deployFee));
@@ -496,7 +506,7 @@ async function launchLoop() {
 CA <code>${r.ca || '(parse gagal)'}</code>
 creator <code>${r.creator}</code>
 💰 dev-buy <b>${devBuyEth} ETH</b>${u(devBuyEth)}
-👥 peer-buy <b>${peerOk}/${peer.length} wallet</b> (acak ${peerRange} ETH) = <b>${peerEth.toFixed(4)} ETH</b>${u(peerEth)}
+${peerLine}
 📈 MC <b>${mcEth.toFixed(4)} ETH</b>${u(mcEth)}
 ${graduated ? '🎓 <b>GRADUATED</b> — LP sudah di Uniswap (burned)' : '◈ masih di bonding curve (belum graduate)'}
 ⛽ gas ${gasEth.toFixed(6)} ETH${u(gasEth)} · deploy ${deployEth} ETH
