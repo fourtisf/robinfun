@@ -1,0 +1,16 @@
+{
+  "name": "robinfun-seeder",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Auto-launch meme tokens on the Robinfun launchpad (scheduled, budget-capped).",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dry": "DRY_RUN=1 node index.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "ethers": "^6.15.0"
+  }
+}
