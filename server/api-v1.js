@@ -367,8 +367,9 @@ function openapi(apiBase) {
   };
 }
 
-// GET /api/v1/docs — interactive Swagger UI page (loads from CDN; this is a real
-// website page, not a sandboxed artifact, so an external script is fine).
+// GET /api/v1/docs — interactive Swagger UI page, restyled to Robinfun's
+// dark volt-lime brand (Space Grotesk / IBM Plex Mono). Loads Swagger UI from
+// CDN; this is a real website page (not a sandboxed artifact), so that's fine.
 function docsHtml(apiBase) {
   const specUrl = `${apiBase}/openapi.json`;
   return `<!doctype html>
@@ -377,25 +378,112 @@ function docsHtml(apiBase) {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Robinfun API — Docs</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%23C6F23C'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
 <style>
-  body { margin: 0; background: #0d0f12; }
-  .topbar { display: none; }
-  .rf-head { font-family: -apple-system, Segoe UI, Roboto, sans-serif; color: #e8ffe8; padding: 20px 24px 8px; }
-  .rf-head h1 { margin: 0 0 4px; font-size: 20px; }
-  .rf-head a { color: #48d16a; text-decoration: none; }
+  :root{
+    --bg:#080B0A; --panel:#0F140F; --raise:#161C13; --rule:#1C231A; --rule2:#29321F;
+    --ink:#F2F5EA; --dim:#9AA18F; --mute:#5F6653; --lime:#C6F23C; --lime2:#D8FB5C;
+    --lime-dim:rgba(198,242,60,.12); --red:#FF5B4A;
+    --fdisplay:"Space Grotesk",system-ui,sans-serif; --fbody:"Instrument Sans",system-ui,sans-serif; --fmono:"IBM Plex Mono",ui-monospace,monospace;
+  }
+  html,body{background:var(--bg);}
+  body{margin:0;font-family:var(--fbody);}
+  body::after{content:"";position:fixed;left:50%;top:-340px;transform:translateX(-50%);width:1100px;height:620px;pointer-events:none;z-index:0;background:radial-gradient(closest-side,rgba(198,242,60,.10),rgba(198,242,60,.03) 55%,transparent 75%);filter:blur(8px);}
+  .swagger-ui .topbar{display:none;}
+  /* ---- brand header ---- */
+  .rf-head{position:relative;z-index:2;font-family:var(--fdisplay);color:var(--ink);max-width:1100px;margin:0 auto;padding:30px 24px 6px;}
+  .rf-head .rf-brand{display:flex;align-items:center;gap:11px;font-size:23px;font-weight:700;letter-spacing:-.02em;}
+  .rf-head .rf-dot{width:15px;height:15px;border-radius:99px;background:var(--lime);box-shadow:0 0 16px rgba(198,242,60,.6);}
+  .rf-head .rf-sub{font-family:var(--fbody);color:var(--dim);font-size:14px;margin-top:7px;}
+  .rf-head .rf-sub a{color:var(--lime);text-decoration:none;font-weight:600;}
+  .rf-head .rf-sub a:hover{color:var(--lime2);}
+  .rf-pills{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;}
+  .rf-pills span{font-family:var(--fmono);font-size:11px;letter-spacing:.04em;color:var(--dim);background:var(--panel);border:1px solid var(--rule2);border-radius:99px;padding:5px 11px;}
+  .rf-pills span b{color:var(--lime);font-weight:600;}
+  /* ---- swagger base ---- */
+  .swagger-ui{font-family:var(--fbody);position:relative;z-index:1;}
+  .swagger-ui .wrapper{max-width:1100px;}
+  .swagger-ui, .swagger-ui .info li, .swagger-ui .info p, .swagger-ui .info table,
+  .swagger-ui .opblock-description-wrapper p, .swagger-ui .opblock-external-docs-wrapper p,
+  .swagger-ui .opblock-title_normal p, .swagger-ui label, .swagger-ui .tab li,
+  .swagger-ui .parameter__name, .swagger-ui .parameter__type, .swagger-ui table thead tr td,
+  .swagger-ui table thead tr th, .swagger-ui .response-col_status, .swagger-ui .response-col_links,
+  .swagger-ui .col_header, .swagger-ui .parameter__in, .swagger-ui .responses-inner h4,
+  .swagger-ui .responses-inner h5, .swagger-ui .model-title{color:var(--ink);}
+  .swagger-ui .info .title{color:var(--ink);font-family:var(--fdisplay);font-weight:700;}
+  .swagger-ui .info .title small{background:var(--rule2);}
+  .swagger-ui .info .title small.version-stamp{background:var(--lime);}
+  .swagger-ui .info a, .swagger-ui a.nostyle, .swagger-ui .info a:visited{color:var(--lime);}
+  .swagger-ui .info .base-url, .swagger-ui .info .description, .swagger-ui .info p{color:var(--dim);}
+  /* server select */
+  .swagger-ui .scheme-container{background:var(--panel);box-shadow:none;border:1px solid var(--rule);border-radius:14px;margin:0 auto 24px;max-width:1052px;}
+  .swagger-ui .scheme-container .schemes-title, .swagger-ui select{color:var(--ink);}
+  .swagger-ui select{background:var(--raise);border:1px solid var(--rule2);border-radius:8px;box-shadow:none;}
+  /* tag groups */
+  .swagger-ui .opblock-tag{color:var(--ink);font-family:var(--fdisplay);border-bottom:1px solid var(--rule);}
+  .swagger-ui .opblock-tag:hover{background:rgba(198,242,60,.03);}
+  .swagger-ui .opblock-tag small{color:var(--mute);}
+  /* operation blocks */
+  .swagger-ui .opblock{background:var(--panel);border:1px solid var(--rule);border-radius:12px;box-shadow:none;margin:0 0 12px;}
+  .swagger-ui .opblock .opblock-summary{border-color:var(--rule);}
+  .swagger-ui .opblock .opblock-summary-path, .swagger-ui .opblock .opblock-summary-path__deprecated,
+  .swagger-ui .opblock .opblock-summary-description{color:var(--ink);font-family:var(--fmono);}
+  .swagger-ui .opblock .opblock-summary-method{border-radius:7px;font-family:var(--fmono);text-shadow:none;}
+  .swagger-ui .opblock.opblock-get{background:rgba(198,242,60,.04);border-color:var(--rule2);}
+  .swagger-ui .opblock.opblock-get .opblock-summary-method{background:var(--lime);color:#0B0F04;}
+  .swagger-ui .opblock.opblock-get .opblock-summary{border-color:rgba(198,242,60,.25);}
+  .swagger-ui .opblock.opblock-post{background:rgba(198,242,60,.04);border-color:var(--rule2);}
+  .swagger-ui .opblock.opblock-post .opblock-summary-method{background:var(--lime2);color:#0B0F04;}
+  .swagger-ui .opblock.opblock-delete .opblock-summary-method{background:var(--red);color:#1a0400;}
+  /* body / tables / params */
+  .swagger-ui .opblock-body, .swagger-ui .opblock-section-header{background:var(--bg);box-shadow:none;}
+  .swagger-ui .opblock-section-header{border-radius:8px;border:1px solid var(--rule);}
+  .swagger-ui table.parameters, .swagger-ui .parameters-col_description{color:var(--ink);}
+  .swagger-ui .parameters-col_description input[type=text]{background:var(--raise);border:1px solid var(--rule2);color:var(--ink);border-radius:8px;}
+  .swagger-ui .parameter__name.required::after{color:var(--red);}
+  .swagger-ui .btn{border:1px solid var(--rule2);color:var(--ink);border-radius:8px;box-shadow:none;background:var(--raise);}
+  .swagger-ui .btn.execute{background:var(--lime);border-color:var(--lime);color:#0B0F04;font-family:var(--fdisplay);font-weight:600;}
+  .swagger-ui .btn.execute:hover{background:var(--lime2);}
+  .swagger-ui .btn.try-out__btn{background:transparent;color:var(--lime);border-color:var(--rule2);}
+  .swagger-ui .btn.cancel{color:var(--red);border-color:var(--red);}
+  /* responses / code */
+  .swagger-ui .responses-inner{background:var(--bg);}
+  .swagger-ui table.responses-table td{color:var(--ink);}
+  .swagger-ui .response-col_description__inner div.renderedMarkdown p{color:var(--dim);}
+  .swagger-ui .microlight, .swagger-ui .highlight-code, .swagger-ui .curl-command,
+  .swagger-ui textarea, .swagger-ui .body-param__text{background:#05070500!important;}
+  .swagger-ui .highlight-code, .swagger-ui .responses-inner pre, .swagger-ui .curl{background:#050706;border:1px solid var(--rule);border-radius:8px;}
+  .swagger-ui .microlight code, .swagger-ui pre, .swagger-ui code{font-family:var(--fmono);color:#d7e6c4;}
+  /* models */
+  .swagger-ui section.models{border:1px solid var(--rule);background:var(--panel);border-radius:12px;}
+  .swagger-ui section.models.is-open h4{border-color:var(--rule);color:var(--ink);}
+  .swagger-ui .model-box{background:var(--raise);border-radius:8px;}
+  .swagger-ui .model, .swagger-ui .model .property, .swagger-ui .prop-type{color:var(--dim);}
+  .swagger-ui .prop-type{color:var(--lime);}
+  .swagger-ui .model-toggle::after{filter:invert(1);}
+  /* misc arrows, dividers */
+  .swagger-ui .expand-operation svg, .swagger-ui .opblock-summary-control svg{fill:var(--dim);}
+  .swagger-ui .opblock-tag-section h3, .swagger-ui hgroup.main a{color:var(--ink);}
+  .swagger-ui .info__contact a{color:var(--lime);}
+  .swagger-ui .parameter__enum, .swagger-ui .renderedMarkdown code{background:var(--lime-dim);color:var(--lime2);font-family:var(--fmono);border-radius:4px;}
+  ::selection{background:rgba(198,242,60,.30);color:#0B0F04;}
 </style>
 </head>
 <body>
 <div class="rf-head">
-  <h1>🟢 Robinfun Public API</h1>
-  <div>Read-only token data for Robinhood Chain · <a href="${SITE}">robinfun.io</a> · <a href="${specUrl}">openapi.json</a></div>
+  <div class="rf-brand"><span class="rf-dot"></span> Robinfun Public API</div>
+  <div class="rf-sub">Read-only market data for tokens launched on Robinhood Chain — auto-list, aggregators, wallets &amp; bots. · <a href="${SITE}">robinfun.io</a> · <a href="${specUrl}">openapi.json</a></div>
+  <div class="rf-pills"><span>Chain <b>Robinhood · 4663</b></span><span>Auth <b>none</b></span><span>CORS <b>open</b></span><span>Cache <b>~15s</b></span></div>
 </div>
 <div id="swagger"></div>
 <script src="https://unpkg.com/swagger-ui-dist@5/swagger-ui-bundle.js" crossorigin></script>
 <script>
   window.addEventListener('load', function () {
-    window.ui = SwaggerUIBundle({ url: ${JSON.stringify(specUrl)}, dom_id: '#swagger', deepLinking: true, docExpansion: 'list', defaultModelsExpandDepth: 0 });
+    window.ui = SwaggerUIBundle({ url: ${JSON.stringify(specUrl)}, dom_id: '#swagger', deepLinking: true, docExpansion: 'list', defaultModelsExpandDepth: 0, tryItOutEnabled: true, syntaxHighlight: { theme: 'obsidian' } });
   });
 </script>
 </body>
