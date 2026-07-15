@@ -82,6 +82,22 @@ function getToken(store, stats, apiBase, ca) {
   return toPublic(rec, stats.getStats(), apiBase);
 }
 
+// GET /api/v1/tokens/:ca/trades — recent trades for a token. Null if not found.
+function tokenTrades(store, stats, ca, limit) {
+  const key = String(ca || '').toLowerCase();
+  const rec = store.allTokens().find((r) => r.ca && r.ca.toLowerCase() === key);
+  if (!rec) return null;
+  return { chainId: CHAIN_ID, address: rec.ca, symbol: rec.ticker, trades: stats.getTrades(rec.ca, limit) };
+}
+
+// GET /api/v1/tokens/:ca/ohlc — OHLC candles for a token. Null if not found.
+function tokenOHLC(store, stats, ca, resolutionSec, limit) {
+  const key = String(ca || '').toLowerCase();
+  const rec = store.allTokens().find((r) => r.ca && r.ca.toLowerCase() === key);
+  if (!rec) return null;
+  return { chainId: CHAIN_ID, address: rec.ca, symbol: rec.ticker, resolutionSec, quote: 'USD', candles: stats.getOHLC(rec.ca, resolutionSec, limit) };
+}
+
 // GET /api/v1/stats — platform-wide aggregates.
 function platformStats(stats) {
   const st = stats.getStats();
@@ -107,10 +123,20 @@ function index(apiBase) {
     endpoints: {
       tokens: `${apiBase}/tokens?limit=100&offset=0&status=all|bonding|listed`,
       token: `${apiBase}/tokens/{contractAddress}`,
+      trades: `${apiBase}/tokens/{contractAddress}/trades?limit=100`,
+      ohlc: `${apiBase}/tokens/{contractAddress}/ohlc?resolution=1h&limit=200`,
       stats: `${apiBase}/stats`,
     },
     notes: 'Read-only. CORS open. Data refreshes continuously from chain. Field names are stable within v1.',
   };
 }
 
-module.exports = { toPublic, listTokens, getToken, platformStats, index };
+// Parse a resolution string (1m/5m/15m/1h/4h/1d) to seconds. Default 1h.
+function resolutionToSec(s) {
+  const m = String(s || '1h').trim().toLowerCase().match(/^(\d+)\s*(m|h|d)$/);
+  if (!m) return 3600;
+  const n = Number(m[1]); const unit = m[2];
+  return unit === 'm' ? n * 60 : unit === 'h' ? n * 3600 : n * 86400;
+}
+
+module.exports = { toPublic, listTokens, getToken, tokenTrades, tokenOHLC, platformStats, index, resolutionToSec };

@@ -137,8 +137,8 @@ async function scanCurve(curve, lo, hi, chunk) {
       curve.queryFilter(curve.filters.Buy(), from, to),
       curve.queryFilter(curve.filters.Sell(), from, to),
     ]); } catch (_) { continue; }
-    for (const e of buys)  { events.push({ block: e.blockNumber, li: e.index, eth: Number(ethers.formatEther(e.args.grossEth)) }); }
-    for (const e of sells) { events.push({ block: e.blockNumber, li: e.index, eth: Number(ethers.formatEther(e.args.netEth)) }); }
+    for (const e of buys)  { const a = e.args; const vE = Number(ethers.formatEther(a.virtualEthReserve)), vT = Number(ethers.formatUnits(a.virtualTokenReserve, 18)); events.push({ block: e.blockNumber, li: e.index, eth: Number(ethers.formatEther(a.grossEth)), priceEth: vT > 0 ? vE / vT : 0, buy: true }); }
+    for (const e of sells) { const a = e.args; const vE = Number(ethers.formatEther(a.virtualEthReserve)), vT = Number(ethers.formatUnits(a.virtualTokenReserve, 18)); events.push({ block: e.blockNumber, li: e.index, eth: Number(ethers.formatEther(a.netEth)), priceEth: vT > 0 ? vE / vT : 0, buy: false }); }
   }
   return events;
 }
@@ -154,10 +154,12 @@ async function scanDex(pair, tok0, ca, lo, hi, chunk) {
       const a = e.args;
       const a0i = Number(ethers.formatUnits(a.amount0In, 18)), a1i = Number(ethers.formatUnits(a.amount1In, 18));
       const a0o = Number(ethers.formatUnits(a.amount0Out, 18)), a1o = Number(ethers.formatUnits(a.amount1Out, 18));
-      const tokOut = tokenIs0 ? a0o : a1o;
+      const tokIn = tokenIs0 ? a0i : a1i, tokOut = tokenIs0 ? a0o : a1o;
       const ethIn = tokenIs0 ? a1i : a0i, ethOut = tokenIs0 ? a1o : a0o;
-      const eth = tokOut > 0 ? ethIn : ethOut;     // buy → ETH in, sell → ETH out
-      events.push({ block: e.blockNumber, li: e.index, eth });
+      const buy = tokOut > 0;                       // tokens leaving the pool = a buy
+      const eth = buy ? ethIn : ethOut;
+      const tok = buy ? tokOut : tokIn;
+      events.push({ block: e.blockNumber, li: e.index, eth, priceEth: tok > 0 ? eth / tok : 0, buy });
     }
   }
   return events;
@@ -230,10 +232,19 @@ async function indexToken(rec, head, nowSec) {
 
   // Stamp timestamps: incremental trades = now (accurate); backfill = estimated.
   const bt = idx.blockTime || 0.5;
+  if (!s.trades) s.trades = [];
   for (const e of fresh) {
     const ts = backfilling ? Math.max(0, nowSec - (head - e.block) * bt) : nowSec;
     s.volAllEth += e.eth;
     s.recent.push([Math.round(ts), e.eth]);
+    // Full trade row for the /trades + /ohlc API: ts, price (ETH), eth volume, side.
+    s.trades.push({ t: Math.round(ts), pe: e.priceEth || 0, e: e.eth, b: !!e.buy });
+  }
+  // keep trades sorted by time and bounded (memory) — last ~1500 or ~14 days
+  s.trades.sort((a, b) => a.t - b.t);
+  const tradeCutoff = nowSec - 14 * 86400;
+  if (s.trades.length > 1500 || (s.trades.length && s.trades[0].t < tradeCutoff)) {
+    s.trades = s.trades.filter((x) => x.t >= tradeCutoff).slice(-1500);
   }
   s.lastBlock = hi;
 
@@ -297,4 +308,40 @@ function getStats() {
   };
 }
 
-module.exports = { startIndexer, getStats };
+// Recent trades for one token (newest first). [{ ts, priceUsd, priceEth, volumeUsd, volumeEth, side }].
+function getTrades(ca, limit = 100) {
+  const s = idx.perToken[String(ca || '').toLowerCase()];
+  if (!s || !s.trades) return [];
+  const lim = Math.min(1000, Math.max(1, Number(limit) || 100));
+  return s.trades.slice(-lim).reverse().map((x) => ({
+    ts: x.t * 1000,
+    priceUsd: (x.pe || 0) * idx.ethUsd,
+    priceEth: x.pe || 0,
+    volumeUsd: (x.e || 0) * idx.ethUsd,
+    volumeEth: x.e || 0,
+    side: x.b ? 'buy' : 'sell',
+  }));
+}
+
+// OHLC candles for one token, built from indexed trades. resolutionSec is the
+// bucket size (e.g. 3600 = 1h). Returns [{ time, open, high, low, close, volumeUsd }]
+// with `time` a unix-seconds bucket start; prices are USD.
+function getOHLC(ca, resolutionSec = 3600, limit = 200) {
+  const s = idx.perToken[String(ca || '').toLowerCase()];
+  if (!s || !s.trades || !s.trades.length) return [];
+  const res = Math.max(60, Number(resolutionSec) || 3600);
+  const buckets = new Map();
+  for (const x of s.trades) {
+    const px = (x.pe || 0) * idx.ethUsd;
+    if (!(px > 0)) continue;
+    const b = Math.floor(x.t / res) * res;
+    let c = buckets.get(b);
+    if (!c) { c = { time: b, open: px, high: px, low: px, close: px, volumeUsd: 0 }; buckets.set(b, c); }
+    c.high = Math.max(c.high, px); c.low = Math.min(c.low, px); c.close = px;
+    c.volumeUsd += (x.e || 0) * idx.ethUsd;
+  }
+  const lim = Math.min(1000, Math.max(1, Number(limit) || 200));
+  return [...buckets.values()].sort((a, b) => a.time - b.time).slice(-lim);
+}
+
+module.exports = { startIndexer, getStats, getTrades, getOHLC };

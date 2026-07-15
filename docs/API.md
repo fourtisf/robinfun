@@ -56,6 +56,34 @@ Query params:
 ### `GET /api/v1/tokens/{contractAddress}` — one token
 Returns a single **Token object**, or `404 {"error":"token not found"}`.
 
+### `GET /api/v1/tokens/{contractAddress}/trades` — recent trades
+For activity feeds and live tickers. `?limit=` (default 100, max 1000). Newest first.
+```json
+{
+  "chainId": 4663,
+  "address": "0x…",
+  "symbol": "TDOGE",
+  "trades": [
+    { "ts": 1752600000000, "side": "buy", "priceUsd": 0.00000123, "priceEth": 0.00000000065, "volumeUsd": 9.1, "volumeEth": 0.0048 }
+  ]
+}
+```
+
+### `GET /api/v1/tokens/{contractAddress}/ohlc` — price candles
+For charts. `?resolution=` one of `1m 5m 15m 1h 4h 1d` (default `1h`), `?limit=` (default 200, max 1000). Prices are USD; `time` is unix **seconds** (bucket start).
+```json
+{
+  "chainId": 4663,
+  "address": "0x…",
+  "symbol": "TDOGE",
+  "resolutionSec": 3600,
+  "quote": "USD",
+  "candles": [
+    { "time": 1752596400, "open": 0.0000011, "high": 0.0000013, "low": 0.0000010, "close": 0.0000012, "volumeUsd": 142.5 }
+  ]
+}
+```
+
 ---
 
 ## Token object

@@ -156,6 +156,16 @@ app.get('/api/v1/tokens/:ca', publicCors, (req, res) => {
   if (!t) return res.status(404).json({ error: 'token not found' });
   res.json(t);
 });
+app.get('/api/v1/tokens/:ca/trades', publicCors, (req, res) => {
+  const t = apiV1.tokenTrades(store, stats, req.params.ca, req.query.limit);
+  if (!t) return res.status(404).json({ error: 'token not found' });
+  res.json(t);
+});
+app.get('/api/v1/tokens/:ca/ohlc', publicCors, (req, res) => {
+  const t = apiV1.tokenOHLC(store, stats, req.params.ca, apiV1.resolutionToSec(req.query.resolution), req.query.limit);
+  if (!t) return res.status(404).json({ error: 'token not found' });
+  res.json(t);
+});
 
 app.get('/api/tokens/:id', (req, res) => {
   const t = store.findToken(req.params.id);
