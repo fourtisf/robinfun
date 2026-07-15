@@ -88,7 +88,7 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
   background:rgba(8,11,10,.82);backdrop-filter:blur(16px);
   border-bottom:1px solid var(--rule);
 }
-.topbar-in{max-width:var(--maxw);margin:0 auto;padding:0 24px;height:62px;display:flex;align-items:center;gap:26px}
+.topbar-in{max-width:var(--maxw);margin:0 auto;padding:0 24px;height:62px;display:flex;align-items:center;gap:16px}
 .tb-eth{font-family:var(--font-mono);font-size:12px;color:var(--cream-dim);white-space:nowrap;padding:5px 10px;border:1px solid var(--rule);border-radius:8px;background:var(--ledger)}
 .tb-eth b{color:var(--gilt);font-weight:600}
 @media(max-width:560px){.tb-eth{display:none}}
@@ -104,15 +104,15 @@ input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-vis
 .brand-word{font-family:var(--font-display);font-weight:700;font-size:21px;letter-spacing:.04em;color:var(--cream)}
 .brand-word em{font-style:normal;color:var(--gilt)}
 .brand-sub{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.14em;color:var(--cream-mute);text-transform:uppercase;margin-top:1px}
-.nav{display:flex;gap:4px;align-items:center}
+.nav{display:flex;gap:2px;align-items:center}
 .nav button{
-  padding:7px 13px;border-radius:var(--r-sm);font-size:14px;font-weight:500;color:var(--cream-dim);
+  padding:7px 10px;border-radius:var(--r-sm);font-size:13.5px;font-weight:500;color:var(--cream-dim);white-space:nowrap;
   transition:color .15s,background .15s;
 }
 .nav button:hover{color:var(--cream);background:var(--ledger)}
 .nav button.active{color:var(--gilt-bright);background:var(--gilt-dim)}
 .nav-tools{display:none}   /* desktop: hidden; shown inside the open mobile menu */
-.topbar-right{margin-left:auto;display:flex;align-items:center;gap:10px}
+.topbar-right{margin-left:auto;display:flex;align-items:center;gap:8px;flex-shrink:0}
 .chain-badge{
   display:flex;align-items:center;gap:7px;padding:6px 11px;border:1px solid var(--rule-2);
   border-radius:99px;font-family:var(--font-mono);font-size:11px;color:var(--cream-dim);white-space:nowrap;
@@ -737,8 +737,27 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   .treasury-grid{grid-template-columns:1fr}
   .docs-grid{grid-template-columns:1fr}
   .t-row{grid-template-columns:1fr 1fr;row-gap:10px}
+  /* header gets tight here — drop the nav "+ Launch Token" (still in the hero) so
+     Connect wallet never clips; nav collapses to the hamburger below 760. */
+  .tb-launch{display:none}
 }
-@media (max-width:1024px){ .tb-social{display:none} }
+/* mid-size screens: drop the least-essential top-bar extras so + Launch Token
+   and Connect wallet always fit (the socials live in the footer + menu too). */
+@media (max-width:1260px){ .tb-eth,.tb-social,.tb-sep{display:none} .nav button{padding:7px 8px;font-size:13px} .topbar-in{gap:12px} }
+/* tablets / small laptops: collapse the 6-item nav into the hamburger so the
+   right-side actions (Connect wallet) always fit. Nav items live in the menu. */
+@media (max-width:900px){
+  .nav{display:none}
+  .hamburger{display:block}
+  .nav.open{
+    display:flex;position:absolute;top:62px;left:0;right:0;flex-direction:column;align-items:stretch;
+    background:var(--ink-2);border-bottom:1px solid var(--rule);padding:10px 16px;gap:2px;z-index:60;
+  }
+  .nav.open>button{padding:12px 13px;font-size:15px;text-align:left}
+  .nav.open .nav-tools{display:flex;flex-direction:column;border-top:1px solid var(--rule);margin-top:6px;padding-top:6px;gap:2px}
+  .nav-tools button,.nav-tools a{padding:12px 13px;font-size:14.5px;text-align:left;color:var(--cream-dim);border-radius:var(--r-sm);display:block}
+  .nav-tools button:hover,.nav-tools a:hover{color:var(--cream);background:var(--ledger)}
+}
 @media (max-width:760px){
   .nav{display:none}
   .hamburger{display:block}
