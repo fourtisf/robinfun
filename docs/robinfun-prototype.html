@@ -1688,6 +1688,18 @@ async function txGas(to, data, value, from){
   try{ const fd = await roProvider().getFeeData(); if(fd && fd.gasPrice) g.gasPrice = fd.gasPrice; }catch(_){}
   return g;
 }
+// Raw eth_sendTransaction via the wallet (no ethers send round-trips through the
+// WC provider → no "could not coalesce error"); wait for the receipt via proxy.
+async function sendTx(to, data, value, onHash){
+  const from = wallet;
+  const g = await txGas(to, data, value, from);
+  const tx = { from, to, data };
+  if(value!=null && value!==0n) tx.value = '0x' + BigInt(value).toString(16);
+  if(g.gasLimit) tx.gas = '0x' + BigInt(g.gasLimit).toString(16);
+  const hash = await activeProvider.request({ method: 'eth_sendTransaction', params: [tx] });
+  if(onHash) try{ onHash(hash); }catch(_){}
+  return roProvider().waitForTransaction(hash, 1, 180000);
+}
 
 /* ---- Multi-wallet discovery (EIP-6963) ----
    Every installed injected wallet (MetaMask, Rabby, Coinbase, Brave, OKX, …)
@@ -3349,26 +3361,21 @@ async function doTradeDex(t){
       if(t._ethBal!=null && ethIn > t._ethBal-0.0002){ toast('Not enough ETH — you have '+(t._ethBal||0).toFixed(4),'seal'); btn.disabled=false; setSide(side); return; }
       btn.textContent='Confirm in wallet…';
       const value = ethers.parseEther(ethIn.toFixed(12));
-      const args = [0n, [WETH_ADDR, t.ca], owner, deadline];
-      const gas = await txGas(DEX_ROUTER_ADDR, router.interface.encodeFunctionData('swapExactETHForTokensSupportingFeeOnTransferTokens', args), value, owner);
-      const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(...args, {value, ...gas});
-      toast('Buy sent — waiting…','jade'); btn.textContent='Buying…';
-      await tx.wait(); toast('Bought $'+t.ticker+' ✓','jade');
+      const data = router.interface.encodeFunctionData('swapExactETHForTokensSupportingFeeOnTransferTokens', [0n, [WETH_ADDR, t.ca], owner, deadline]);
+      await sendTx(DEX_ROUTER_ADDR, data, value, ()=>{ toast('Buy sent — waiting…','jade'); btn.textContent='Buying…'; });
+      toast('Bought $'+t.ticker+' ✓','jade');
     }else{
       const tokensIn = ethers.parseUnits(String(amt), 18);
-      const erc = new ethers.Contract(t.ca, ERC20_ABI, signer);
-      const allow = await new ethers.Contract(t.ca, ERC20_ABI, roProvider()).allowance(owner, DEX_ROUTER_ADDR);
+      const erc = new ethers.Contract(t.ca, ERC20_ABI, roProvider());
+      const allow = await erc.allowance(owner, DEX_ROUTER_ADDR);
       if(allow < tokensIn){
         btn.textContent='Approve in wallet…';
-        const agas = await txGas(t.ca, erc.interface.encodeFunctionData('approve', [DEX_ROUTER_ADDR, tokensIn]), null, owner);
-        const atx = await erc.approve(DEX_ROUTER_ADDR, tokensIn, agas); toast('Approving $'+t.ticker+'…','jade'); await atx.wait();
+        await sendTx(t.ca, erc.interface.encodeFunctionData('approve', [DEX_ROUTER_ADDR, tokensIn]), null, ()=>toast('Approving $'+t.ticker+'…','jade'));
       }
       btn.textContent='Confirm in wallet…';
-      const args = [tokensIn, 0n, [t.ca, WETH_ADDR], owner, deadline];
-      const gas = await txGas(DEX_ROUTER_ADDR, router.interface.encodeFunctionData('swapExactTokensForETHSupportingFeeOnTransferTokens', args), null, owner);
-      const tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(...args, gas);
-      toast('Sell sent — waiting…','seal'); btn.textContent='Selling…';
-      await tx.wait(); toast('Sold $'+t.ticker+' ✓','seal');
+      const data = router.interface.encodeFunctionData('swapExactTokensForETHSupportingFeeOnTransferTokens', [tokensIn, 0n, [t.ca, WETH_ADDR], owner, deadline]);
+      await sendTx(DEX_ROUTER_ADDR, data, null, ()=>{ toast('Sell sent — waiting…','seal'); btn.textContent='Selling…'; });
+      toast('Sold $'+t.ticker+' ✓','seal');
     }
     document.getElementById('amt').value='';
     await refreshReal(t, true);
@@ -3397,14 +3404,10 @@ async function claimCreatorFee(){
   try{
     if(!activeProvider){ toast('Connect your wallet first','seal'); connectWallet(); return; }
     await ensureChain(activeProvider);
-    const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
-    const owner = await signer.getAddress();
-    const fr = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, signer);
+    const fr = new ethers.Contract(FEEROUTER_ADDR, FEEROUTER_ABI, roProvider());
     btn.disabled=true; btn.textContent='Confirm in wallet…';
-    const gas = await txGas(FEEROUTER_ADDR, fr.interface.encodeFunctionData('claim', [t.ca]), null, owner);
-    const tx = await fr.claim(t.ca, gas);
-    toast('Claim sent — waiting…','jade'); btn.textContent='Claiming…';
-    await tx.wait(); toast('Creator fee claimed ✓','jade');
+    await sendTx(FEEROUTER_ADDR, fr.interface.encodeFunctionData('claim', [t.ca]), null, ()=>{ toast('Claim sent — waiting…','jade'); btn.textContent='Claiming…'; });
+    toast('Creator fee claimed ✓','jade');
     updateClaimUI(t);
   }catch(err){
     console.error(err);
@@ -3451,27 +3454,21 @@ async function doTradeReal(t){
       const q = await curveR.quoteBuy(val);
       const minOut = q.tokensOut * SLIP / 1000n;
       btn.textContent = 'Confirm in wallet…';
-      const gas = await txGas(t.curveAddr, curveW.interface.encodeFunctionData('buy', [minOut, deadline]), val, owner);
-      const tx = await curveW.buy(minOut, deadline, { value: val, ...gas });
-      toast('Buy sent — waiting…','jade'); btn.textContent='Buying…';
-      await tx.wait(); toast('Bought $'+t.ticker+' ✓','jade');
+      await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('buy', [minOut, deadline]), val, ()=>{ toast('Buy sent — waiting…','jade'); btn.textContent='Buying…'; });
+      toast('Bought $'+t.ticker+' ✓','jade');
     }else{
       const tokensIn = ethers.parseUnits(String(amt), 18);
-      const erc = new ethers.Contract(t.ca, ERC20_ABI, signer);
-      const allow = await new ethers.Contract(t.ca, ERC20_ABI, roProvider()).allowance(owner, t.curveAddr);
+      const erc = new ethers.Contract(t.ca, ERC20_ABI, roProvider());
+      const allow = await erc.allowance(owner, t.curveAddr);
       if(allow < tokensIn){
         btn.textContent = 'Approve in wallet…';
-        const agas = await txGas(t.ca, erc.interface.encodeFunctionData('approve', [t.curveAddr, tokensIn]), null, owner);
-        const atx = await erc.approve(t.curveAddr, tokensIn, agas);
-        toast('Approving $'+t.ticker+'…','jade'); await atx.wait();
+        await sendTx(t.ca, erc.interface.encodeFunctionData('approve', [t.curveAddr, tokensIn]), null, ()=>toast('Approving $'+t.ticker+'…','jade'));
       }
       const q = await curveR.quoteSell(tokensIn);
       const minEth = q.net * SLIP / 1000n;
       btn.textContent = 'Confirm in wallet…';
-      const gas = await txGas(t.curveAddr, curveW.interface.encodeFunctionData('sell', [tokensIn, minEth, deadline]), null, owner);
-      const tx = await curveW.sell(tokensIn, minEth, deadline, gas);
-      toast('Sell sent — waiting…','seal'); btn.textContent='Selling…';
-      await tx.wait(); toast('Sold $'+t.ticker+' ✓','seal');
+      await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('sell', [tokensIn, minEth, deadline]), null, ()=>{ toast('Sell sent — waiting…','seal'); btn.textContent='Selling…'; });
+      toast('Sold $'+t.ticker+' ✓','seal');
     }
     document.getElementById('amt').value = '';
     await refreshReal(t, true);
@@ -4096,11 +4093,8 @@ async function realLaunch(meta){
     let value = DEPLOY_FEE_WEI;
     if(meta.devBuy>0) value += ethers.parseEther(String(meta.devBuy));
 
-    const dgas = await txGas(FACTORY_ADDR, factory.interface.encodeFunctionData('createToken', [params]), value, await signer.getAddress());
-    const tx = await factory.createToken(params, { value, ...dgas });
     toast('Launch sent — waiting for confirmation…','jade');
-    busy(true,'Deploying…');
-    const receipt = await tx.wait();
+    const receipt = await sendTx(FACTORY_ADDR, factory.interface.encodeFunctionData('createToken', [params]), value, ()=>busy(true,'Deploying…'));
     let ca=null;
     for(const lg of receipt.logs){
       try{ const p=factory.interface.parseLog(lg); if(p && p.name==='TokenCreated'){ ca=p.args.token; break; } }catch(_){}
