@@ -1321,6 +1321,9 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <h2 data-i18n="stake.h">Stake $ROBIN</h2>
       <p data-i18n-html="stake.p">The protocol keeps a 1% curve fee, a 1% post-graduation fee on every token, and 10% of every creator fee across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.</p>
     </div>
+    <div id="stk-soon" style="display:none;margin:0 0 22px;padding:14px 18px;border:1px solid rgba(198,242,60,.35);border-radius:14px;background:rgba(198,242,60,.06);font-family:var(--font-mono);font-size:14px;color:var(--gilt-bright)">
+      🔒 <b>Staking coming soon.</b> $ROBIN belum diluncurkan — angka di bawah bukan data live. Fee protokol tetap terkumpul dan akan dibagikan ke staker begitu vault staking aktif.
+    </div>
     <div class="stake-grid">
       <div class="panel t-stat"><div class="k">Est. APR · 30d</div><div class="v gold" id="stk-apr">—%</div><div class="s">paid in ETH</div></div>
       <div class="panel t-stat"><div class="k">Total staked</div><div class="v" id="stk-total">—</div><div class="s"><span id="stk-totalpct">—</span> of supply</div></div>
@@ -1837,6 +1840,10 @@ function toggleWatch(e,id){
 }
 
 /* --- staking economics --- */
+// $ROBIN staking isn't live yet (no token/vault deployed). Show an honest
+// "coming soon" instead of simulated APR/TVL numbers. Flip to true once the
+// staking vault is deployed and wired.
+const STAKING_LIVE = false;
 const LEVY_PRICE = 0.0042;          // $ per $ROBIN (for APR valuation)
 const LEVY_SUPPLY = 1_000_000_000;  // $ROBIN total supply
 let STAKE_TOTAL = 284_000_000;      // $ROBIN staked platform-wide
@@ -1864,6 +1871,7 @@ function setStakeSide(s){
 }
 function stkBtnLabel(){
   const btn = document.getElementById('stk-btn');
+  if(!STAKING_LIVE){ btn.disabled=true; btn.textContent='Staking — coming soon'; return; }
   btn.textContent = !wallet ? 'Connect wallet to stake' : (stakeSide==='stake'?'Stake $ROBIN':'Unstake $ROBIN');
 }
 function stkQuick(v){
@@ -1889,6 +1897,7 @@ function quoteStake(){
   }
 }
 function doStake(){
+  if(!STAKING_LIVE){ toast('Staking is coming soon','seal'); return; }
   if(!wallet){ connectWallet(); renderStake(); return; }
   const amt = parseFloat(document.getElementById('stk-amt').value)||0;
   if(!amt){ toast('Enter an amount','seal'); return; }
@@ -1911,6 +1920,11 @@ function claimStake(){
 }
 function updateStakeLive(){
   const set=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
+  if(!STAKING_LIVE){
+    ['stk-apr','stk-apr2','stk-rev24','stk-revall'].forEach(id=>set(id,'Soon'));
+    set('stk-rev24usd',''); set('rf-fees24','Soon'); set('rf-yourshare','—'); set('sy-reward','—');
+    return;
+  }
   set('stk-apr', stkAprEst.toFixed(1)+'%');
   set('stk-apr2', stkAprEst.toFixed(1)+'%');
   set('stk-rev24', PROTO_REV_24H_ETH.toFixed(2)+' Ξ');
@@ -1922,6 +1936,19 @@ function updateStakeLive(){
   set('sy-reward', myStakeReward.toFixed(5)+' Ξ');
 }
 function renderStake(){
+  const banner = document.getElementById('stk-soon');
+  if(!STAKING_LIVE){
+    if(banner) banner.style.display='';
+    document.getElementById('stk-total').textContent = 'Soon';
+    document.getElementById('stk-totalpct').textContent = '—';
+    document.getElementById('sy-staked').textContent = '—';
+    const btn=document.getElementById('stk-btn'); if(btn){ btn.disabled=true; btn.textContent='Staking — coming soon'; }
+    const amt=document.getElementById('stk-amt'); if(amt){ amt.disabled=true; amt.placeholder='coming soon'; }
+    const claim=document.getElementById('sy-claim'); if(claim) claim.disabled=true;
+    updateStakeLive();
+    return;
+  }
+  if(banner) banner.style.display='none';
   document.getElementById('stk-total').textContent = fmtNum(STAKE_TOTAL);
   document.getElementById('stk-totalpct').textContent = (STAKE_TOTAL/LEVY_SUPPLY*100).toFixed(1)+'%';
   document.getElementById('sy-staked').textContent = fmtLevy(myStake);
