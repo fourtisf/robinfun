@@ -6,9 +6,12 @@ website, no wallet extension.
 
 ## Features
 
-- **Wallet** — every user gets a bot-managed wallet. Private keys are encrypted at
+- **Wallet** — every user gets a bot-managed wallet, or can **import** their own
+  (private key or 12–24-word seed phrase — the message holding the secret is
+  deleted immediately), or **generate a fresh** one. Private keys are encrypted at
   rest with AES-256-GCM under `WALLET_SECRET` and only decrypted transiently to
   sign a trade the user asked for. Deposit / withdraw / export-key built in.
+  Switching wallets is blocked while the current one still holds ETH (no stranding).
 - **Buy / Sell by CA** — paste a contract address → live card (price, mcap,
   graduation %, your bag & PnL) with one-tap buy/sell. Routes to the bonding curve
   while listed, and to Uniswap V2 once graduated — same path as the website.

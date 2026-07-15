@@ -22,6 +22,7 @@ async function tg(method, body) {
 function send(chatId, text, kb) { return tg('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(kb ? { reply_markup: kb } : {}) }); }
 function edit(chatId, mid, text, kb) { return tg('editMessageText', { chat_id: chatId, message_id: mid, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(kb ? { reply_markup: kb } : {}) }); }
 function answer(id, text) { return tg('answerCallbackQuery', { callback_query_id: id, ...(text ? { text } : {}) }); }
+function del(chatId, mid) { return tg('deleteMessage', { chat_id: chatId, message_id: mid }).catch(() => {}); }
 const rows = (...r) => ({ inline_keyboard: r });
 const btn = (text, data) => ({ text, callback_data: data });
 const urlBtn = (text, url) => ({ text, url });
@@ -55,6 +56,7 @@ async function walletScreen(chatId) {
     kb: rows(
       [btn('🔄 Refresh', 'wal'), btn('📥 Deposit', 'dep')],
       [btn('📤 Withdraw', 'wd'), btn('🔑 Export key', 'exp')],
+      [btn('📩 Import wallet', 'imp'), btn('♻️ New wallet', 'neww')],
       [btn('« Menu', 'menu')],
     ),
   };
@@ -195,7 +197,7 @@ async function onMessage(m) {
 
   // Multi-step text input (withdraw address/amount, custom amounts, order prices).
   const p = pending.get(chatId);
-  if (p && !text.startsWith('/')) { pending.delete(chatId); return await resolvePending(chatId, p, text); }
+  if (p && !text.startsWith('/')) { pending.delete(chatId); return await resolvePending(chatId, p, text, m); }
   if (text.startsWith('/')) pending.delete(chatId);   // any command aborts a pending flow
   if (text === '/cancel') return send(chatId, 'Cancelled.', mainMenu());
 
@@ -252,6 +254,9 @@ async function onCallback(q) {
   if (data === 'dep') { const u = core.ensureUser(chatId); return edit(chatId, mid, `📥 <b>Deposit ETH</b>\n\nSend ETH on <b>Robinhood Chain</b> to:\n\n<code>${u.address}</code>\n\nIt lands in your bot wallet — then paste any token contract to buy.`, rows([btn('🔄 Refresh balance', 'wal'), btn('« Menu', 'menu')])); }
   if (data === 'wd') { pending.set(chatId, { action: 'wd_addr' }); return send(chatId, '📤 Send me the <b>destination address</b>:'); }
   if (data === 'exp') return askExport(chatId);
+  if (data === 'imp') { pending.set(chatId, { action: 'import_key' }); return send(chatId, `📩 <b>Import a wallet</b>\n\nPaste your <b>private key</b> (64 hex) or <b>seed phrase</b> (12–24 words).\n\n⚠️ I will <b>delete your message immediately</b> after importing so the secret isn't left in the chat. Never share it with anyone else.`); }
+  if (data === 'neww') return send(chatId, `♻️ <b>Generate a new wallet</b>\n\nThis replaces your current bot wallet with a fresh one. Your current wallet must be <b>empty</b> first (withdraw/export it), or the switch is blocked so funds aren't lost.\n\nProceed?`, rows([btn('✅ Generate new', 'newok'), btn('✖ Cancel', 'wal')]));
+  if (data === 'newok') { try { const addr = await core.replaceWallet(chatId); await send(chatId, `✅ New wallet created:\n<code>${addr}</code>\n\nDeposit ETH to start trading.`, rows([btn('💼 Wallet', 'wal')])); } catch (e) { await send(chatId, '❌ ' + esc(e.message || String(e))); } return; }
   if (data === 'expy') { try { const pk = core.exportKey(chatId); await send(chatId, `🔑 <b>Private key</b> (keep it secret — delete this message after saving):\n\n<code>${pk}</code>`); } catch (e) { await send(chatId, '❌ ' + esc(e.message)); } return; }
   if (data === 'snon') { const u = core.ensureUser(chatId); u.snipe.on = true; core.saveStore(); const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'snoff') { const u = core.ensureUser(chatId); u.snipe.on = false; core.saveStore(); const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
@@ -267,9 +272,16 @@ async function onCallback(q) {
   if (k === 'oc') { const ok = watchers.cancelOrder(chatId, ca); await answer(q.id, ok ? 'Cancelled' : 'Not found'); const s = ordersScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
 }
 
-async function resolvePending(chatId, p, text) {
+async function resolvePending(chatId, p, text, m) {
   const t = text.trim();
   try {
+    if (p.action === 'import_key') {
+      // Delete the message holding the secret FIRST — before importing or erroring —
+      // so the key never lingers in the chat regardless of outcome.
+      if (m && m.message_id) await del(chatId, m.message_id);
+      try { const addr = await core.replaceWallet(chatId, t); return send(chatId, `✅ <b>Wallet imported</b>\n<code>${addr}</code>\n\nYour secret message was deleted. Deposit/trade as normal.`, rows([btn('💼 Wallet', 'wal')])); }
+      catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e)) + '\n\n(Your message was deleted for safety — try Import again.)'); }
+    }
     if (p.action === 'buy_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); return doBuy(chatId, p.ca, t); }
     if (p.action === 'snipe_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); const u = core.ensureUser(chatId); u.snipe.ethAmount = String(Number(t)); core.saveStore(); const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
     if (p.action === 'wd_addr') { if (!isCa(t)) return send(chatId, '❌ That is not a valid address. Try /withdraw again.'); pending.set(chatId, { action: 'wd_amt', to: t }); return send(chatId, `Amount of ETH to send to <code>${short(t)}</code> — a number, or <code>max</code>:`); }

@@ -174,6 +174,37 @@ function exportKey(chatId) {
   if (!u) throw new Error('no wallet');
   return decrypt(u.enc);
 }
+// Build an ethers wallet from a raw private key (64 hex, 0x optional) or a BIP-39
+// seed phrase (12–24 words). Throws on anything else.
+function walletFromSecret(secret) {
+  secret = String(secret || '').trim();
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(secret)) {
+    return new ethers.Wallet(secret.startsWith('0x') ? secret : '0x' + secret);
+  }
+  const words = secret.split(/\s+/).filter(Boolean);
+  if ([12, 15, 18, 21, 24].includes(words.length)) {
+    return ethers.Wallet.fromPhrase(words.join(' '));   // normalises spacing
+  }
+  throw new Error('not a valid private key (64 hex chars) or seed phrase (12–24 words)');
+}
+// Replace the user's wallet: with an imported secret, or a fresh random one when
+// `secret` is undefined. GUARD: refuses if the outgoing wallet still holds ETH, so
+// switching can never strand funds — the user must withdraw/export it first.
+async function replaceWallet(chatId, secret) {
+  const u = getUser(chatId);
+  if (!u) throw new Error('no wallet');
+  const w = secret ? walletFromSecret(secret) : ethers.Wallet.createRandom();
+  if (w.address.toLowerCase() === u.address.toLowerCase()) throw new Error('that is already your current wallet');
+  const bal = await ethBalance(u.address);
+  if (bal > ethers.parseEther('0.0002')) {
+    throw new Error(`your current wallet still holds ${Number(ethers.formatEther(bal)).toFixed(5)} ETH — withdraw it (or export the key) first, so it isn't lost when you switch wallets.`);
+  }
+  u.address = w.address;
+  u.enc = encrypt(w.privateKey);
+  u.positions = {};                 // cost-basis was for the old wallet's bags
+  saveStore();
+  return u.address;
+}
 
 // ---------------------------------------------------------------- chain reads
 async function resolveCurve(ca) {
@@ -433,7 +464,7 @@ async function portfolio(chatId) {
 
 module.exports = {
   CFG, provider, FACTORY_ABI, CURVE_ABI, ERC20_ABI,
-  loadStore, saveStore, allUsers, getUser, ensureUser, signerFor, exportKey,
+  loadStore, saveStore, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, replaceWallet,
   resolveCurve, isGraduated, tokenMeta, tokenSnapshot, ethBalance, tokenBalance, ethUsd, gasOverrides,
   buy, sell, withdraw, portfolio, DB,
 };
