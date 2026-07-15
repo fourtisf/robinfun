@@ -1689,7 +1689,7 @@ function walletOptions(){
 }
 
 /* ---- Curated popular wallets (grid, like the big launchpads) ---- */
-const WALLETCONNECT_PROJECT_ID = '';   // <- free at cloud.reown.com; enables the QR/mobile "WalletConnect" option
+const WALLETCONNECT_PROJECT_ID = '0e8b769388dfa3560cfbd722babcd800';   // Reown project (public id) — enables the QR/mobile "WalletConnect" option
 const CURATED_WALLETS = [
   { key:'binance',  name:'Binance Wallet', color:'#F3BA2F', letter:'B', match:'binance',
     rdns:['com.binance.wallet','com.binance.web3wallet'], legacy:()=>window.binancew3w?.ethereum||window.BinanceChain||(window.ethereum?.isBinance?window.ethereum:null),
