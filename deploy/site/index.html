@@ -5,15 +5,17 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Robinfun — Fair-Launch Bonding Curves on Robinhood Chain</title>
 <meta name="description" content="Launch tokens with a built-in creator fee. Every trade pays you — on the curve and after graduation. Fair bonding curves, LP 100% burned.">
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%20fill%3D%22none%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22p%22%20x1%3D%2214%22%20y1%3D%2254%22%20x2%3D%2248%22%20y2%3D%2210%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23A6D62E%22%2F%3E%3Cstop%20offset%3D%22.55%22%20stop-color%3D%22%23C6F23C%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23E4FF7A%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%230B0F0A%22%2F%3E%3Cg%20transform%3D%22translate%2832%2032%29%20scale%28.78%29%20translate%28-32%20-32%29%22%3E%3Cpath%20fill%3D%22url%28%23p%29%22%20d%3D%22M50%208C33%209%2020%2018%2015%2034%2013.6%2038.5%2013.2%2043.2%2014%2048L25.2%2036.8C25.6%2032.2%2027.6%2027.9%2031%2024.5%2034.5%2021%2038.8%2019%2043.4%2018.6L32.5%2029.5C36.8%2029.2%2041%2027.6%2044.7%2024.6%2050.2%2020.2%2052.4%2013.7%2050%208Z%22%2F%3E%3Cpath%20fill%3D%22url%28%23p%29%22%20d%3D%22M21.6%2037.4L24%2039.3%2012%2053%2010.9%2051.1Z%22%2F%3E%3Cpath%20stroke%3D%22%230A0F0A%22%20stroke-width%3D%222.1%22%20stroke-linecap%3D%22round%22%20opacity%3D%22.85%22%20d%3D%22M44.4%2014.4%2018.7%2040.2%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
-<!-- Raster PNG icon + link-preview tags. The SVG data-URI favicon above is crisp
-     in the browser tab, but wallet extensions (Bitget, MetaMask, OKX) and link
-     previews (Telegram/X) can only show a real raster image fetched over HTTP —
-     a data-URI or SVG falls back to a generic "HTTP" placeholder on the connect
-     screen. These make the real Robinfun mark appear when a wallet asks to connect.
-     Requires /robinfun-logo.png to be deployed (update-all.sh copies it). -->
+<!-- Raster PNG icon FIRST. Wallet extensions (Bitget, MetaMask, OKX) grab the
+     first <link rel=icon> to show as the dApp icon on the connect prompt, and
+     they CANNOT render a data-URI/SVG — that falls back to a generic "HTTP"
+     placeholder. Putting the real PNG first fixes the connect-screen logo. The
+     scalable SVG stays below for a crisp browser-tab icon. Needs /robinfun-logo.png
+     deployed (update-all.sh copies it to the webroot). -->
 <link rel="icon" type="image/png" sizes="512x512" href="/robinfun-logo.png">
+<link rel="shortcut icon" href="/robinfun-logo.png">
 <link rel="apple-touch-icon" href="/robinfun-logo.png">
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%2064%2064%22%20fill%3D%22none%22%3E%3Cdefs%3E%3ClinearGradient%20id%3D%22p%22%20x1%3D%2214%22%20y1%3D%2254%22%20x2%3D%2248%22%20y2%3D%2210%22%20gradientUnits%3D%22userSpaceOnUse%22%3E%3Cstop%20offset%3D%220%22%20stop-color%3D%22%23A6D62E%22%2F%3E%3Cstop%20offset%3D%22.55%22%20stop-color%3D%22%23C6F23C%22%2F%3E%3Cstop%20offset%3D%221%22%20stop-color%3D%22%23E4FF7A%22%2F%3E%3C%2FlinearGradient%3E%3C%2Fdefs%3E%3Crect%20width%3D%2264%22%20height%3D%2264%22%20rx%3D%2215%22%20fill%3D%22%230B0F0A%22%2F%3E%3Cg%20transform%3D%22translate%2832%2032%29%20scale%28.78%29%20translate%28-32%20-32%29%22%3E%3Cpath%20fill%3D%22url%28%23p%29%22%20d%3D%22M50%208C33%209%2020%2018%2015%2034%2013.6%2038.5%2013.2%2043.2%2014%2048L25.2%2036.8C25.6%2032.2%2027.6%2027.9%2031%2024.5%2034.5%2021%2038.8%2019%2043.4%2018.6L32.5%2029.5C36.8%2029.2%2041%2027.6%2044.7%2024.6%2050.2%2020.2%2052.4%2013.7%2050%208Z%22%2F%3E%3Cpath%20fill%3D%22url%28%23p%29%22%20d%3D%22M21.6%2037.4L24%2039.3%2012%2053%2010.9%2051.1Z%22%2F%3E%3Cpath%20stroke%3D%22%230A0F0A%22%20stroke-width%3D%222.1%22%20stroke-linecap%3D%22round%22%20opacity%3D%22.85%22%20d%3D%22M44.4%2014.4%2018.7%2040.2%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
+<!-- Link-preview tags (Telegram / X) — same real Robinfun mark. -->
 <meta property="og:type" content="website">
 <meta property="og:title" content="Robinfun — Fair-Launch Bonding Curves on Robinhood Chain">
 <meta property="og:description" content="Launch tokens with a built-in creator fee. Every trade pays you — on the curve and after graduation.">
