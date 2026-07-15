@@ -25,7 +25,10 @@ const CFG = {
   walletFile: process.env.WALLET_FILE || path.join(__dirname, 'wallets.json'),
   backend: (process.env.BACKEND || 'http://127.0.0.1:3001').replace(/\/+$/, ''),
   intervalSec: Math.max(5, Number(process.env.INTERVAL_SECONDS || 60)),
-  devBuyEth: String(process.env.DEV_BUY_ETH || '0.001'),
+  // Option A default: dev-buy kept well BELOW the graduation cap so tokens stay
+  // BONDING (varied mcaps on the board, ETH recoverable ~98% by selling back on
+  // the curve) instead of graduating into a thin pool and losing ~23% on a dump.
+  devBuyEth: String(process.env.DEV_BUY_ETH || '0.03'),
   levyBps: Math.min(1000, Math.max(0, Number(process.env.CREATOR_LEVY_BPS || 100))),
   // Creator fee per side — set BUY and SELL separately (both default to CREATOR_LEVY_BPS).
   buyLevyBps: Math.min(1000, Math.max(0, Number(process.env.BUY_LEVY_BPS || process.env.CREATOR_LEVY_BPS || 100))),
@@ -37,8 +40,8 @@ const CFG = {
   // Multi-wallet volume: after wallet A launches, up to PEER_BUYERS OTHER funded
   // wallets each buy PEER_BUY_ETH — real volume + multiple holders + a rising
   // chart. Then optionally SELL_PCT of holdings SELL_AFTER_SEC seconds later.
-  peerBuyers: Math.min(20, Math.max(0, Number(process.env.PEER_BUYERS || 0))),
-  peerBuyEth: String(process.env.PEER_BUY_ETH || '0.002'),
+  peerBuyers: Math.min(20, Math.max(0, Number(process.env.PEER_BUYERS || 3))),   // Option A: volume on by default
+  peerBuyEth: String(process.env.PEER_BUY_ETH || '0.02'),
   sellAfterSec: Math.max(0, Number(process.env.SELL_AFTER_SEC || 0)),
   sellPct: Math.min(100, Math.max(0, Number(process.env.SELL_PCT || 50))),
   // Continuous AUTO-SALE: a background loop that periodically sells a % of every
@@ -49,10 +52,13 @@ const CFG = {
   autoSalePct: Math.min(100, Math.max(1, Number(process.env.AUTO_SALE_PCT || 100))),
   // Random buy sizes: when a MAX is set, each buy is a random ETH amount in
   // [MIN, MAX] (organic-looking volume) instead of the fixed amount above.
-  devBuyMin: String(process.env.DEV_BUY_MIN || ''),
-  devBuyMax: String(process.env.DEV_BUY_MAX || ''),
-  peerBuyMin: String(process.env.PEER_BUY_MIN || ''),
-  peerBuyMax: String(process.env.PEER_BUY_MAX || ''),
+  // Option A defaults: random dev-buy 0.02–0.08 ETH and peer-buy 0.01–0.04 ETH —
+  // organic-looking, varied mcaps, and total per-token spend stays a small
+  // fraction of a 2.6-ETH cap so nothing graduates by accident.
+  devBuyMin: String(process.env.DEV_BUY_MIN || '0.02'),
+  devBuyMax: String(process.env.DEV_BUY_MAX || '0.08'),
+  peerBuyMin: String(process.env.PEER_BUY_MIN || '0.01'),
+  peerBuyMax: String(process.env.PEER_BUY_MAX || '0.04'),
   // Vanity CA suffix (hex) — mine a salt so every token address ends in this,
   // like the website's "…feed". Empty = off (random address). Longer = slower.
   vanitySuffix: (process.env.VANITY_SUFFIX !== undefined ? process.env.VANITY_SUFFIX : 'feed').trim().toLowerCase().replace(/[^0-9a-f]/g, ''),
