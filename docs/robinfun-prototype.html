@@ -2289,7 +2289,7 @@ async function loadServerStats(){
       if(v.earnedEth!=null) t.earnedEth = v.earnedEth;
       if(v.graduated!=null) t.graduated = v.graduated;
     }
-    if(hit){ recomputeBoardAggregates(); renderGrid(); renderStats(); saveBoardCache(); }
+    if(hit){ recomputeBoardAggregates(); renderGrid(); renderStats(); renderTape(); saveBoardCache(); }
     return hit;
   }catch(_){ return false; }
 }
@@ -2304,12 +2304,20 @@ function tapeItem(t, tr){
   const levy = tr.levyEth>0? ' · <span class="gold">fee '+tr.levyEth.toFixed(4)+'Ξ→dev</span>':'';
   return `<span class="tape-item">${side} <b>$${t.ticker}</b> ${tr.eth.toFixed(3)}Ξ${levy}</span>`;
 }
+function tapeSummary(t){
+  const up = (t.chg24||0) >= 0;
+  return `<span class="tape-item" onclick="openToken('${t.id}')" style="cursor:pointer"><b>$${t.ticker}</b> ${fmtUsd(t.mcap||0)} <b class="${up?'up':'down'}">${up?'▲':'▼'}${Math.abs(t.chg24||0).toFixed(1)}%</b></span>`;
+}
 function renderTape(){
   const items = [];
-  const pool = [...TOKENS].sort((a,b)=>b.lastTrade-a.lastTrade).slice(0,10);
-  pool.forEach(t=>{ if(t.trades[0]) items.push(tapeItem(t,t.trades[0])); });
-  const html = items.join('');
-  document.getElementById('tape').innerHTML = html + html; /* duplicated for seamless loop */
+  const traded = [...TOKENS].filter(t=>t.trades && t.trades[0]).sort((a,b)=>b.lastTrade-a.lastTrade).slice(0,8);
+  traded.forEach(t=> items.push(tapeItem(t, t.trades[0])));
+  if(items.length < 12){
+    const pool = [...TOKENS].filter(t=>(t.mcap||0)>0).sort((a,b)=>heatScore(b)-heatScore(a)).slice(0,16);
+    pool.forEach(t=> items.push(tapeSummary(t)));
+  }
+  const html = items.join('') || '<span class="tape-item">Robinfun · fair-launch bonding curves · collect the fee, forever</span>';
+  document.getElementById('tape').innerHTML = html + html;
 }
 
 /* ================================================================
