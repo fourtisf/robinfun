@@ -125,6 +125,7 @@ const FEEROUTER_ABI = [
   'function creatorOwed(address token) view returns (uint256)',            // unclaimed, per token
   'function creatorEarnedLifetime(address token) view returns (uint256)',  // lifetime (claimed + unclaimed)
   'function protocolPending() view returns (uint256)',                     // protocol revenue flushable → treasury
+  'function treasury() view returns (address)',                            // where protocol revenue + sweeps land
   'function claim(address token)',                                          // claim one token (caller must be creator)
   'function claimMany(address[] tokens)',                                   // claim many in one tx
 ];
@@ -593,6 +594,16 @@ async function protocolPending(provider) {
   try { return Number(ethers.formatEther(await new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider).protocolPending())); }
   catch (_) { return 0; }
 }
+// The treasury address (from the FeeRouter) and its live balance — read DIRECTLY
+// from chain (verifiable on robinhoodscan), never reconstructed from tx history.
+async function treasuryInfo(provider) {
+  try {
+    const addr = await new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider).treasury();
+    if (!addr || addr === ethers.ZeroAddress) return { addr: '', balance: 0 };
+    const bal = await provider.getBalance(addr);
+    return { addr, balance: Number(ethers.formatEther(bal)) };
+  } catch (_) { return { addr: '', balance: 0 }; }
+}
 // Token balance an address holds (float), 0 on error.
 async function tokenBalance(provider, ca, addr) {
   try { return Number(ethers.formatUnits(await new ethers.Contract(ca, ERC20_ABI, provider).balanceOf(addr), 18)); }
@@ -678,6 +689,6 @@ module.exports = {
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
   resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
-  creatorEarnings, claimCreator, protocolPending, tokenBalance, detectDeposits, walletCashflow,
+  creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
   mapLimit, ownedTokens, creatorOwedTotal,
 };
