@@ -504,6 +504,34 @@ async function creatorEarnings(provider, cas) {
   return out;
 }
 
+// Auto-detect total ETH DEPOSITED into the wallets, read from chain history via
+// the Blockscout (Etherscan-compatible) explorer API. Sums only EXTERNAL incoming
+// transfers: normal txs where `to` is our wallet and `from` is NOT one of our own
+// wallets. Sell/swap proceeds and graduation refunds arrive as INTERNAL txs (not
+// in txlist), and wallet↔wallet moves are excluded — so this is real funding only.
+// Returns ETH (float). Falls back to 0 if the explorer is unreachable.
+async function detectDeposits(wallets) {
+  const api = (process.env.EXPLORER_API || 'https://robinhoodchain.blockscout.com/api').replace(/\/+$/, '');
+  const mine = new Set(wallets.map((w) => w.address.toLowerCase()));
+  let total = 0n;
+  for (const w of wallets) {
+    const lc = w.address.toLowerCase();
+    try {
+      const url = `${api}?module=account&action=txlist&address=${w.address}&sort=asc`;
+      const r = await fetch(url, { signal: AbortSignal.timeout(12000) });
+      const j = await r.json();
+      if (!j || !Array.isArray(j.result)) continue;
+      for (const tx of j.result) {
+        if (String(tx.isError) === '1') continue;                 // reverted
+        if ((tx.to || '').toLowerCase() !== lc) continue;         // incoming only
+        if (mine.has((tx.from || '').toLowerCase())) continue;    // skip wallet↔wallet moves
+        try { total += BigInt(tx.value || '0'); } catch (_) {}
+      }
+    } catch (_) {}
+  }
+  return Number(ethers.formatEther(total));
+}
+
 // Protocol revenue currently flushable to the treasury (owner's wallet). ETH.
 async function protocolPending(provider) {
   try { return Number(ethers.formatEther(await new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider).protocolPending())); }
@@ -555,5 +583,5 @@ module.exports = {
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
   resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
-  creatorEarnings, claimCreator, protocolPending, tokenBalance,
+  creatorEarnings, claimCreator, protocolPending, tokenBalance, detectDeposits,
 };

@@ -19,7 +19,7 @@ const {
   ethers, CFG, FACTORY_ABI, makeProvider, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
-  creatorEarnings, claimCreator, protocolPending, tokenBalance,
+  creatorEarnings, claimCreator, protocolPending, tokenBalance, detectDeposits,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -456,11 +456,15 @@ async function doSetDeposit(chatId, args) {
   await send(chatId, `✅ Deposit tercatat: <b>${v} ETH</b>. Ketik <code>/pnl</code> untuk lihat rugi/untung.`);
 }
 async function doPnl(chatId, args) {
-  if (args[0] !== undefined && Number(args[0]) >= 0) { state.deposited = Number(args[0]); saveState(); }
-  await send(chatId, '📊 Menghitung P&L… (baca saldo + fee on-chain)');
+  const forced = (args[0] !== undefined && Number(args[0]) >= 0) ? Number(args[0]) : null;
+  if (forced !== null) { state.deposited = forced; saveState(); }
+  await send(chatId, '📊 Menghitung P&L… (deposit dari on-chain + saldo + fee)');
   const usd = await ethUsd();
   const u = (e) => usd ? ` ($${(e * usd).toFixed(2)})` : '';
-  const dep = Number(state.deposited) || 0;
+  // Deposit: manual override if set, else AUTO-DETECT from chain (external ETH in).
+  let dep = Number(state.deposited) || 0;
+  let depSrc = dep > 0 ? 'manual (/setdeposit)' : '';
+  if (!dep) { dep = await detectDeposits(wallets); depSrc = dep > 0 ? 'auto on-chain' : 'tidak terdeteksi'; }
   // 1) live wallet ETH (Robinhood Chain), 2) creator fees claimable, 3) protocol pending → treasury
   const bals = await balances();
   const walletEth = bals.reduce((s, b) => s + Number(ethers.formatEther(b)), 0);
@@ -477,10 +481,9 @@ async function doPnl(chatId, args) {
   const recoverable = walletEth + claimEth + protoEth;
   const pnl = recoverable - dep;
   const pct = dep > 0 ? (pnl / dep * 100) : 0;
-  const spent = Number(state.spent) || 0;
   await send(chatId,
     `📊 <b>P&L Bot</b>\n` +
-    `📥 Deposit tercatat: <b>${dep.toFixed(4)} ETH</b>${u(dep)}  <i>(/setdeposit)</i>\n` +
+    `📥 Deposit: <b>${dep.toFixed(4)} ETH</b>${u(dep)}  <i>(${depSrc})</i>\n` +
     `━━━━━━━━━━━━━\n` +
     `👛 Saldo wallet (RH): <b>${walletEth.toFixed(4)} ETH</b>${u(walletEth)}\n` +
     `💸 Fee creator claimable: <b>${claimEth.toFixed(4)} ETH</b>${u(claimEth)}  <i>(/claim)</i>\n` +
@@ -488,9 +491,12 @@ async function doPnl(chatId, args) {
     `🪙 Token belum dijual: <b>${held}</b> posisi${held ? '  <i>(/dumpall untuk realisasi)</i>' : ''}\n` +
     `━━━━━━━━━━━━━\n` +
     `💰 Total bisa ditarik: <b>${recoverable.toFixed(4)} ETH</b>${u(recoverable)}\n` +
-    `${pnl >= 0 ? '📈' : '📉'} <b>P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} ETH</b>${u(Math.abs(pnl))}${dep > 0 ? ` · <b>${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</b>` : ''}\n` +
-    (pnl < 0 ? `\n⚠️ Selisih rugi = ETH yang <b>terkunci di LP graduated</b> (burned) + slippage jual. Tidak bisa balik.\n` : '') +
-    `\n<i>Bot mencatat total belanja sejak update ini: ${spent.toFixed(4)} ETH${u(spent)}. Set deposit real: /setdeposit &lt;eth&gt;.</i>`);
+    (dep > 0
+      ? `${pnl >= 0 ? '📈' : '📉'} <b>P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} ETH</b>${u(Math.abs(pnl))} · <b>${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</b>\n`
+      : `⚠️ Deposit belum terdeteksi (explorer down?) — set manual: <code>/setdeposit 1.0</code>\n`) +
+    (dep > 0 && pnl < 0 ? `\n⚠️ Selisih rugi = ETH yang <b>terkunci di LP graduated</b> (burned) + slippage jual. Tidak bisa balik.\n` : '') +
+    (held ? `\n💡 Masih ada ${held} token belum dijual — <code>/dumpall</code> dulu lalu <code>/pnl</code> lagi biar akurat.` : '') +
+    `\n<i>Deposit dibaca otomatis dari transfer ETH masuk on-chain (bukan hasil swap). Override: /setdeposit &lt;eth&gt;.</i>`);
 }
 
 // ---------------- command dispatch (shared by text + buttons) ----------------
