@@ -19,7 +19,8 @@ const {
   ethers, CFG, FACTORY_ABI, makeProvider, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
-  creatorEarnings, claimCreator, protocolPending, tokenBalance, detectDeposits,
+  creatorEarnings, claimCreator, protocolPending, tokenBalance, detectDeposits, walletCashflow,
+  creatorOwedTotal, ownedTokens,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -379,33 +380,31 @@ async function doSell(chatId, args) {
 
 // ---- creator reward (levy fee): view + claim ----
 async function doEarnings(chatId) {
-  const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
-  if (!cas.length) { await send(chatId, 'Belum ada token yang di-launch, jadi belum ada reward creator.'); return; }
-  await send(chatId, `⏳ Cek reward creator untuk ${cas.length} token…`);
-  const rows = await creatorEarnings(provider, cas);
+  await send(chatId, `⏳ Cek reward creator di SEMUA token (baca chain)…`);
+  const rows = await ownedTokens(provider, wallets);   // chain-truth, ALL tokens (not just /last)
+  if (!rows.length) { await send(chatId, 'Belum ada token yang dibuat wallet bot.'); return; }
   const usd = await ethUsd();
   const u = (e) => usd ? ` ≈ ${e * usd >= 1 ? fmtUsd(e * usd) : '$' + (e * usd).toFixed(2)}` : '';
   const byCa = new Map(state.last.map((t) => [String(t.ca).toLowerCase(), t]));
-  const withOwed = rows.filter((r) => r.owed > 0).sort((a, b) => b.owed - a.owed);
-  const totOwed = rows.reduce((s, r) => s + r.owed, 0);
-  const totLife = rows.reduce((s, r) => s + r.lifetime, 0);
+  const withOwed = rows.filter((r) => r.owedWei > 0n).map((r) => ({ ca: r.ca, owed: Number(ethers.formatEther(r.owedWei)) })).sort((a, b) => b.owed - a.owed);
+  const totOwed = withOwed.reduce((s, r) => s + r.owed, 0);
   const lines = withOwed.slice(0, 20).map((r) => {
     const t = byCa.get(String(r.ca).toLowerCase());
     return `• $${esc((t && t.ticker) || '?')} <code>${r.ca.slice(0, 8)}…</code> — <b>${r.owed.toFixed(6)} ETH</b>${u(r.owed)}`;
   });
   await send(chatId,
     `💸 <b>Reward creator (levy fee)</b>\n` +
-    `Belum diklaim: <b>${totOwed.toFixed(6)} ETH</b>${u(totOwed)}\n` +
-    `Lifetime (klaim+belum): <b>${totLife.toFixed(6)} ETH</b>${u(totLife)}\n` +
-    (lines.length ? `\n${lines.join('\n')}\n` : '\n(belum ada yang bisa diklaim — perlu ada BELI/JUAL dulu di token kamu)\n') +
+    `Total belum diklaim: <b>${totOwed.toFixed(6)} ETH</b>${u(totOwed)}\n` +
+    `Token dgn fee: <b>${withOwed.length}</b> dari ${rows.length} token\n` +
+    (lines.length ? `\n${lines.join('\n')}${withOwed.length > 20 ? '\n…' : ''}\n` : '\n(belum ada yang bisa diklaim — perlu ada BELI/JUAL dulu di token kamu)\n') +
     `\nKetik <code>/claim</code> untuk klaim semua ke wallet creator, lalu <code>/sweep 0xTreasury</code> untuk pindah ke treasury.`);
 }
 async function doClaim(chatId) {
   if (trading) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
   trading = true;
   try {
-    await send(chatId, '💸 Klaim reward creator dari semua token yang punya fee…');
-    const res = await claimCreator(wallets, provider, state.last);
+    await send(chatId, '💸 Klaim reward creator dari SEMUA token (baca chain)…');
+    const res = await claimCreator(wallets, provider);   // chain-truth: all tokens, not just /last
     if (!res.length) { await send(chatId, 'Nggak ada reward yang bisa diklaim (semua 0). Cek /earnings — reward muncul setelah ada BELI/JUAL di token kamu.'); return; }
     const usd = await ethUsd();
     const u = (e) => usd ? ` ≈ ${e * usd >= 1 ? fmtUsd(e * usd) : '$' + (e * usd).toFixed(2)}` : '';
@@ -458,45 +457,63 @@ async function doSetDeposit(chatId, args) {
 async function doPnl(chatId, args) {
   const forced = (args[0] !== undefined && Number(args[0]) >= 0) ? Number(args[0]) : null;
   if (forced !== null) { state.deposited = forced; saveState(); }
-  await send(chatId, '📊 Menghitung P&L… (deposit dari on-chain + saldo + fee)');
+  await send(chatId, '📊 Menghitung P&L lengkap… (arus kas on-chain + saldo + fee)');
   const usd = await ethUsd();
   const u = (e) => usd ? ` ($${(e * usd).toFixed(2)})` : '';
-  // Deposit: manual override if set, else AUTO-DETECT from chain (external ETH in).
-  let dep = Number(state.deposited) || 0;
-  let depSrc = dep > 0 ? 'manual (/setdeposit)' : '';
-  if (!dep) { dep = await detectDeposits(wallets); depSrc = dep > 0 ? 'auto on-chain' : 'tidak terdeteksi'; }
-  // 1) live wallet ETH (Robinhood Chain), 2) creator fees claimable, 3) protocol pending → treasury
+  // Full cash-flow from chain history: deposit IN, spend OUT, trade proceeds IN.
+  const cf = await walletCashflow(wallets);
+  // Deposit: manual override wins; else the auto-detected external funding.
+  const manual = Number(state.deposited) || 0;
+  const dep = manual > 0 ? manual : cf.depositIn;
+  const depSrc = manual > 0 ? 'manual (/setdeposit)' : (dep > 0 ? 'auto on-chain' : 'tidak terdeteksi');
+  // Live position: wallet ETH, claimable creator fees (ALL tokens), protocol pending.
   const bals = await balances();
+  const walletByAddr = {}; wallets.forEach((w, i) => { walletByAddr[w.address.toLowerCase()] = Number(ethers.formatEther(bals[i] || 0n)); });
   const walletEth = bals.reduce((s, b) => s + Number(ethers.formatEther(b)), 0);
-  const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
-  const earn = await creatorEarnings(provider, cas);
-  const claimEth = earn.reduce((s, e) => s + (e.owed || 0), 0);
   const protoEth = await protocolPending(provider);
-  // held tokens still un-sold (parallel scan; value not quoted — sell via /dumpall to realise)
-  const heldFlags = await Promise.all(cas.map(async (ca) => {
-    for (const w of wallets) { if (await tokenBalance(provider, ca, w.address) > 0) return true; }
-    return false;
-  }));
+  // Creator fees owed across ALL our tokens (chain-truth), read once and reused
+  // for the total AND the per-wallet breakdown.
+  const owned = await ownedTokens(provider, wallets);
+  const owedByAddr = {};
+  for (const r of owned) { const k = String(r.creator).toLowerCase(); owedByAddr[k] = (owedByAddr[k] || 0n) + (r.owedWei || 0n); }
+  const claimEth = Number(ethers.formatEther(owned.reduce((s, r) => s + (r.owedWei || 0n), 0n)));
+  // held tokens still un-sold across the tracked list
+  const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
+  const heldFlags = await Promise.all(cas.map(async (ca) => { for (const w of wallets) { if (await tokenBalance(provider, ca, w.address) > 0) return true; } return false; }));
   const held = heldFlags.filter(Boolean).length;
+
   const recoverable = walletEth + claimEth + protoEth;
   const pnl = recoverable - dep;
   const pct = dep > 0 ? (pnl / dep * 100) : 0;
+  const deployEth = (Number(state.launched) || 0) * 0.001;   // approx: deploy fee × launches
+  const perLines = wallets.map((w, i) => {
+    const k = w.address.toLowerCase();
+    const bal = walletByAddr[k] || 0;
+    const owed = Number(ethers.formatEther(owedByAddr[k] || 0n));
+    const c = cf.per[k] || { out: 0, tradeIn: 0 };
+    return `#${i + 1} <code>${w.address.slice(0, 8)}…</code> saldo <b>${bal.toFixed(4)}</b> · beli/keluar ${c.out.toFixed(3)} · jual/balik ${c.tradeIn.toFixed(3)} · fee ${owed.toFixed(4)}`;
+  });
+
   await send(chatId,
-    `📊 <b>P&L Bot</b>\n` +
-    `📥 Deposit: <b>${dep.toFixed(4)} ETH</b>${u(dep)}  <i>(${depSrc})</i>\n` +
-    `━━━━━━━━━━━━━\n` +
-    `👛 Saldo wallet (RH): <b>${walletEth.toFixed(4)} ETH</b>${u(walletEth)}\n` +
+    `📊 <b>P&L LENGKAP</b>\n` +
+    `\n<b>━ Arus kas (on-chain) ━</b>\n` +
+    `📥 Deposit masuk: <b>${dep.toFixed(4)} ETH</b>${u(dep)}  <i>(${depSrc})</i>\n` +
+    `📤 Total keluar (beli+deploy+gas): <b>${cf.out.toFixed(4)} ETH</b>${u(cf.out)}\n` +
+    `📥 Balik dari jual/refund: <b>${cf.tradeIn.toFixed(4)} ETH</b>${u(cf.tradeIn)}\n` +
+    `   ↳ deploy ±${deployEth.toFixed(3)} ETH (${state.launched || 0} launch × 0.001)\n` +
+    `\n<b>━ Posisi sekarang ━</b>\n` +
+    `👛 Saldo wallet: <b>${walletEth.toFixed(4)} ETH</b>${u(walletEth)}\n` +
     `💸 Fee creator claimable: <b>${claimEth.toFixed(4)} ETH</b>${u(claimEth)}  <i>(/claim)</i>\n` +
-    `🏦 Fee protokol → treasury: <b>${protoEth.toFixed(4)} ETH</b>${u(protoEth)}  <i>(flush di admin)</i>\n` +
-    `🪙 Token belum dijual: <b>${held}</b> posisi${held ? '  <i>(/dumpall untuk realisasi)</i>' : ''}\n` +
-    `━━━━━━━━━━━━━\n` +
+    `🏦 Fee protokol → treasury: <b>${protoEth.toFixed(4)} ETH</b>${u(protoEth)}  <i>(flush admin)</i>\n` +
+    `🪙 Token belum dijual: <b>${held}</b> posisi${held ? '  <i>(/dumpall)</i>' : ''}\n` +
+    `\n<b>━ Hasil ━</b>\n` +
     `💰 Total bisa ditarik: <b>${recoverable.toFixed(4)} ETH</b>${u(recoverable)}\n` +
     (dep > 0
       ? `${pnl >= 0 ? '📈' : '📉'} <b>P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} ETH</b>${u(Math.abs(pnl))} · <b>${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</b>\n`
-      : `⚠️ Deposit belum terdeteksi (explorer down?) — set manual: <code>/setdeposit 1.0</code>\n`) +
-    (dep > 0 && pnl < 0 ? `\n⚠️ Selisih rugi = ETH yang <b>terkunci di LP graduated</b> (burned) + slippage jual. Tidak bisa balik.\n` : '') +
-    (held ? `\n💡 Masih ada ${held} token belum dijual — <code>/dumpall</code> dulu lalu <code>/pnl</code> lagi biar akurat.` : '') +
-    `\n<i>Deposit dibaca otomatis dari transfer ETH masuk on-chain (bukan hasil swap). Override: /setdeposit &lt;eth&gt;.</i>`);
+      : `⚠️ Deposit belum terdeteksi — set manual: <code>/setdeposit 1.0</code>\n`) +
+    (dep > 0 && pnl < 0 ? `⚠️ Rugi = ETH terkunci di <b>LP graduated (burned)</b> + slippage. Tidak bisa balik.\n` : '') +
+    `\n<b>━ Per wallet ━</b>\n${perLines.join('\n')}\n` +
+    (held ? `\n💡 Jual sisa token dulu (<code>/dumpall</code>) lalu <code>/pnl</code> lagi biar akurat.` : ''));
 }
 
 // ---------------- command dispatch (shared by text + buttons) ----------------

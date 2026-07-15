@@ -96,6 +96,8 @@ const FACTORY_ABI = [
   'function setBetaAllowed(address[] who, bool allowed)',
   'function curveOf(address token) view returns (address)',
   'function tokenImplementation() view returns (address)',
+  'function allTokensLength() view returns (uint256)',
+  'function allTokens(uint256) view returns (address)',
   'event TokenCreated(address indexed token, address indexed curve, address indexed creator, string name, string symbol, string metadataURI, uint16 buyLevyBps, uint16 sellLevyBps, bool decayAtGraduation, bool renounceRateControl, uint256 deployFee, uint256 devBuyEth)',
 ];
 
@@ -538,6 +540,45 @@ async function detectDeposits(wallets) {
   return Number(ethers.formatEther(total));
 }
 
+// Full cash-flow of the wallets from chain history (Blockscout), per wallet + total:
+//   depositIn — EXTERNAL ETH funded in (normal tx, from a non-bot address)
+//   out       — ETH that left (buys + deploy fees + gas + transfers out)
+//   tradeIn   — ETH that came back from trades/refunds (internal tx in, from a contract)
+// Deposits and trade-proceeds are on different Blockscout endpoints, so they never
+// mix. Returns { depositIn, out, tradeIn, per:{addr:{...}} } in ETH. Never throws.
+async function walletCashflow(wallets) {
+  const api = (process.env.EXPLORER_API || 'https://robinhoodchain.blockscout.com/api').replace(/\/+$/, '');
+  const mine = new Set(wallets.map((w) => w.address.toLowerCase()));
+  const per = {};
+  let depositIn = 0n, out = 0n, tradeIn = 0n;
+  for (const w of wallets) {
+    const lc = w.address.toLowerCase();
+    const p = per[lc] = { depositIn: 0n, out: 0n, tradeIn: 0n };
+    try {   // normal txs: external funding IN, and everything the wallet spent OUT
+      const j = await (await fetch(`${api}?module=account&action=txlist&address=${w.address}&sort=asc`, { signal: AbortSignal.timeout(12000) })).json();
+      if (Array.isArray(j.result)) for (const tx of j.result) {
+        if (String(tx.isError) === '1') continue;
+        const v = (() => { try { return BigInt(tx.value || '0'); } catch (_) { return 0n; } })();
+        const gas = (() => { try { return BigInt(tx.gasUsed || '0') * BigInt(tx.gasPrice || '0'); } catch (_) { return 0n; } })();
+        if ((tx.to || '').toLowerCase() === lc && !mine.has((tx.from || '').toLowerCase())) { p.depositIn += v; depositIn += v; }
+        if ((tx.from || '').toLowerCase() === lc) { p.out += v + gas; out += v + gas; }
+      }
+    } catch (_) {}
+    try {   // internal txs: sell proceeds + graduation refunds coming back IN
+      const j = await (await fetch(`${api}?module=account&action=txlistinternal&address=${w.address}&sort=asc`, { signal: AbortSignal.timeout(12000) })).json();
+      if (Array.isArray(j.result)) for (const tx of j.result) {
+        if (String(tx.isError) === '1') continue;
+        const v = (() => { try { return BigInt(tx.value || '0'); } catch (_) { return 0n; } })();
+        if ((tx.to || '').toLowerCase() === lc && !mine.has((tx.from || '').toLowerCase())) { p.tradeIn += v; tradeIn += v; }
+      }
+    } catch (_) {}
+  }
+  const f = (x) => Number(ethers.formatEther(x));
+  const perOut = {};
+  for (const [k, v] of Object.entries(per)) perOut[k] = { depositIn: f(v.depositIn), out: f(v.out), tradeIn: f(v.tradeIn) };
+  return { depositIn: f(depositIn), out: f(out), tradeIn: f(tradeIn), per: perOut };
+}
+
 // Protocol revenue currently flushable to the treasury (owner's wallet). ETH.
 async function protocolPending(provider) {
   try { return Number(ethers.formatEther(await new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider).protocolPending())); }
@@ -549,35 +590,74 @@ async function tokenBalance(provider, ca, addr) {
   catch (_) { return 0; }
 }
 
-// Claim creator levy fees. `launched` = [{ ca, creator }]. Only tokens whose
-// creator is one of OUR `wallets` (and that have a positive owed balance) are
-// claimed, grouped per creator wallet via claimMany (one tx each). The ETH lands
-// in that creator wallet — /sweep afterwards to move it to the treasury.
-// Returns [{ address, tokens:[ca…], claimedEth, tx } | { address, tokens, error }].
-async function claimCreator(wallets, provider, launched) {
+// Run async `fn` over `items` with at most `limit` in flight (RPC is batchMaxCount:1).
+async function mapLimit(items, limit, fn) {
+  const out = new Array(items.length);
+  let i = 0;
+  const run = async () => { while (i < items.length) { const k = i++; try { out[k] = await fn(items[k], k); } catch (_) { out[k] = null; } } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
+  return out;
+}
+
+// Enumerate EVERY token on the factory (via allTokens, not the bot's capped
+// memory), keep those whose on-chain creator() is one of OUR wallets, and read
+// each one's creatorOwed. This is chain-truth, so it finds fees on OLD tokens the
+// bot's /last list dropped. Returns [{ ca, creator, owedWei }] (owed can be 0).
+async function ownedTokens(provider, wallets) {
+  const factory = new ethers.Contract(CFG.factory, FACTORY_ABI, provider);
   const fr = new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider);
+  const mine = new Set(wallets.map((w) => w.address.toLowerCase()));
+  let len = 0; try { len = Number(await factory.allTokensLength()); } catch (_) { return []; }
+  const idxs = Array.from({ length: len }, (_, i) => i);
+  const cas = (await mapLimit(idxs, 8, (i) => factory.allTokens(i))).filter(Boolean);
+  const rows = await mapLimit(cas, 8, async (ca) => {
+    try {
+      const [creator, owed] = await Promise.all([
+        new ethers.Contract(ca, ['function creator() view returns (address)'], provider).creator(),
+        fr.creatorOwed(ca),
+      ]);
+      if (!mine.has(String(creator).toLowerCase())) return null;
+      return { ca, creator, owedWei: owed };
+    } catch (_) { return null; }
+  });
+  return rows.filter(Boolean);
+}
+
+// Total creator fee OWED across all of our tokens (ETH), chain-truth.
+async function creatorOwedTotal(provider, wallets) {
+  const rows = await ownedTokens(provider, wallets);
+  return Number(ethers.formatEther(rows.reduce((s, r) => s + (r.owedWei || 0n), 0n)));
+}
+
+// Claim creator levy fees across ALL of our tokens (not just the bot's recent
+// memory). Groups tokens per creator wallet and claims in chunks (claimMany caps
+// gas). ETH lands in each creator wallet — /sweep afterwards to the treasury.
+// Returns [{ address, tokens:[ca…], claimedEth, tx } | { address, tokens, error }].
+async function claimCreator(wallets, provider) {
+  const rows = (await ownedTokens(provider, wallets)).filter((r) => r.owedWei > 0n);
   const byAddr = new Map(wallets.map((w) => [w.address.toLowerCase(), w]));
-  const groups = new Map();   // creatorAddrLower -> Map(caChecksum -> owedWei)
-  for (const t of (launched || [])) {
-    if (!t || !t.ca || !ethers.isAddress(t.ca) || !t.creator) continue;
-    const key = String(t.creator).toLowerCase();
-    if (!byAddr.has(key)) continue;                       // token not created by a wallet we control
-    let owed = 0n; try { owed = await fr.creatorOwed(t.ca); } catch (_) {}
-    if (owed <= 0n) continue;                             // nothing to claim for this token
-    if (!groups.has(key)) groups.set(key, new Map());
-    groups.get(key).set(ethers.getAddress(t.ca), owed);
+  const groups = new Map();   // creatorLower -> [{ca:checksum, owed:bigint}]
+  for (const r of rows) {
+    const key = String(r.creator).toLowerCase();
+    if (!byAddr.has(key)) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ ca: ethers.getAddress(r.ca), owed: r.owedWei });
   }
   const out = [];
-  for (const [key, caMap] of groups) {
+  for (const [key, items] of groups) {
     const w = byAddr.get(key);
-    const tokens = [...caMap.keys()];
-    const total = [...caMap.values()].reduce((s, v) => s + v, 0n);
-    try {
-      const frw = new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, w);
-      const tx = tokens.length === 1 ? await frw.claim(tokens[0]) : await frw.claimMany(tokens);
-      await waitBounded(tx);
-      out.push({ address: w.address, tokens, claimedEth: Number(ethers.formatEther(total)), tx: tx.hash });
-    } catch (e) { out.push({ address: w.address, tokens, error: e.shortMessage || e.reason || e.message }); }
+    const frw = new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, w);
+    // chunk to ~25 tokens per tx so claimMany never blows the block gas limit
+    for (let i = 0; i < items.length; i += 25) {
+      const chunk = items.slice(i, i + 25);
+      const tokens = chunk.map((x) => x.ca);
+      const total = chunk.reduce((s, x) => s + x.owed, 0n);
+      try {
+        const tx = tokens.length === 1 ? await frw.claim(tokens[0]) : await frw.claimMany(tokens);
+        await waitBounded(tx);
+        out.push({ address: w.address, tokens, claimedEth: Number(ethers.formatEther(total)), tx: tx.hash });
+      } catch (e) { out.push({ address: w.address, tokens, error: e.shortMessage || e.reason || e.message }); }
+    }
   }
   return out;
 }
@@ -589,5 +669,6 @@ module.exports = {
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
   resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
-  creatorEarnings, claimCreator, protocolPending, tokenBalance, detectDeposits,
+  creatorEarnings, claimCreator, protocolPending, tokenBalance, detectDeposits, walletCashflow,
+  mapLimit, ownedTokens, creatorOwedTotal,
 };
