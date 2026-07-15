@@ -1716,7 +1716,11 @@ async function sendTx(to, data, value, onHash){
   if(g.gasLimit) tx.gas = '0x' + BigInt(g.gasLimit).toString(16);
   const hash = await activeProvider.request({ method: 'eth_sendTransaction', params: [tx] });
   if(onHash) try{ onHash(hash); }catch(_){}
-  return roProvider().waitForTransaction(hash, 1, 180000);
+  const rc = await roProvider().waitForTransaction(hash, 1, 180000);
+  // A mined-but-REVERTED tx resolves a receipt with status 0 (does not throw) —
+  // surface it as a real failure so callers never report success on a revert.
+  if(rc && rc.status === 0){ const e = new Error('transaction reverted on-chain'); e.reverted = true; throw e; }
+  return rc;   // receipt on success, or null on a 180s read timeout
 }
 
 /* ---- Multi-wallet discovery (EIP-6963) ----
@@ -1853,6 +1857,12 @@ function toggleMoreWallets(){
 function closeWalletModal(){ document.getElementById('walletModal').classList.remove('open'); }
 function installWallet(url){ window.open(url,'_blank','noopener'); }
 
+// Remember the connection so a refresh silently reconnects (no popup).
+const CONN_KEY = 'rf_conn';
+function saveConn(type, rdns){ try{ localStorage.setItem(CONN_KEY, JSON.stringify({type, rdns:rdns||''})); }catch(_){ } }
+function clearConn(){ try{ localStorage.removeItem(CONN_KEY); }catch(_){ } }
+function rdnsOf(provider){ for(const d of discoveredWallets.values()){ if(d.provider===provider) return d.info.rdns||''; } return ''; }
+
 async function connectProvider(provider){
   if(!provider){ toast('Wallet not found','seal'); return; }
   try{
@@ -1861,11 +1871,41 @@ async function connectProvider(provider){
     activeProvider = provider;
     attachProviderEvents(provider);
     await ensureChain(provider);
+    saveConn('injected', rdnsOf(provider));
     onWalletConnected(accounts[0]);
     closeWalletModal();
   }catch(err){
     toast('Connection failed'+(err && err.code===4001?' — you rejected the request':''),'seal');
   }
+}
+async function eagerReconnect(){
+  let conn; try{ conn = JSON.parse(localStorage.getItem(CONN_KEY)||'null'); }catch(_){ conn=null; }
+  if(!conn) return;
+  if(conn.type==='wc'){ return reconnectWalletConnect(); }
+  window.dispatchEvent(new Event('eip6963:requestProvider'));
+  await new Promise(r=>setTimeout(r, 350));
+  let provider = null;
+  if(conn.rdns){ for(const d of discoveredWallets.values()){ if((d.info.rdns||'')===conn.rdns){ provider = d.provider; break; } } }
+  if(!provider && window.ethereum) provider = window.ethereum;
+  if(!provider) return;
+  try{
+    const accs = await provider.request({method:'eth_accounts'});
+    if(accs && accs.length){ activeProvider = provider; attachProviderEvents(provider); onWalletConnected(accs[0], true); }
+    else clearConn();
+  }catch(_){ }
+}
+async function reconnectWalletConnect(){
+  if(!WALLETCONNECT_PROJECT_ID) return;
+  try{
+    const mod = await import('https://esm.sh/@walletconnect/ethereum-provider@2?bundle');
+    const EthereumProvider = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
+    if(!EthereumProvider || !EthereumProvider.init) return;
+    const cid = parseInt(CHAIN.chainId,16);
+    const wc = await EthereumProvider.init({ projectId: WALLETCONNECT_PROJECT_ID, chains:[cid], optionalChains:[cid], showQrModal:false, rpcMap:{ [cid]: CHAIN.rpcUrls[0] }, metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/robinfun-logo.png'] } });
+    const accs = (wc.accounts && wc.accounts.length) ? wc.accounts : await wc.request({method:'eth_accounts'}).catch(()=>[]);
+    if(accs && accs.length){ activeProvider = wc; attachProviderEvents(wc); onWalletConnected(accs[0], true); }
+    else clearConn();
+  }catch(_){ }
 }
 async function connectCurated(key){
   const w = CURATED_WALLETS.find(x=>x.key===key); if(!w) return;
@@ -1942,12 +1982,12 @@ async function onRobinhoodChain(provider){
   return false;
 }
 
-function onWalletConnected(addr){
+function onWalletConnected(addr, silent){
   wallet = addr;
   MY_ADDR = addr;                       // real connected address flows everywhere
   document.getElementById('walletBtn').textContent = shortAddr(addr);
   const w = document.getElementById('c-wallet'); if(w) w.value = addr;
-  toast('Wallet connected — <b>'+shortAddr(addr)+'</b>','jade');
+  if(!silent) toast('Wallet connected — <b>'+shortAddr(addr)+'</b>','jade');
   seedMyTokens();
   renderTreasury();
   if(currentTokenId){ const t=tok(); if(t && realToken(t)){ loadBalances(t); refreshReal(t, true); } }
@@ -1958,6 +1998,7 @@ function onWalletConnected(addr){
 function disconnectWallet(){
   wallet = null;
   activeProvider = null;
+  clearConn();   // don't silently reconnect after an explicit disconnect
   MY_ADDR = '0x7A3f19bC…C41d';
   document.getElementById('walletBtn').textContent = 'Connect wallet';
   const w = document.getElementById('c-wallet'); if(w) w.value = '';
@@ -3447,8 +3488,8 @@ async function doTradeDex(t){
       btn.textContent='Confirm in wallet…';
       const value = ethers.parseEther(ethIn.toFixed(12));
       const data = router.interface.encodeFunctionData('swapExactETHForTokensSupportingFeeOnTransferTokens', [0n, [WETH_ADDR, t.ca], owner, deadline]);
-      await sendTx(DEX_ROUTER_ADDR, data, value, ()=>{ toast('Buy sent — waiting…','jade'); btn.textContent='Buying…'; });
-      toast('Bought $'+t.ticker+' ✓','jade');
+      const rc = await sendTx(DEX_ROUTER_ADDR, data, value, ()=>{ toast('Buy sent — waiting…','jade'); btn.textContent='Buying…'; });
+      toast(rc ? 'Bought $'+t.ticker+' ✓' : 'Buy sent — confirmation is slow; check your wallet before retrying.','jade');
     }else{
       const tokensIn = ethers.parseUnits(String(amt), 18);
       const erc = new ethers.Contract(t.ca, ERC20_ABI, roProvider());
@@ -3459,8 +3500,8 @@ async function doTradeDex(t){
       }
       btn.textContent='Confirm in wallet…';
       const data = router.interface.encodeFunctionData('swapExactTokensForETHSupportingFeeOnTransferTokens', [tokensIn, 0n, [t.ca, WETH_ADDR], owner, deadline]);
-      await sendTx(DEX_ROUTER_ADDR, data, null, ()=>{ toast('Sell sent — waiting…','seal'); btn.textContent='Selling…'; });
-      toast('Sold $'+t.ticker+' ✓','seal');
+      const rc = await sendTx(DEX_ROUTER_ADDR, data, null, ()=>{ toast('Sell sent — waiting…','seal'); btn.textContent='Selling…'; });
+      toast(rc ? 'Sold $'+t.ticker+' ✓' : 'Sell sent — confirmation is slow; check your wallet before retrying.','seal');
     }
     document.getElementById('amt').value='';
     await refreshReal(t, true);
@@ -3539,8 +3580,8 @@ async function doTradeReal(t){
       const q = await curveR.quoteBuy(val);
       const minOut = q.tokensOut * SLIP / 1000n;
       btn.textContent = 'Confirm in wallet…';
-      await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('buy', [minOut, deadline]), val, ()=>{ toast('Buy sent — waiting…','jade'); btn.textContent='Buying…'; });
-      toast('Bought $'+t.ticker+' ✓','jade');
+      const rc = await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('buy', [minOut, deadline]), val, ()=>{ toast('Buy sent — waiting…','jade'); btn.textContent='Buying…'; });
+      toast(rc ? 'Bought $'+t.ticker+' ✓' : 'Buy sent — confirmation is slow; check your wallet before retrying.','jade');
     }else{
       const tokensIn = ethers.parseUnits(String(amt), 18);
       const erc = new ethers.Contract(t.ca, ERC20_ABI, roProvider());
@@ -3552,8 +3593,8 @@ async function doTradeReal(t){
       const q = await curveR.quoteSell(tokensIn);
       const minEth = q.net * SLIP / 1000n;
       btn.textContent = 'Confirm in wallet…';
-      await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('sell', [tokensIn, minEth, deadline]), null, ()=>{ toast('Sell sent — waiting…','seal'); btn.textContent='Selling…'; });
-      toast('Sold $'+t.ticker+' ✓','seal');
+      const rc = await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('sell', [tokensIn, minEth, deadline]), null, ()=>{ toast('Sell sent — waiting…','seal'); btn.textContent='Selling…'; });
+      toast(rc ? 'Sold $'+t.ticker+' ✓' : 'Sell sent — confirmation is slow; check your wallet before retrying.','seal');
     }
     document.getElementById('amt').value = '';
     await refreshReal(t, true);
@@ -4446,6 +4487,7 @@ function init(){
   renderTape();
   loadServerTokens();   // pull persisted launches from the backend (async)
   routeFromLocation();  // show the page that matches the current URL (deep links / refresh)
+  eagerReconnect();     // silently restore the last wallet connection (survives refresh)
   refreshDeployFee();   // show the real on-chain deploy fee (retry once ethers loads)
   setTimeout(refreshDeployFee, 1500);
   refreshEthPrice();    // real ETH/USD so the dollar figures aren't ~2x off
