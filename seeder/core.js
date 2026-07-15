@@ -59,6 +59,12 @@ const CFG = {
   reactMinUsd: Math.max(1, Number(process.env.REACT_MIN_USD || 15)),
   reactSellPct: Math.min(100, Math.max(1, Number(process.env.REACT_SELL_PCT || 25))),
   reactMaxCount: Math.max(1, Number(process.env.REACT_MAX_COUNT || 3)),
+  // ANTI-GRADUATION guard: bot tokens must NEVER graduate (graduation burns the
+  // LP = ~23% loss). When a bot token's collected ETH reaches capCeilingEth (a
+  // margin below the ~2.6 graduation cap), sell 100% of the bot's holdings to
+  // pull the pool back down. ON by default — it protects your capital.
+  capGuardOn: !/^(0|off|false|no)$/i.test(process.env.CAP_GUARD_ON || 'on'),
+  capCeilingEth: Math.max(0.1, Number(process.env.CAP_CEILING_ETH || 2.0)),
   // Gas price mode: 'cheap' = pay the network base-fee (cheapest that still
   // confirms, no tip) · 'fixed' = pay exactly gasGwei (floored to base-fee) ·
   // 'auto' = let ethers decide. gasGwei is the manual value used by 'fixed'.
@@ -592,6 +598,33 @@ async function reactToBuys(provider, wallets, st) {
   return { actions, scanned: owned.length };
 }
 
+// ANTI-GRADUATION guard. Bot tokens must NEVER graduate (graduation burns the LP
+// = ~23% loss). For every bot-held BONDING token, read how much ETH the curve has
+// collected toward the ~2.6 graduation cap; if it reaches ceilingEth, sell 100%
+// of the bot's holdings across all wallets to pull the pool back down. Only ever
+// touches tokens the bot created/holds (ownedTokens filters by creator). After a
+// full sell the bot holds nothing, so it won't fire again unless the pool climbs
+// back. Returns [{ ca, collected, target, sold }] for tokens it acted on.
+async function capGuard(provider, wallets, ceilingEth) {
+  const owned = await ownedTokens(provider, wallets);
+  const out = [];
+  for (const { ca } of owned) {
+    const curve = await resolveCurve(provider, ca);
+    if (!curve) continue;
+    const c = new ethers.Contract(curve, CURVE_ABI, provider);
+    try { if (await c.graduated()) continue; } catch (_) { continue; }   // already graduated: too late, skip
+    let collected = 0, target = 0;
+    try { const p = await c.graduationProgress(); collected = Number(ethers.formatEther(p.collected ?? p[0])); target = Number(ethers.formatEther(p.target ?? p[1])); }
+    catch (_) { continue; }
+    if (collected >= ceilingEth) {
+      const res = await sellHoldings(provider, wallets, ca, 100);   // dump the bot's whole bag
+      const sold = res.filter((r) => r.ok).length;
+      if (sold > 0) out.push({ ca, collected, target, sold });
+    }
+  }
+  return out;
+}
+
 // ---- creator fee (levy) earnings: read + claim ----
 // Read pending + lifetime creator earnings for a list of token CAs.
 // Returns [{ ca, owed (ETH number), lifetime (ETH number) }]. Never throws.
@@ -831,5 +864,5 @@ module.exports = {
   makeL1Provider, verifyInbox, bridgeOne,
   resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
-  mapLimit, ownedTokens, creatorOwedTotal, tokenPnl, reactToBuys, gasOverrides,
+  mapLimit, ownedTokens, creatorOwedTotal, tokenPnl, reactToBuys, gasOverrides, capGuard,
 };

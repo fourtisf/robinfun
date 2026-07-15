@@ -20,7 +20,7 @@ const {
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
-  creatorOwedTotal, ownedTokens, tokenPnl, reactToBuys, gasOverrides,
+  creatorOwedTotal, ownedTokens, tokenPnl, reactToBuys, gasOverrides, capGuard,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -79,6 +79,8 @@ function applyCfg() {
   if (state.cfg.reactMaxCount !== undefined) CFG.reactMaxCount = Math.max(1, Number(state.cfg.reactMaxCount) || 3);
   if (state.cfg.gasGwei !== undefined) CFG.gasGwei = Math.max(0, Number(state.cfg.gasGwei) || 0);
   if (state.cfg.gasMode !== undefined) CFG.gasMode = ['cheap', 'fixed', 'auto'].includes(String(state.cfg.gasMode)) ? String(state.cfg.gasMode) : 'cheap';
+  if (state.cfg.capGuardOn !== undefined) CFG.capGuardOn = !!state.cfg.capGuardOn;
+  if (state.cfg.capCeilingEth !== undefined) CFG.capCeilingEth = Math.max(0.1, Number(state.cfg.capCeilingEth) || 2.0);
   ['devBuyMin', 'devBuyMax', 'peerBuyMin', 'peerBuyMax'].forEach((k) => { if (state.cfg[k] !== undefined) CFG[k] = String(state.cfg[k]); });
 }
 loadState(); applyCfg();
@@ -331,6 +333,7 @@ peer-buy ${CFG.peerBuyers} wallet × ${Number(CFG.peerBuyMax) > 0 ? `${CFG.peerB
 sell-after ${CFG.sellAfterSec ? CFG.sellAfterSec + 's · ' + CFG.sellPct + '%' : 'off'}  <i>(/sellafter /sellpct)</i>
 auto-sale ${CFG.autoSaleOn ? `<b>ON</b> · ${CFG.autoSalePct}% tiap ${CFG.autoSaleEverySec}s` : 'off'}  <i>(/autosale /autosalepct /autosaleevery)</i>
 react-buy ${CFG.reactOn ? `<b>ON</b> · pembeli asli ≥$${CFG.reactMinUsd} → jual ${CFG.reactSellPct}% (maks ${CFG.reactMaxCount}×)` : 'off'}  <i>(/react)</i>
+anti-graduate ${CFG.capGuardOn ? `<b>ON</b> · pool ≥${CFG.capCeilingEth} ETH → jual semua` : '⚠️ off'}  <i>(/capguard /capmax)</i>
 gas ${gasLabel()}  <i>(/gas)</i>
 max tokens ${CFG.maxTokens || '∞'}  <i>(/max)</i>
 backend ${CFG.backend}
@@ -494,6 +497,23 @@ async function doReact(chatId, args) {
   await send(chatId, a === 'on'
     ? `✅ React-to-buy <b>ON</b> — pembeli asli ≥ $${CFG.reactMinUsd} → jual ${CFG.reactSellPct}% (maks ${CFG.reactMaxCount}×/token). Gas: ${gasLabel()}. (/react off untuk stop)`
     : `🛑 React-to-buy <b>OFF</b>.`);
+}
+// Anti-graduation guard: bot tokens dijual SEMUA sebelum graduate (LP burn = rugi).
+async function doCapGuard(chatId, args) {
+  const a = (args[0] || '').toLowerCase();
+  if (a !== 'on' && a !== 'off') {
+    await send(chatId,
+      `🛡️ <b>Anti-graduate guard</b>\nSekarang: <b>${CFG.capGuardOn ? 'ON' : 'OFF'}</b> · batas pool <b>${CFG.capCeilingEth} ETH</b>\n\n` +
+      `Token bot JANGAN sampai graduate (cap ~2.6 ETH) karena LP di-burn = rugi. Kalau pool token bot nyentuh <b>${CFG.capCeilingEth} ETH</b>, bot otomatis <b>jual SEMUA</b> holding token itu → pool turun, nggak jadi graduate.\n\n` +
+      `Cuma menyentuh token yang dibuat BOT (token user lain aman). Cek tiap 30s.\n\n` +
+      `Nyalakan: <code>/capguard on</code> · matikan: <code>/capguard off</code>\n` +
+      `Atur batas: <code>/capmax 2</code> (ETH — kasih margin di bawah 2.6)`);
+    return;
+  }
+  state.cfg.capGuardOn = (a === 'on'); applyCfg(); saveState();
+  await send(chatId, a === 'on'
+    ? `✅ Anti-graduate <b>ON</b> — pool ≥ ${CFG.capCeilingEth} ETH → jual SEMUA (token bot tidak akan graduate). (/capguard off untuk stop)`
+    : `🛑 Anti-graduate <b>OFF</b> — ⚠️ hati-hati, token bot bisa graduate & LP ke-burn (rugi ~23%).`);
 }
 function gasLabel() {
   return CFG.gasMode === 'cheap' ? '💚 termurah (base-fee network)'
@@ -674,6 +694,8 @@ async function dispatch(chatId, cmd, args) {
     case '/reacthits': await setCfg(chatId, 'reactMaxCount', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 1, 'react maks hit/token'); break;
     case '/reactevery': await setCfg(chatId, 'reactEverySec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 20, 'react interval (detik)'); break;
     case '/gas': case '/gasgwei': doGas(chatId, args).catch((e) => send(chatId, 'Gas error: ' + esc(e.message || String(e)))); break;
+    case '/capguard': doCapGuard(chatId, args).catch((e) => send(chatId, 'Guard error: ' + esc(e.message || String(e)))); break;
+    case '/capmax': await setCfg(chatId, 'capCeilingEth', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0.1 && Number(v) < 2.6, 'batas pool (ETH, < 2.6)'); break;
     case '/dumpall': doDumpAll(chatId, args).catch((e) => send(chatId, 'Dump error: ' + esc(e.message || String(e)))); break;
     case '/pnl': case '/profit': doPnl(chatId, args).catch((e) => send(chatId, 'P&L error: ' + esc(e.message || String(e)))); break;
     case '/pnltoken': case '/pnltokens': doPnlToken(chatId).catch((e) => send(chatId, 'P&L token error: ' + esc(e.message || String(e)))); break;
@@ -857,6 +879,23 @@ async function reactLoop() {
   }
 }
 
+// ---------------- anti-graduation guard: never let a bot token graduate ----------------
+async function guardLoop() {
+  for (;;) {
+    if (!CFG.capGuardOn) { await sleep(3000); continue; }
+    if (!trading) {
+      trading = true;
+      try {
+        const acted = await capGuard(provider, wallets, CFG.capCeilingEth);
+        for (const a of acted) {
+          await broadcast(`🛡️ <b>Anti-graduate</b> — <code>${a.ca.slice(0, 8)}…</code> pool ≈ <b>${a.collected.toFixed(2)} ETH</b> (cap ${a.target ? a.target.toFixed(1) : '2.6'}). Jual <b>SEMUA</b> (${a.sold} wallet) biar TIDAK graduate / LP ke-burn.`);
+        }
+      } catch (e) { console.error('guard loop error:', e.message); } finally { trading = false; }
+    }
+    await sleep(30000);   // check every 30s (keep a safe margin below the cap)
+  }
+}
+
 // ---------------- L1 watcher: auto-detect ETH arriving on Ethereum ----------------
 // Baseline (state.l1seen) is persisted, so a pm2 restart with ETH already sitting
 // on L1 still nudges once, and known balances don't re-notify on every restart.
@@ -927,6 +966,8 @@ async function main() {
     { command: 'reactmin', description: 'Min beli asli (USD) buat trigger: /reactmin 15' },
     { command: 'reactpct', description: 'Persen dijual per trigger: /reactpct 25' },
     { command: 'gas', description: 'Pilih gas: /gas cheap (termurah) / /gas 0.01 / /gas auto' },
+    { command: 'capguard', description: 'Anti-graduate: jual semua sebelum pool graduate: /capguard on' },
+    { command: 'capmax', description: 'Batas pool sebelum jual semua (ETH): /capmax 2' },
     { command: 'dumpall', description: 'Jual SEKARANG semua token: /dumpall 100' },
     { command: 'pnl', description: 'Rugi/untung (saldo + treasury + fee)' },
     { command: 'pnltoken', description: 'Rugi PER TOKEN (wallet mana beli apa)' },
@@ -955,6 +996,7 @@ async function main() {
   launchLoop().catch((e) => console.error('loop crashed:', e));
   autoSaleLoop().catch((e) => console.error('auto-sale loop crashed:', e));
   reactLoop().catch((e) => console.error('react loop crashed:', e));
+  guardLoop().catch((e) => console.error('guard loop crashed:', e));
   l1Watcher().catch((e) => console.error('l1 watcher crashed:', e));
   await poll();
 }
