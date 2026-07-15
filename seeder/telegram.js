@@ -20,7 +20,7 @@ const {
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
-  creatorOwedTotal, ownedTokens, tokenPnl, reactToBuys,
+  creatorOwedTotal, ownedTokens, tokenPnl, reactToBuys, gasOverrides,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -500,30 +500,42 @@ function gasLabel() {
     : CFG.gasMode === 'auto' ? 'auto (network yang tentukan)'
     : `fixed ${CFG.gasGwei} gwei`;
 }
+// Live gas quote: read the price the bot WOULD pay right now (per current mode)
+// and turn it into a per-tx USD estimate. Returns '' if the chain read fails.
+async function gasQuote() {
+  try {
+    const g = await gasOverrides(provider);   // {gasPrice} per current mode, or {} for auto
+    let gp = g.gasPrice;
+    if (gp === undefined) { const fd = await provider.getFeeData(); gp = fd.gasPrice || fd.maxFeePerGas || 0n; }
+    if (!gp || gp <= 0n) return '';
+    const usd = await ethUsd();
+    const gwei = Number(ethers.formatUnits(gp, 'gwei'));
+    const costUsd = (units) => usd ? Number(ethers.formatEther(gp * BigInt(units))) * usd : 0;
+    const fmtUsd = (u) => !usd ? '~' : u >= 1 ? '$' + u.toFixed(2) : u >= 0.01 ? '$' + u.toFixed(3) : '$' + u.toFixed(4);
+    // typical gas: curve buy/sell ~180k, deploy+dev-buy ~600k
+    return `💵 Harga gas sekarang: <b>${gwei.toPrecision(2)} gwei</b>\n` +
+      `Perkiraan biaya/tx: beli/jual <b>${fmtUsd(costUsd(180000))}</b> · deploy <b>${fmtUsd(costUsd(600000))}</b>` +
+      `${usd ? ` <i>(ETH $${Math.round(usd).toLocaleString('en-US')})</i>` : ''}`;
+  } catch (_) { return ''; }
+}
 // Pilih gas: cheap (termurah) / angka manual / auto. No-arg → tampilkan menu.
 async function doGas(chatId, args) {
   const a = (args[0] || '').toLowerCase().trim();
-  const show = () => send(chatId,
-    `⛽ <b>Setelan Gas</b>\nSekarang: <b>${gasLabel()}</b>\n\n` +
+  const q = await gasQuote();
+  const qline = q ? `\n${q}` : '';
+  const menu = () => send(chatId,
+    `⛽ <b>Setelan Gas</b>\nSekarang: <b>${gasLabel()}</b>${qline}\n\n` +
     `Pilih:\n` +
     `• <code>/gas cheap</code> — 💚 <b>termurah</b> (ikut base-fee network, tanpa tip) — hemat, dipakai default\n` +
     `• <code>/gas 0.01</code> — set manual (gwei); otomatis dinaikin ke base-fee kalau network lebih tinggi biar tx nggak nyangkut\n` +
     `• <code>/gas auto</code> — biar network yang tentukan (paling aman kalau tx sering nyangkut)`);
-  if (!a) return show();
-  if (['cheap', 'murah', 'min', 'termurah'].includes(a)) {
-    state.cfg.gasMode = 'cheap'; applyCfg(); saveState();
-    return send(chatId, `✅ Gas: <b>💚 termurah</b> — bot bayar base-fee network (paling hemat, tetap konfirmasi).`);
-  }
-  if (a === 'auto') {
-    state.cfg.gasMode = 'auto'; applyCfg(); saveState();
-    return send(chatId, `✅ Gas: <b>auto</b> — network yang tentukan.`);
-  }
-  const n = Number(a);
-  if (Number.isFinite(n) && n >= 0) {
-    state.cfg.gasMode = 'fixed'; state.cfg.gasGwei = n; applyCfg(); saveState();
-    return send(chatId, `✅ Gas: <b>fixed ${n} gwei</b> (kalau base-fee network lebih tinggi, otomatis pakai itu biar konfirmasi).`);
-  }
-  return show();
+  if (!a) return menu();
+  if (['cheap', 'murah', 'min', 'termurah'].includes(a)) { state.cfg.gasMode = 'cheap'; applyCfg(); saveState(); }
+  else if (a === 'auto') { state.cfg.gasMode = 'auto'; applyCfg(); saveState(); }
+  else if (Number.isFinite(Number(a)) && Number(a) >= 0) { state.cfg.gasMode = 'fixed'; state.cfg.gasGwei = Number(a); applyCfg(); saveState(); }
+  else return menu();
+  const q2 = await gasQuote();   // reflect the NEW mode's price
+  return send(chatId, `✅ Gas: <b>${gasLabel()}</b>${q2 ? `\n${q2}` : ''}`);
 }
 // ---- P&L: how much of the deposit is left / lost across all launched tokens ----
 async function doSetDeposit(chatId, args) {
