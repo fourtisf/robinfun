@@ -200,6 +200,11 @@ body.light .stake-orbit text{fill:#3C9A1B}
   border:none;background:none;cursor:pointer;padding:4px 7px;border-radius:6px}
 .tn-x:hover{color:var(--cream);background:rgba(255,255,255,.06)}
 .testnet-bar.hidden{display:none}
+/* "We're live for public" variant — flip PUBLIC_LIVE to switch the banner. */
+.testnet-bar.live{background:linear-gradient(90deg,rgba(198,242,60,.16),rgba(198,242,60,.06));border-bottom-color:rgba(198,242,60,.4)}
+.testnet-bar.live b{color:var(--gilt-bright)}
+.testnet-bar.live .tn-txt b:not(:first-child){color:var(--cream)}
+.testnet-bar.live .tn-dot{background:var(--gilt);box-shadow:0 0 10px var(--gilt)}
 @media(max-width:640px){.testnet-bar{font-size:11px;padding:7px 40px 7px 12px}}
 .tape{border-bottom:1px solid var(--rule);background:var(--ink-2);overflow:hidden;position:relative;z-index:1}
 .tape-track{display:flex;gap:0;width:max-content;animation:tape 46s linear infinite}
@@ -2150,8 +2155,19 @@ function tokenByRef(ref){ return tokenByCa(ref) || tokenById(ref); }            
 function tokenRef(t){ return (t && t.ca && /^0x[0-9a-fA-F]{40}$/.test(t.ca)) ? t.ca : (t ? t.id : ''); } // canonical URL handle = the CA once on-chain
 /* Mainnet private-beta notice — dismissible, remembered per browser. Key is
    bumped from the old testnet one so everyone sees the new real-ETH warning. */
-function dismissTestnet(){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); try{ localStorage.setItem('rf_beta_mainnet_dismissed','1'); }catch(e){} }
-(function(){ try{ if(localStorage.getItem('rf_beta_mainnet_dismissed')==='1'){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); } }catch(e){} })();
+/* Flip PUBLIC_LIVE to true to swap the red beta bar for the green "we're live" bar. */
+const PUBLIC_LIVE = false;
+const BANNER_KEY = PUBLIC_LIVE ? 'rf_public_live_dismissed' : 'rf_beta_mainnet_dismissed';
+function dismissTestnet(){ const b=document.getElementById('testnetBar'); if(b) b.classList.add('hidden'); try{ localStorage.setItem(BANNER_KEY,'1'); }catch(e){} }
+(function(){
+  const b=document.getElementById('testnetBar'); if(!b) return;
+  if(PUBLIC_LIVE){
+    b.classList.add('live');
+    const t=b.querySelector('.tn-txt');
+    if(t) t.innerHTML='<b>WE’RE LIVE · PUBLIC</b> — Robinfun is now open to everyone on Robinhood Chain. Launch a token, trade the curve, <b>collect fees forever</b>.';
+  }
+  try{ if(localStorage.getItem(BANNER_KEY)==='1') b.classList.add('hidden'); }catch(e){}
+})();
 function setRoute(path, title){
   if(title) document.title = title;
   if(location.protocol === 'file:') return;   // local file preview — History API unavailable
