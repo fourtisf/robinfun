@@ -41,6 +41,7 @@ const FEEROUTER_ABI = ['function creatorEarnedLifetime(address) view returns (ui
 const DEXFACTORY_ABI = ['function getPair(address,address) view returns (address)'];
 const PAIR_ABI = [
   'function token0() view returns (address)',
+  'function getReserves() view returns (uint112,uint112,uint32)',
   'event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to)',
 ];
 
@@ -195,6 +196,19 @@ async function indexToken(rec, head, nowSec) {
     try {
       const p = await new ethers.Contract(DEX_FACTORY, DEXFACTORY_ABI, prov()).getPair(ca, WETH);
       if (p && p !== ethers.ZeroAddress) { s.pair = p; s.tok0 = (await new ethers.Contract(p, PAIR_ABI, prov()).token0()).toLowerCase(); }
+    } catch (_) {}
+  }
+
+  // For a GRADUATED token the curve reserves are frozen at the graduation point,
+  // so the price above is stale — the real market cap now lives in the Uniswap
+  // pool and MUST come from its reserves (else every graduated token shows the
+  // same frozen graduation mcap even after its DEX price has moved/crashed).
+  if (s.graduated && s.pair) {
+    try {
+      const [r, tokenIs0] = [await new ethers.Contract(s.pair, PAIR_ABI, prov()).getReserves(), s.tok0 === ca];
+      const tokRes = Number(ethers.formatUnits(tokenIs0 ? r[0] : r[1], 18));
+      const ethRes = Number(ethers.formatEther(tokenIs0 ? r[1] : r[0]));
+      if (tokRes > 0) { const px = ethRes / tokRes; s.priceUsd = px * idx.ethUsd; s.mcapUsd = px * SUPPLY * idx.ethUsd; }
     } catch (_) {}
   }
 
