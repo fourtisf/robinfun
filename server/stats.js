@@ -61,6 +61,8 @@ function prov() {
 //   mcapUsd, priceUsd, earnedEth, graduated, logChunk }
 const idx = { ethUsd: 0, ethUsdAt: 0, blockTime: 0, blockTimeAt: 0, head: 0, updatedAt: 0, perToken: {} };
 let _getTokens = () => [];
+let _onEvent = () => {};   // (eventName, data) — e.g. webhook dispatcher
+function emitEvent(ev, data) { try { _onEvent(ev, data); } catch (_) {} }
 
 function loadCheckpoint() {
   try {
@@ -186,7 +188,10 @@ async function indexToken(rec, head, nowSec) {
     const priceEth = vTok > 0 ? vEth / vTok : 0;
     s.priceUsd = priceEth * idx.ethUsd;
     s.mcapUsd = priceEth * SUPPLY * idx.ethUsd;
+    const wasGrad = s.graduated;
     s.graduated = !!grad;
+    // Fire a one-time webhook event when a token graduates (curve → Uniswap).
+    if (!wasGrad && s.graduated && !s._gradFired) { s._gradFired = true; emitEvent('token.graduated', { address: rec.ca || ca, symbol: rec.ticker, name: rec.name, marketCapUsd: s.mcapUsd }); }
     hadReserves = true;
   } catch (_) {}
 
@@ -237,8 +242,9 @@ async function indexToken(rec, head, nowSec) {
     const ts = backfilling ? Math.max(0, nowSec - (head - e.block) * bt) : nowSec;
     s.volAllEth += e.eth;
     s.recent.push([Math.round(ts), e.eth]);
-    // Full trade row for the /trades + /ohlc API: ts, price (ETH), eth volume, side.
-    s.trades.push({ t: Math.round(ts), pe: e.priceEth || 0, e: e.eth, b: !!e.buy });
+    // Full trade row for the /trades + /ohlc + aggregator API: ts, block, price
+    // (ETH), eth volume, side.
+    s.trades.push({ t: Math.round(ts), blk: e.block, pe: e.priceEth || 0, e: e.eth, b: !!e.buy });
   }
   // keep trades sorted by time and bounded (memory) — last ~1500 or ~14 days
   s.trades.sort((a, b) => a.t - b.t);
@@ -270,8 +276,9 @@ async function cycle() {
   } catch (_) {}
 }
 
-function startIndexer(getTokens) {
+function startIndexer(getTokens, onEvent) {
   if (typeof getTokens === 'function') _getTokens = getTokens;
+  if (typeof onEvent === 'function') _onEvent = onEvent;
   loadCheckpoint();
   (async function loop() {
     for (;;) {
@@ -344,4 +351,32 @@ function getOHLC(ca, resolutionSec = 3600, limit = 200) {
   return [...buckets.values()].sort((a, b) => a.time - b.time).slice(-lim);
 }
 
-module.exports = { startIndexer, getStats, getTrades, getOHLC };
+// ---- aggregator (GeckoTerminal/DexScreener-style) accessors ----
+function latestBlock() {
+  return { blockNumber: idx.head, blockTimestamp: Math.floor((idx.updatedAt || Date.now()) / 1000) };
+}
+function tokenState(ca) { return idx.perToken[String(ca || '').toLowerCase()] || null; }
+// Swap events across ALL tokens in a block range (for aggregator /events polling).
+function eventsInRange(fromBlock, toBlock, limit = 1000) {
+  const from = Math.max(0, Number(fromBlock) || 0);
+  const to = Number(toBlock) || idx.head;
+  const out = [];
+  for (const ca of Object.keys(idx.perToken)) {
+    const s = idx.perToken[ca];
+    if (!s.trades) continue;
+    for (const x of s.trades) {
+      if (x.blk >= from && x.blk <= to) {
+        out.push({
+          address: ca, block: x.blk, ts: x.t,
+          priceNative: x.pe || 0, priceUsd: (x.pe || 0) * idx.ethUsd,
+          amountEth: x.e || 0, amountUsd: (x.e || 0) * idx.ethUsd,
+          eventType: x.b ? 'buy' : 'sell',
+        });
+      }
+    }
+  }
+  out.sort((a, b) => a.block - b.block);
+  return out.slice(0, Math.min(5000, Math.max(1, Number(limit) || 1000)));
+}
+
+module.exports = { startIndexer, getStats, getTrades, getOHLC, latestBlock, tokenState, eventsInRange };

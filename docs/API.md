@@ -18,6 +18,13 @@ Robinfun tokens, power aggregators/trackers, or feed wallets and bots.
 ### `GET /api/v1` — discovery
 Self-describing index listing the endpoints. Good for a health/version check.
 
+### `GET /api/v1/docs` — interactive docs
+Human-friendly **Swagger UI** page to browse and try every endpoint in the browser.
+
+### `GET /api/v1/openapi.json` — machine-readable spec
+Full **OpenAPI 3.0** description. Import into Postman/Insomnia or generate a typed
+client (`openapi-generator`, `swagger-codegen`, etc.).
+
 ### `GET /api/v1/stats` — platform aggregates
 ```json
 {
@@ -123,6 +130,85 @@ For charts. `?resolution=` one of `1m 5m 15m 1h 4h 1d` (default `1h`), `?limit=`
 - Market fields (`priceUsd`, `marketCapUsd`, `volume`) are `null` until the indexer has seen a freshly-launched token (usually within a minute). Treat `null` as "not yet indexed", not zero.
 - `status: "bonding"` tokens trade on the Robinfun bonding curve (`curveAddress`); `status: "listed"` tokens trade on the Uniswap V2 `pairAddress`.
 - To poll for new listings, request `GET /api/v1/tokens?status=listed&limit=100` on an interval and diff by `address`.
+
+---
+
+## Aggregator endpoints (GeckoTerminal / DexScreener shape)
+
+For DEX aggregators and price trackers that ingest a **standard** feed. Mounted
+under `/api/v1/dex/*`. Best-effort: our indexer stores block/price/side per trade
+but **not** per-swap tx hashes, makers, or pool reserves — so `events` use a
+synthetic `txnId` and omit `maker`/`reserves`. Enough to build price & volume.
+
+### `GET /api/v1/dex/latest-block`
+```json
+{ "block": { "blockNumber": 123456, "blockTimestamp": 1752600000 } }
+```
+
+### `GET /api/v1/dex/asset?id={tokenAddress}`
+`id` is a token contract address, or the literal `ETH` for the native gas token.
+```json
+{ "asset": { "id": "0x…", "name": "Test Doge", "symbol": "TDOGE", "decimals": 18, "totalSupply": "1000000000", "circulatingSupply": "1000000000", "coinGeckoId": null, "metadata": { "logoURI": "https://…" } } }
+```
+
+### `GET /api/v1/dex/pair?id={pairAddress}`
+`id` accepts the Uniswap pair address, the bonding-curve address, **or** the token
+address — all resolve to the same pair. `asset0Id` is the token; `asset1Id` is `ETH`.
+```json
+{ "pair": { "id": "0x…", "dexKey": "robinfun-curve", "asset0Id": "0x…", "asset1Id": "ETH", "createdAtBlockTimestamp": 1752600000, "feeBps": 100, "metadata": { "name": "Test Doge", "symbol": "TDOGE", "logoURI": "https://…" } } }
+```
+`dexKey` is `robinfun-curve` while bonding, `uniswap-v2` once listed.
+
+### `GET /api/v1/dex/events?fromBlock={n}&toBlock={n}`
+Swap events across **all** tokens in a block range (newest→oldest by block).
+`?limit=` default 1000, max 5000.
+```json
+{ "events": [
+  { "block": { "blockNumber": 123456, "blockTimestamp": 1752600000 },
+    "eventType": "swap", "txnId": "123456-0", "pairId": "0x…",
+    "priceNative": 0.00000000065, "priceUsd": 0.00000123,
+    "amountNative": 0.0048, "volumeUsd": 9.1, "side": "buy" }
+] }
+```
+
+---
+
+## Webhooks (push feed)
+
+Instead of polling, partners can register a URL that Robinfun **POSTs to** when
+something happens. Fire-and-forget with an optional HMAC-SHA256 signature.
+
+**Events:** `token.created` (a new token launched) · `token.graduated` (a token
+listed on Uniswap).
+
+Registration is **admin-gated** (operator-managed) — send us your URL, or if you
+run the instance, call the admin endpoint with `x-admin-secret`:
+
+```bash
+# register
+curl -X POST https://robinfun.io/api/v1/webhooks \
+  -H "x-admin-secret: $ADMIN_SECRET" -H "content-type: application/json" \
+  -d '{"url":"https://partner.example/hook","events":["token.created","token.graduated"],"secret":"your-shared-secret"}'
+
+# list  →  { "webhooks": [ { "id", "url", "events", "createdAt" } ], "events": [...] }
+curl -H "x-admin-secret: $ADMIN_SECRET" https://robinfun.io/api/v1/webhooks
+
+# delete
+curl -X DELETE -H "x-admin-secret: $ADMIN_SECRET" https://robinfun.io/api/v1/webhooks/{id}
+```
+
+**Delivery payload** (POST body):
+```json
+{ "event": "token.created", "ts": 1752600000000, "data": { /* Token object (created) or {address,symbol,name,marketCapUsd} (graduated) */ } }
+```
+
+**Verifying the signature** — if you set a `secret`, each request carries
+`x-robinfun-signature: sha256=<hmac>` over the **raw body**:
+```js
+const sig = 'sha256=' + crypto.createHmac('sha256', SECRET).update(rawBody).digest('hex');
+const ok = crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(req.headers['x-robinfun-signature']));
+```
+Also sent: `x-robinfun-event: token.created`. Respond `2xx` quickly; we don't retry.
 
 ---
 

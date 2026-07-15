@@ -20,6 +20,7 @@ const path = require('path');
 const store = require('./store');   // MongoDB (if MONGODB_URI) or JSON-file fallback
 const stats = require('./stats');   // continuous on-chain board-stats indexer
 const apiV1 = require('./api-v1');  // public partner API (read-only token data)
+const webhooks = require('./webhooks'); // partner webhook subscriptions (token.created / graduated)
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -167,6 +168,49 @@ app.get('/api/v1/tokens/:ca/ohlc', publicCors, (req, res) => {
   res.json(t);
 });
 
+// ---- OpenAPI spec + interactive docs (Swagger UI) ----
+app.get('/api/v1/openapi.json', publicCors, (req, res) => res.json(apiV1.openapi(apiBase(req))));
+app.get('/api/v1/docs', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.type('html').send(apiV1.docsHtml(apiBase(req)));
+});
+
+// ---- Aggregator (GeckoTerminal / DexScreener) endpoints ----
+app.get('/api/v1/dex/latest-block', publicCors, (req, res) => res.json(apiV1.dexLatestBlock(stats)));
+app.get('/api/v1/dex/asset', publicCors, (req, res) => {
+  const a = apiV1.dexAsset(store, stats, req.query.id);
+  if (!a) return res.status(404).json({ error: 'asset not found' });
+  res.json(a);
+});
+app.get('/api/v1/dex/pair', publicCors, (req, res) => {
+  const p = apiV1.dexPair(store, stats, req.query.id);
+  if (!p) return res.status(404).json({ error: 'pair not found' });
+  res.json(p);
+});
+app.get('/api/v1/dex/events', publicCors, (req, res) => {
+  res.json(apiV1.dexEvents(store, stats, req.query.fromBlock, req.query.toBlock, req.query.limit));
+});
+
+// ---- Webhook subscriptions (admin-gated: same x-admin-secret) ----
+// Partners register a URL; Robinfun POSTs to it on token.created / token.graduated.
+app.options('/api/v1/webhooks', adminCors);
+app.options('/api/v1/webhooks/:id', adminCors);
+app.get('/api/v1/webhooks', adminCors, (req, res) => {
+  if (!adminOk(req)) return res.status(403).json({ error: 'forbidden' });
+  res.json({ webhooks: webhooks.list(), events: webhooks.VALID_EVENTS });
+});
+app.post('/api/v1/webhooks', adminCors, (req, res) => {
+  if (!process.env.ADMIN_SECRET) return res.status(503).json({ error: 'webhooks locked (set ADMIN_SECRET)' });
+  if (!adminOk(req)) return res.status(403).json({ error: 'forbidden' });
+  const b = req.body || {};
+  try { res.status(201).json(webhooks.register(b.url, b.events, b.secret)); }
+  catch (e) { res.status(400).json({ error: String(e.message || 'bad request') }); }
+});
+app.delete('/api/v1/webhooks/:id', adminCors, (req, res) => {
+  if (!adminOk(req)) return res.status(403).json({ error: 'forbidden' });
+  res.json({ ok: webhooks.remove(String(req.params.id)) });
+});
+
 app.get('/api/tokens/:id', (req, res) => {
   const t = store.findToken(req.params.id);
   if (!t) return res.status(404).json({ error: 'not found' });
@@ -207,6 +251,8 @@ app.post('/api/tokens', rateLimit, async (req, res) => {
       createdAt: Date.now(),
     };
     await store.addToken(rec);
+    // Notify partner webhooks (fire-and-forget) with the public token shape.
+    try { webhooks.dispatch('token.created', apiV1.toPublic(rec, stats.getStats(), apiBase(req))); } catch (_) {}
     res.status(201).json(rec);
   } catch {
     res.status(500).json({ error: 'server error' });
@@ -254,7 +300,8 @@ if (SITE_DIR) {
   // Kick off the continuous board-stats indexer (reads the chain server-side so
   // GET /api/stats is instant for every browser). Disable with STATS_INDEXER=off.
   if (!/^(0|off|false|no)$/i.test(process.env.STATS_INDEXER || '')) {
-    try { stats.startIndexer(() => store.allTokens()); console.log('board-stats indexer started'); }
+    // Pass webhooks.dispatch so the indexer can push token.graduated to partners.
+    try { stats.startIndexer(() => store.allTokens(), webhooks.dispatch); console.log('board-stats indexer started'); }
     catch (e) { console.error('stats indexer failed to start', e); }
   }
 })().catch((e) => { console.error('fatal: store init failed', e); process.exit(1); });
