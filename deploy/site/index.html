@@ -2317,6 +2317,15 @@ function openToken(id, push){
   push ? setRoute('/token/'+encodeURIComponent(tokenRef(t) || id), title) : (document.title = title);
   window.scrollTo({top:0, behavior:'instant'});
 }
+/* Open a token ALWAYS on the Robinfun domain by its contract address — never the
+   block explorer. Resolves at CLICK time, so a coin that finished loading into the
+   board after its row was drawn still opens in-app (routes to /token/<CA>). An
+   unknown CA deep-links /token/<CA> and lets the board loader resolve it. */
+function openTokenRef(ref){
+  const t = tokenByRef(ref);
+  if(t){ openToken(t.id); return; }
+  location.assign('/token/'+encodeURIComponent(ref));
+}
 
 /* ---------------- home: stats + grid ---------------- */
 let filter = 'trending';
@@ -2697,39 +2706,57 @@ async function renderProfile(){
   loadHoldings(addr);
   loadCreatedCoins(addr);
 }
+let _pfHoldRun = 0;   // invalidates a stale scan when the profile re-renders
 async function loadHoldings(addr){
+  const myRun = ++_pfHoldRun;
   const wrap = document.getElementById('pf-held-list');
   const setT=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
   const real = TOKENS.filter(t=>realToken(t));
-  if(!real.length){ setT('pf-held','0'); setT('pf-held-cnt','0'); wrap.innerHTML='<div class="pf-empty">No on-chain coins to check yet.</div>'; return; }
+  if(!real.length){ setT('pf-held','0'); setT('pf-held-cnt','0'); setT('pf-holdval','$0'); wrap.innerHTML='<div class="pf-empty">No on-chain coins to check yet.</div>'; return; }
   const ro = roProvider();
-  const rows = await Promise.all(real.map(async t=>{
-    try{
-      const [balRaw, curveAddr] = await Promise.all([
-        new ethers.Contract(t.ca, ERC20_ABI, ro).balanceOf(addr),
-        (t.curveAddr ? Promise.resolve(t.curveAddr) : curveOfAny(t.ca, ro)),
-      ]);
-      const amt = Number(ethers.formatEther(balRaw));
-      if(amt <= 1e-9) return null;
-      let priceUsd = t.price || 0;
-      try{ const p = await new ethers.Contract(curveAddr, CURVE_ABI, ro).currentPrice(); priceUsd = Number(ethers.formatEther(p))*ETH_USD; }catch(_){}
-      return { t, amt, val: amt*priceUsd };
-    }catch(_){ return null; }
-  }));
-  const held = rows.filter(Boolean).sort((a,b)=>b.val-a.val);
-  setT('pf-held', String(held.length));
-  setT('pf-held-cnt', String(held.length));
-  setT('pf-holdval', fmtUsdFull(held.reduce((s,r)=>s+r.val,0)));
-  if(!held.length){ wrap.innerHTML='<div class="pf-empty">No coin balances yet — buy something on the board.</div>'; return; }
-  wrap.innerHTML = held.map(r=>{
+  const alive = ()=> myRun===_pfHoldRun && profileAddr()===addr;
+  // FAST PATH: one balanceOf per token, bounded concurrency, PROGRESSIVE render.
+  // We paint each holding the instant its balance resolves (instead of awaiting
+  // all ~100+ reads), and value it with the server-indexed price (t.price) — no
+  // extra per-token currentPrice()/curveOf() round-trips. This is the difference
+  // between "spins for a minute" and "coins pop in immediately".
+  const rowHtml = (r)=>{
     const pct = (r.amt/SUPPLY*100);
-    return '<div class="pf-row" onclick="openToken(\''+r.t.id+'\')">'+
+    return '<div class="pf-row" onclick="openTokenRef(\''+r.t.ca+'\')">'+
       '<div class="tlogo">'+tLogo(r.t)+'</div>'+
       '<div class="pf-row-mid"><div class="pf-row-nm">'+esc(r.t.name)+' <span class="tk">$'+esc(r.t.ticker)+'</span></div>'+
         '<div class="pf-row-sub">'+fmtNum(r.amt)+' tokens · '+pct.toFixed(2)+'% of supply</div></div>'+
       '<div class="pf-row-right"><div class="amt">'+fmtUsdFull(r.val)+'</div><div class="val">'+fmtNum(r.amt)+' $'+esc(r.t.ticker)+'</div></div>'+
     '</div>';
-  }).join('');
+  };
+  const held = [];
+  let done = 0, totalVal = 0;
+  wrap.innerHTML = '<div class="pf-empty" id="pf-held-loading">Scanning your coins… 0/'+real.length+'</div>';
+  const paint = ()=>{ held.sort((a,b)=>b.val-a.val); wrap.innerHTML = held.map(rowHtml).join(''); };
+  const withTimeout = (p, ms)=> Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), ms))]);
+  const check = async (t)=>{
+    if(!alive()) return;
+    try{
+      const balRaw = await withTimeout(new ethers.Contract(t.ca, ERC20_ABI, ro).balanceOf(addr), 12000);
+      if(!alive()) return;
+      const amt = Number(ethers.formatEther(balRaw));
+      if(amt > 1e-9){
+        const val = amt*(t.price||0);
+        held.push({ t, amt, val }); totalVal += val;
+        setT('pf-held', String(held.length)); setT('pf-held-cnt', String(held.length)); setT('pf-holdval', fmtUsdFull(totalVal));
+        paint();
+      }
+    }catch(_){}
+    done++;
+    const ld = document.getElementById('pf-held-loading'); if(ld && !held.length) ld.textContent = 'Scanning your coins… '+done+'/'+real.length;
+  };
+  const POOL = 12; let i = 0;
+  const worker = async ()=>{ while(i < real.length && alive()){ const k = i++; await check(real[k]); } };
+  await Promise.all(Array.from({length:Math.min(POOL, real.length)}, worker));
+  if(!alive()) return;
+  setT('pf-held', String(held.length)); setT('pf-held-cnt', String(held.length)); setT('pf-holdval', fmtUsdFull(totalVal));
+  if(!held.length){ wrap.innerHTML='<div class="pf-empty">No coin balances yet — buy something on the board.</div>'; return; }
+  paint();
 }
 async function loadCreatedCoins(addr){
   const wrap = document.getElementById('pf-created-list');
@@ -2757,7 +2784,10 @@ async function loadCreatedCoins(addr){
       return { name:a.name, symbol:a.symbol, ca, curve, id:(known?known.id:null), mcapUsd, logo:(known?tLogo(known):('<span>'+esc((a.symbol||'?')[0]||'?')+'</span>')) };
     }));
     wrap.innerHTML = rows.map(r=>{
-      const click = r.id ? "openToken('"+r.id+"')" : "window.open('"+EXPLORER+"/address/"+r.ca+"','_blank')";
+      // Always open the token ON ROBINFUN by its CA (re-resolved at click time),
+      // never the block explorer — even if the board hadn't finished loading when
+      // this row was drawn.
+      const click = "openTokenRef('"+r.ca+"')";
       return '<div class="pf-row" onclick="'+click+'">'+
         '<div class="tlogo">'+r.logo+'</div>'+
         '<div class="pf-row-mid"><div class="pf-row-nm">'+esc(r.name)+' <span class="tk">$'+esc(r.symbol)+'</span></div>'+
