@@ -1701,6 +1701,17 @@ const CURATED_WALLETS = [
 // Extra wallets that show up under "More Wallets" if installed (via EIP-6963).
 const CURATED_KEYS = new Set(CURATED_WALLETS.flatMap(w=>w.rdns));
 
+// Brand logos (self-contained) shown when a wallet isn't installed, so every
+// tile always has its own icon. Installed wallets use their real EIP-6963 icon.
+const WALLET_SVG = {
+  binance:'<svg viewBox="0 0 40 40" width="46" height="46" style="border-radius:13px;display:block"><rect width="40" height="40" rx="11" fill="#F3BA2F"/><g fill="#fff"><path d="M20 9l3 3-3 3-3-3z"/><path d="M12 17l3 3-3 3-3-3z"/><path d="M28 17l3 3-3 3-3-3z"/><path d="M20 25l3 3-3 3-3-3z"/><path d="M20 17l3 3-3 3-3-3z"/></g></svg>',
+  trust:'<svg viewBox="0 0 40 40" width="46" height="46" style="border-radius:13px;display:block"><rect width="40" height="40" rx="11" fill="#3375BB"/><path d="M20 9l9 3.2v7.2c0 6.1-4.2 9.6-9 11-4.8-1.4-9-4.9-9-11V12.2z" fill="#fff"/><path d="M20 9l9 3.2v7.2c0 6.1-4.2 9.6-9 11z" fill="#cbe0f5"/></svg>',
+  okx:'<svg viewBox="0 0 40 40" width="46" height="46" style="border-radius:13px;display:block"><rect width="40" height="40" rx="11" fill="#0b0b0b"/><g fill="#fff"><rect x="9" y="9" width="6.8" height="6.8" rx="1.2"/><rect x="24.2" y="9" width="6.8" height="6.8" rx="1.2"/><rect x="16.6" y="16.6" width="6.8" height="6.8" rx="1.2"/><rect x="9" y="24.2" width="6.8" height="6.8" rx="1.2"/><rect x="24.2" y="24.2" width="6.8" height="6.8" rx="1.2"/></g></svg>',
+  safepal:'<svg viewBox="0 0 40 40" width="46" height="46" style="border-radius:13px;display:block"><rect width="40" height="40" rx="11" fill="#4A6CF7"/><path d="M20 9l9 5.2v10.4L20 30l-9-5.4V14.2z" fill="#fff"/><path d="M20 15.5l4.5 2.6v5.2L20 25.9l-4.5-2.6v-5.2z" fill="#4A6CF7"/></svg>',
+  tokenpocket:'<svg viewBox="0 0 40 40" width="46" height="46" style="border-radius:13px;display:block"><rect width="40" height="40" rx="11" fill="#2980FE"/><path d="M12.5 13.5h15v4.2h-5.4v9.8h-4.2v-9.8h-5.4z" fill="#fff"/></svg>',
+  metamask:'<span style="width:46px;height:46px;border-radius:13px;background:#E2761B;display:flex;align-items:center;justify-content:center;font-size:26px">🦊</span>',
+};
+
 // Resolve a curated wallet to a live provider (+icon), or null if not installed.
 function resolveWallet(w){
   for(const d of discoveredWallets.values()){
@@ -1735,9 +1746,9 @@ document.addEventListener('click',(e)=>{
 });
 
 function walletIcon(icon, w){
-  return icon
-    ? '<img class="wm-t-ico" src="'+icon+'" alt="">'
-    : '<span class="wm-t-ico" style="background:'+w.color+'">'+w.letter+'</span>';
+  if(icon) return '<img class="wm-t-ico" src="'+icon+'" alt="">';
+  if(WALLET_SVG[w.key]) return WALLET_SVG[w.key];
+  return '<span class="wm-t-ico" style="background:'+w.color+'">'+w.letter+'</span>';
 }
 function openWalletModal(){
   // Grid of curated popular wallets (like the big launchpads).
