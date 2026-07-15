@@ -1,8 +1,14 @@
 # Robinfun Trade Bot
 
-A **custodial, Maestro-style Telegram trading bot** for [Robinfun](https://robinfun.io)
-on Robinhood Chain. Users trade any Robinfun token straight from Telegram — no
+A **custodial, Maestro-style, multi-chain Telegram trading bot** for
+[Robinfun](https://robinfun.io). Users trade tokens straight from Telegram — no
 website, no wallet extension.
+
+**Chains:** Robinhood Chain (Robinfun bonding curves), Ethereum, Base, BNB Chain,
+Arbitrum. One EVM key is the **same address on every chain** — switch with `/chain`.
+On Robinhood Chain trades route to the Robinfun curve (then its DEX after
+graduation); on every other chain they route to that chain's Uniswap-V2/PancakeSwap
+DEX (any token, by contract address). Solana / non-EVM is a separate future module.
 
 ## Features
 

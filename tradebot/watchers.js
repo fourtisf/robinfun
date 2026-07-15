@@ -1,34 +1,36 @@
 'use strict';
 /*
  * Background watchers for the Robinfun Trade Bot:
- *   • SNIPE   — new-launch auto-buy. Polls the factory for TokenCreated events and,
- *               for every user who armed a snipe, buys their configured amount.
- *   • ORDERS  — limit-buy / take-profit / stop-loss. Polls each order's live curve
- *               price and executes when the target is crossed.
- * Both are polling loops (no websockets) so they work over the same plain RPC the
- * rest of the stack uses. A notify(chatId, text) callback surfaces fills to users.
+ *   • SNIPE  — new-launch auto-buy on ROBINHOOD CHAIN (Robinfun curve launches).
+ *              Polls the factory for TokenCreated and buys for every armed+funded
+ *              user. (Generic new-pair sniping on other chains is a future add-on.)
+ *   • ORDERS — limit-buy / take-profit / stop-loss on any chain. Polls each order's
+ *              live price and executes ONE-SHOT when the target is crossed.
+ *
+ * Fund-safety: a triggered order is REMOVED and persisted synchronously BEFORE the
+ * trade is sent, so a crash/restart can never replay a fill (double-spend). Orders
+ * are one-shot — a triggered order that fails is dropped with a DM, not retried
+ * (retrying a possibly-half-executed trade is unsafe).
  */
 const { ethers } = require('ethers');
 const core = require('./core');
 
 let _notify = () => {};
 function setNotifier(fn) { if (typeof fn === 'function') _notify = fn; }
+const SNIPE_CHAIN = 'robinhood';
 
 // ------------------------------------------------------------------ snipe
 let _lastSnipeBlock = 0;
 const SNIPE_MAX_SPAN = Math.max(200, Number(process.env.SNIPE_MAX_SPAN || 2000));
+const _snipeFailAt = new Map();   // chatId -> last failure-DM ms (rate limit)
 async function snipeCycle() {
-  const prov = core.provider();
+  const prov = core.providerFor(SNIPE_CHAIN);
   let head;
   try { head = await prov.getBlockNumber(); } catch (_) { return; }
-  // ALWAYS keep the cursor pinned near head, even when nobody is armed — otherwise
-  // it freezes while disarmed and a re-arm back-fills a huge (unbounded) range,
-  // buying into every stale launch or wedging on an oversized getLogs query.
-  if (!_lastSnipeBlock || head < _lastSnipeBlock) _lastSnipeBlock = head;
+  if (!_lastSnipeBlock || head < _lastSnipeBlock) _lastSnipeBlock = head;   // pin cursor near head always
   const armed = core.allUsers().filter((u) => u.snipe && u.snipe.on && Number(u.snipe.ethAmount) > 0);
   if (!armed.length) { _lastSnipeBlock = head; return; }
-  const factory = new ethers.Contract(core.CFG.factory, core.FACTORY_ABI, prov);
-  // Clamp the span so a stale cursor can never issue an unbounded getLogs range.
+  const factory = new ethers.Contract(core.chainOf(SNIPE_CHAIN).factory, core.FACTORY_ABI, prov);
   const from = Math.max(_lastSnipeBlock + 1, head - SNIPE_MAX_SPAN);
   if (from > head) { _lastSnipeBlock = head; return; }
   let evs = [];
@@ -40,30 +42,32 @@ async function snipeCycle() {
     const sym = (e.args && e.args.symbol) || '?';
     if (!ca) continue;
     for (const u of armed) {
-      // Skip wallets that can't afford the snipe — avoids spamming broke users
-      // with failure DMs on every new launch.
       try {
-        const bal = await core.ethBalance(u.address);
+        const bal = await core.ethBalance(u.address, SNIPE_CHAIN);
         const need = ethers.parseEther(String(u.snipe.ethAmount)) + ethers.parseEther(core.CFG.gasBufferEth);
-        if (bal < need) continue;
+        if (bal < need) continue;   // can't afford → skip silently (no spam)
       } catch (_) { continue; }
       try {
-        const r = await core.buy(u.chatId, ca, u.snipe.ethAmount);
-        _notify(u.chatId, `🎯 <b>Sniped $${esc(sym)}</b>\nBought ${fmt(r.gotTokens)} $${esc(r.sym)} for ${r.spentEth} ETH\n<code>${ca}</code>\n${txLink(r.hash)}`);
+        const r = await core.buy(u.chatId, ca, u.snipe.ethAmount, SNIPE_CHAIN);
+        _notify(u.chatId, `🎯 <b>Sniped $${esc(sym)}</b>\nBought ${fmt(r.gotTokens)} $${esc(r.sym)} for ${r.spentEth} ${r.native}\n<code>${ca}</code>\n${txLink(SNIPE_CHAIN, r.hash)}`);
       } catch (err) {
-        _notify(u.chatId, `⚠️ Snipe of $${esc(sym)} failed: ${esc(err.message || String(err))}`);
+        const now = Date.now();
+        if (now - (_snipeFailAt.get(u.chatId) || 0) > 300000) {   // ≤ 1 failure DM / 5 min / user
+          _snipeFailAt.set(u.chatId, now);
+          _notify(u.chatId, `⚠️ A snipe failed: ${esc(err.message || String(err))} (further failures muted for 5 min)`);
+        }
       }
     }
   }
 }
 
 // ------------------------------------------------------------------ orders
-// order = { id, type:'tp'|'sl'|'limitbuy', ca, sym, targetPriceEth, ethAmount?, sellPct? }
 let _oid = 1;
 function addOrder(chatId, order) {
   const u = core.getUser(chatId); if (!u) throw new Error('no wallet');
-  order.id = _oid++ + '' + Date.now().toString(36);
+  order.id = (_oid++) + Date.now().toString(36);
   order.createdAt = Date.now();
+  if (!order.chain) order.chain = core.userChain(u);
   u.orders = u.orders || [];
   u.orders.push(order);
   core.saveStore();
@@ -73,57 +77,49 @@ function cancelOrder(chatId, id) {
   const u = core.getUser(chatId); if (!u || !u.orders) return false;
   const before = u.orders.length;
   u.orders = u.orders.filter((o) => o.id !== id);
-  core.saveStore();
+  if (u.orders.length !== before) core.saveStore();
   return u.orders.length < before;
 }
 async function ordersCycle() {
   const users = core.allUsers().filter((u) => u.orders && u.orders.length);
   if (!users.length) return;
-  // Snapshot price once per distinct CA this cycle (cheap dedupe).
   const priceCache = new Map();
-  const priceOf = async (ca) => {
-    const k = ca.toLowerCase();
+  const priceOf = async (chain, ca) => {
+    const k = chain + ':' + ca.toLowerCase();
     if (priceCache.has(k)) return priceCache.get(k);
-    const snap = await core.tokenSnapshot(ca).catch(() => null);
+    const snap = await core.tokenSnapshot(ca, chain).catch(() => null);
     const px = snap ? snap.priceEth : null;
     priceCache.set(k, px);
     return px;
   };
   for (const u of users) {
-    const keep = [];
-    for (const o of u.orders) {
-      let fired = false;
+    for (const o of [...u.orders]) {          // snapshot: we mutate u.orders inside
+      const chain = o.chain || SNIPE_CHAIN;
+      let px;
+      try { px = await priceOf(chain, o.ca); } catch (_) { continue; }
+      if (px == null || !(px > 0)) continue;
+      const hit =
+        (o.type === 'tp'       && px >= o.targetPriceEth) ||
+        (o.type === 'sl'       && px <= o.targetPriceEth) ||
+        (o.type === 'limitbuy' && px <= o.targetPriceEth);
+      if (!hit) continue;
+      // ONE-SHOT: remove + persist SYNCHRONOUSLY before the trade, so a crash can
+      // never replay this fill on restart.
+      u.orders = u.orders.filter((x) => x.id !== o.id);
+      core.saveStoreNow();
       try {
-        const px = await priceOf(o.ca);
-        if (px == null || !(px > 0)) { keep.push(o); continue; }
-        const hit =
-          (o.type === 'tp'       && px >= o.targetPriceEth) ||
-          (o.type === 'sl'       && px <= o.targetPriceEth) ||
-          (o.type === 'limitbuy' && px <= o.targetPriceEth);
-        if (!hit) { keep.push(o); continue; }
         if (o.type === 'limitbuy') {
-          const r = await core.buy(u.chatId, o.ca, o.ethAmount);
-          _notify(u.chatId, `✅ <b>Limit buy filled</b> $${esc(r.sym)}\nBought ${fmt(r.gotTokens)} for ${r.spentEth} ETH\n${txLink(r.hash)}`);
+          const r = await core.buy(u.chatId, o.ca, o.ethAmount, chain);
+          _notify(u.chatId, `✅ <b>Limit buy filled</b> $${esc(r.sym)}\nBought ${fmt(r.gotTokens)} for ${r.spentEth} ${r.native}\n${txLink(chain, r.hash)}`);
         } else {
-          const r = await core.sell(u.chatId, o.ca, o.sellPct || 100);
+          const r = await core.sell(u.chatId, o.ca, o.sellPct || 100, chain);
           const label = o.type === 'tp' ? 'Take-profit' : 'Stop-loss';
-          _notify(u.chatId, `✅ <b>${label} filled</b> $${esc(o.sym || '')}\nSold ${r.soldPct}% for ${r.proceedsEth} ETH\n${txLink(r.hash)}`);
+          _notify(u.chatId, `✅ <b>${label} filled</b> $${esc(o.sym || '')}\nSold ${r.soldPct}% for ${r.proceedsEth} ${r.native}\n${txLink(chain, r.hash)}`);
         }
-        fired = true;
       } catch (err) {
-        // Bound retries + suppress duplicate failure DMs — the trigger stays
-        // satisfied every cycle, so without this it would spin/spam (and could
-        // re-attempt a trade) forever.
-        o.attempts = (o.attempts || 0) + 1;
-        if (!o.notifiedError) { _notify(u.chatId, `⚠️ Order on $${esc(o.sym || '')} failed: ${esc(err.message || String(err))}`); o.notifiedError = true; }
-        const MAX_ATTEMPTS = Math.max(1, Number(process.env.ORDER_MAX_ATTEMPTS || 3));
-        if (o.attempts < MAX_ATTEMPTS) { keep.push(o); }
-        else { _notify(u.chatId, `🛑 Order on $${esc(o.sym || '')} cancelled after ${o.attempts} failed attempts.`); }
-        fired = true;
+        _notify(u.chatId, `⚠️ Order on $${esc(o.sym || '')} triggered but failed: ${esc(err.message || String(err))}\nIt was removed — re-create it if you still want it.`);
       }
-      if (!fired) keep.push(o);
     }
-    if (keep.length !== u.orders.length) { u.orders = keep; core.saveStore(); }
   }
 }
 
@@ -138,6 +134,6 @@ function start() {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const fmt = (n) => { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K'; return n.toFixed(n < 1 ? 4 : 2); };
-const txLink = (h) => h ? `<a href="${core.CFG.explorer}/tx/${h}">tx ↗</a>` : '';
+const txLink = (chain, h) => { const c = core.chainOf(chain); return (h && c) ? `<a href="${c.explorer}/tx/${h}">tx ↗</a>` : ''; };
 
 module.exports = { setNotifier, start, addOrder, cancelOrder };
