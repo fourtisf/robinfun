@@ -148,6 +148,36 @@ function publicCors(req, res, next) {
   if (req.method === 'OPTIONS') return res.status(204).end();
   next();
 }
+// ---------------- read-only JSON-RPC proxy ----------------
+// Browsers can't always reach the chain RPC directly (CORS, mobile networks, VPNs
+// → "Load failed"), which breaks on-chain reads (balance, price, mcap). Proxy
+// read methods through our own origin: the browser talks to us (same origin it
+// already loaded), and the server reaches the RPC fine (it runs the indexer).
+// Writes are NEVER proxied — those go straight from the user's wallet.
+const CHAIN_RPC = process.env.CHAIN_RPC || process.env.RPC || 'https://rpc.mainnet.chain.robinhood.com';
+const RPC_READ_OK = new Set(['eth_chainId', 'eth_blockNumber', 'eth_call', 'eth_getBalance', 'eth_getCode', 'eth_getLogs', 'eth_getBlockByNumber', 'eth_getBlockByHash', 'eth_getTransactionByHash', 'eth_getTransactionReceipt', 'eth_getTransactionCount', 'eth_gasPrice', 'eth_estimateGas', 'eth_getStorageAt', 'eth_feeHistory', 'eth_maxPriorityFeePerGas', 'net_version', 'web3_clientVersion']);
+function rpcCors(req, res, next) {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'content-type');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+}
+app.options('/api/rpc', rpcCors);
+app.post('/api/rpc', rpcCors, async (req, res) => {
+  const body = req.body;
+  const items = Array.isArray(body) ? body : [body];
+  if (!items.length || items.some((it) => !it || typeof it.method !== 'string' || !RPC_READ_OK.has(it.method))) {
+    return res.status(403).json({ error: 'only read methods are proxied' });
+  }
+  try {
+    const r = await fetch(CHAIN_RPC, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(15000) });
+    const text = await r.text();
+    res.set('Cache-Control', 'no-store').type('application/json').status(r.status).send(text);
+  } catch (e) { res.status(502).json({ error: 'rpc upstream unreachable' }); }
+});
+
+// ---------------- Public Partner API v1 (read-only, CORS open) ----------------
 const apiBase = (req) => `${req.protocol}://${req.get('host')}/api/v1`;
 app.get('/api/v1', publicCors, (req, res) => res.json(apiV1.index(apiBase(req))));
 app.get('/api/v1/stats', publicCors, (req, res) => res.json(apiV1.platformStats(stats)));

@@ -1660,16 +1660,21 @@ let _ro = null;
    the page showing only the simulation. Single reads (a lone quote) worked,
    which is why trading succeeded but the live stats/chart never populated.
    staticNetwork — don't re-probe eth_chainId on every call. */
+// Read through our SAME-ORIGIN proxy (/api/rpc) — the browser can't always reach
+// the chain RPC directly (CORS / mobile / VPN → "Load failed").
+function readRpcUrl(){
+  const base = (typeof window!=='undefined' && window.ROBINFUN_API) ? window.ROBINFUN_API
+             : (typeof location!=='undefined' && /^https?:/.test(location.origin)) ? location.origin : '';
+  return base ? base + '/api/rpc' : CHAIN.rpcUrls[0];
+}
 const roProvider = () => {
   if(_ro) return _ro;
-  // ethers v6: 2nd arg is a Networkish (Network|number|string), NOT a plain
-  // object. Build a real Network when available so there's zero chain-id
-  // detection round-trip; fall back to plain no-batch if the build lacks it.
+  const url = readRpcUrl();
   try{
     const net = new ethers.Network('robinhood-mainnet', 4663);
-    _ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0], net, { batchMaxCount: 1, staticNetwork: net });
+    _ro = new ethers.JsonRpcProvider(url, net, { batchMaxCount: 1, staticNetwork: net });
   }catch(_){
-    _ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0], undefined, { batchMaxCount: 1, staticNetwork: true });
+    _ro = new ethers.JsonRpcProvider(url, undefined, { batchMaxCount: 1, staticNetwork: true });
   }
   return _ro;
 };
@@ -3908,7 +3913,7 @@ function setDevBuy(v){
 async function refreshDeployFee(){
   try{
     if(chainReady()){
-      const ro = new ethers.JsonRpcProvider(CHAIN.rpcUrls[0]);
+      const ro = roProvider();
       const wei = await new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro).deployFee();
       DEPLOY_FEE_WEI = wei; deployFeeEth = Number(wei)/1e18;
     }
