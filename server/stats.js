@@ -286,6 +286,7 @@ function getStats() {
       mcapUsd: s.mcapUsd || 0, priceUsd: s.priceUsd || 0,
       vol24Usd: v24Usd, volAllUsd: vAllUsd, earnedUsd,
       earnedEth: s.earnedEth || 0, graduated: !!s.graduated,
+      curve: s.curve || null, pair: s.pair || null,   // exposed for the public API
     };
     vol24 += v24Usd; volAll += vAllUsd; paid += earnedUsd;
   }

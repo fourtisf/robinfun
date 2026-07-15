@@ -19,6 +19,7 @@ const fs = require('fs');
 const path = require('path');
 const store = require('./store');   // MongoDB (if MONGODB_URI) or JSON-file fallback
 const stats = require('./stats');   // continuous on-chain board-stats indexer
+const apiV1 = require('./api-v1');  // public partner API (read-only token data)
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -133,6 +134,27 @@ app.options('/api/stats', adminCors);
 app.get('/api/stats', adminCors, (req, res) => {
   res.set('Cache-Control', 'public, max-age=10');
   res.json(stats.getStats());
+});
+
+// ---------------- Public Partner API v1 (read-only, CORS open) ----------------
+// Stable, documented token feed so partners can auto-list Robinfun tokens.
+// Any origin may read it; there are no secrets and it exposes only public data.
+function publicCors(req, res, next) {
+  res.set('Access-Control-Allow-Origin', '*');
+  res.set('Access-Control-Allow-Methods', 'GET, OPTIONS');
+  res.set('Access-Control-Allow-Headers', 'content-type, x-api-key');
+  res.set('Cache-Control', 'public, max-age=15');
+  if (req.method === 'OPTIONS') return res.status(204).end();
+  next();
+}
+const apiBase = (req) => `${req.protocol}://${req.get('host')}/api/v1`;
+app.get('/api/v1', publicCors, (req, res) => res.json(apiV1.index(apiBase(req))));
+app.get('/api/v1/stats', publicCors, (req, res) => res.json(apiV1.platformStats(stats)));
+app.get('/api/v1/tokens', publicCors, (req, res) => res.json(apiV1.listTokens(store, stats, apiBase(req), req.query)));
+app.get('/api/v1/tokens/:ca', publicCors, (req, res) => {
+  const t = apiV1.getToken(store, stats, apiBase(req), req.params.ca);
+  if (!t) return res.status(404).json({ error: 'token not found' });
+  res.json(t);
 });
 
 app.get('/api/tokens/:id', (req, res) => {
