@@ -687,6 +687,8 @@ input[type=range]::-moz-range-thumb{
 .wm-go{color:var(--cream-mute);font-family:var(--font-mono);font-size:14px}
 .wm-empty{color:var(--cream-dim);font-size:13px;margin-bottom:6px}
 .wm-foot{color:var(--cream-mute);font-size:11px;margin-top:15px;text-align:center}
+.wm-tip{margin-top:13px;padding:11px 14px;border:1px solid var(--rule-2);border-left:3px solid var(--gilt);border-radius:10px;background:var(--gilt-dim);color:var(--cream-dim);font-size:12.5px;line-height:1.5}
+.wm-tip b{color:var(--gilt-bright)}
 /* rich wallet grid (curated popular wallets) */
 .wm-modal{width:min(440px,100%)}
 .wm-sec{font-family:var(--font-mono);font-size:11px;letter-spacing:.16em;color:var(--cream-mute);margin:16px 0 11px}
@@ -1488,7 +1490,8 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <span class="wm-more-ic">▦</span><span>More Wallets</span><span class="wm-more-arrow">›</span>
     </button>
     <div class="wm-morelist" id="wm-morelist" style="display:none"></div>
-    <p class="wm-foot">Robinfun never moves funds without your approval in the wallet.</p>
+    <div class="wm-tip" id="wm-tip" style="display:none">📱 On your phone? For the smoothest, warning-free connect, open <b>robinfun.io</b> inside your wallet app's built-in browser (Trust / MetaMask / OKX → Browser).</div>
+    <p class="wm-foot">🔒 Robinfun is non-custodial — we never move your funds. Every action needs your approval in your wallet.</p>
   </div>
 </div>
 
@@ -1806,6 +1809,8 @@ function openWalletModal(){
       (connectable?'':'<span class="wm-install">Install</span>')+
     '</button>';
   }).join('');
+  // Show the in-app-browser tip only on phones (injected provider = no Verify check).
+  const tip = document.getElementById('wm-tip'); if(tip) tip.style.display = mobile ? 'block' : 'none';
   const ml = document.getElementById('wm-morelist'); if(ml){ ml.style.display='none'; ml.innerHTML=''; }
   const mb = document.getElementById('wm-more-btn'); if(mb) mb.setAttribute('aria-expanded','false');
   document.getElementById('walletModal').classList.add('open');
@@ -1874,7 +1879,7 @@ async function connectWalletConnect(){
       optionalChains:[cid],
       showQrModal:true,
       rpcMap:{ [cid]: CHAIN.rpcUrls[0] },
-      metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/favicon.png'] },
+      metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/robinfun-logo.png'] },
     });
     await wc.connect();
     const accs = (wc.accounts && wc.accounts.length) ? wc.accounts : await wc.request({method:'eth_accounts'});

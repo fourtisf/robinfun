@@ -39,6 +39,12 @@ fi
 log "Republishing robinfun.io -> ${WEBROOT}"
 mkdir -p "$WEBROOT"
 cp "$SRC_DIR/deploy/site/index.html" "$WEBROOT/index.html"
+# Static assets (logo used as the wallet-connect icon + favicon, etc.). Copy any
+# images so /robinfun-logo.png is reachable — a real icon on the wallet's Connect
+# screen (instead of a broken image) makes new users trust the connect prompt.
+cp "$SRC_DIR"/deploy/site/*.png "$WEBROOT"/ 2>/dev/null || true
+cp "$SRC_DIR"/deploy/site/*.svg "$WEBROOT"/ 2>/dev/null || true
+cp "$SRC_DIR"/deploy/site/*.ico "$WEBROOT"/ 2>/dev/null || true
 # Stamp the served page with the exact build so you can VERIFY the new version
 # is live (footer shows it). If the footer build doesn't change after a deploy,
 # something between here and the browser is caching (CDN/nginx), not the code.
