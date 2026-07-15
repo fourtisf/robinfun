@@ -78,6 +78,7 @@ function applyCfg() {
   if (state.cfg.reactSellPct !== undefined) CFG.reactSellPct = Math.min(100, Math.max(1, Number(state.cfg.reactSellPct) || 25));
   if (state.cfg.reactMaxCount !== undefined) CFG.reactMaxCount = Math.max(1, Number(state.cfg.reactMaxCount) || 3);
   if (state.cfg.gasGwei !== undefined) CFG.gasGwei = Math.max(0, Number(state.cfg.gasGwei) || 0);
+  if (state.cfg.gasMode !== undefined) CFG.gasMode = ['cheap', 'fixed', 'auto'].includes(String(state.cfg.gasMode)) ? String(state.cfg.gasMode) : 'cheap';
   ['devBuyMin', 'devBuyMax', 'peerBuyMin', 'peerBuyMax'].forEach((k) => { if (state.cfg[k] !== undefined) CFG[k] = String(state.cfg[k]); });
 }
 loadState(); applyCfg();
@@ -330,7 +331,7 @@ peer-buy ${CFG.peerBuyers} wallet × ${Number(CFG.peerBuyMax) > 0 ? `${CFG.peerB
 sell-after ${CFG.sellAfterSec ? CFG.sellAfterSec + 's · ' + CFG.sellPct + '%' : 'off'}  <i>(/sellafter /sellpct)</i>
 auto-sale ${CFG.autoSaleOn ? `<b>ON</b> · ${CFG.autoSalePct}% tiap ${CFG.autoSaleEverySec}s` : 'off'}  <i>(/autosale /autosalepct /autosaleevery)</i>
 react-buy ${CFG.reactOn ? `<b>ON</b> · pembeli asli ≥$${CFG.reactMinUsd} → jual ${CFG.reactSellPct}% (maks ${CFG.reactMaxCount}×)` : 'off'}  <i>(/react)</i>
-gas ${CFG.gasGwei > 0 ? `${CFG.gasGwei} gwei` : 'auto'}  <i>(/gasgwei)</i>
+gas ${gasLabel()}  <i>(/gas)</i>
 max tokens ${CFG.maxTokens || '∞'}  <i>(/max)</i>
 backend ${CFG.backend}
 funder ${funder ? 'set (auto allow-list + fund)' : 'none (self-funded)'}`;
@@ -484,15 +485,45 @@ async function doReact(chatId, args) {
       `🟢➡️🔻 <b>React-to-buy</b> (market-maker / recover modal)\n` +
       `Sekarang: <b>${CFG.reactOn ? 'ON' : 'OFF'}</b>\n\n` +
       `Kalau ada pembeli ASLI (bukan wallet bot) beli ≥ <b>$${CFG.reactMinUsd}</b> di token yang kita punya, bot jual <b>${CFG.reactSellPct}%</b> dari bag terbesar — maksimal <b>${CFG.reactMaxCount}×</b> per token (biar TIDAK dump total / rug holder asli).\n` +
-      `Gas dipakai: target <b>${CFG.gasGwei} gwei</b> · cek tiap ${CFG.reactEverySec}s\n\n` +
+      `Gas dipakai: <b>${gasLabel()}</b> · cek tiap ${CFG.reactEverySec}s\n\n` +
       `Nyalakan: <code>/react on</code> · matikan: <code>/react off</code>\n` +
-      `Atur: <code>/reactmin 15</code> (USD) · <code>/reactpct 25</code> (%) · <code>/reacthits 3</code> · <code>/reactevery 45</code> · <code>/gasgwei 0.01</code>`);
+      `Atur: <code>/reactmin 15</code> (USD) · <code>/reactpct 25</code> (%) · <code>/reacthits 3</code> · <code>/reactevery 45</code> · <code>/gas cheap</code>`);
     return;
   }
   state.cfg.reactOn = (a === 'on'); applyCfg(); saveState();
   await send(chatId, a === 'on'
-    ? `✅ React-to-buy <b>ON</b> — pembeli asli ≥ $${CFG.reactMinUsd} → jual ${CFG.reactSellPct}% (maks ${CFG.reactMaxCount}×/token). Gas ${CFG.gasGwei} gwei. (/react off untuk stop)`
+    ? `✅ React-to-buy <b>ON</b> — pembeli asli ≥ $${CFG.reactMinUsd} → jual ${CFG.reactSellPct}% (maks ${CFG.reactMaxCount}×/token). Gas: ${gasLabel()}. (/react off untuk stop)`
     : `🛑 React-to-buy <b>OFF</b>.`);
+}
+function gasLabel() {
+  return CFG.gasMode === 'cheap' ? '💚 termurah (base-fee network)'
+    : CFG.gasMode === 'auto' ? 'auto (network yang tentukan)'
+    : `fixed ${CFG.gasGwei} gwei`;
+}
+// Pilih gas: cheap (termurah) / angka manual / auto. No-arg → tampilkan menu.
+async function doGas(chatId, args) {
+  const a = (args[0] || '').toLowerCase().trim();
+  const show = () => send(chatId,
+    `⛽ <b>Setelan Gas</b>\nSekarang: <b>${gasLabel()}</b>\n\n` +
+    `Pilih:\n` +
+    `• <code>/gas cheap</code> — 💚 <b>termurah</b> (ikut base-fee network, tanpa tip) — hemat, dipakai default\n` +
+    `• <code>/gas 0.01</code> — set manual (gwei); otomatis dinaikin ke base-fee kalau network lebih tinggi biar tx nggak nyangkut\n` +
+    `• <code>/gas auto</code> — biar network yang tentukan (paling aman kalau tx sering nyangkut)`);
+  if (!a) return show();
+  if (['cheap', 'murah', 'min', 'termurah'].includes(a)) {
+    state.cfg.gasMode = 'cheap'; applyCfg(); saveState();
+    return send(chatId, `✅ Gas: <b>💚 termurah</b> — bot bayar base-fee network (paling hemat, tetap konfirmasi).`);
+  }
+  if (a === 'auto') {
+    state.cfg.gasMode = 'auto'; applyCfg(); saveState();
+    return send(chatId, `✅ Gas: <b>auto</b> — network yang tentukan.`);
+  }
+  const n = Number(a);
+  if (Number.isFinite(n) && n >= 0) {
+    state.cfg.gasMode = 'fixed'; state.cfg.gasGwei = n; applyCfg(); saveState();
+    return send(chatId, `✅ Gas: <b>fixed ${n} gwei</b> (kalau base-fee network lebih tinggi, otomatis pakai itu biar konfirmasi).`);
+  }
+  return show();
 }
 // ---- P&L: how much of the deposit is left / lost across all launched tokens ----
 async function doSetDeposit(chatId, args) {
@@ -630,7 +661,7 @@ async function dispatch(chatId, cmd, args) {
     case '/reactpct': await setCfg(chatId, 'reactSellPct', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 1 && Number(v) <= 100, 'react jual (%)'); break;
     case '/reacthits': await setCfg(chatId, 'reactMaxCount', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 1, 'react maks hit/token'); break;
     case '/reactevery': await setCfg(chatId, 'reactEverySec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 20, 'react interval (detik)'); break;
-    case '/gasgwei': await setCfg(chatId, 'gasGwei', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0, 'gas (gwei)'); break;
+    case '/gas': case '/gasgwei': doGas(chatId, args).catch((e) => send(chatId, 'Gas error: ' + esc(e.message || String(e)))); break;
     case '/dumpall': doDumpAll(chatId, args).catch((e) => send(chatId, 'Dump error: ' + esc(e.message || String(e)))); break;
     case '/pnl': case '/profit': doPnl(chatId, args).catch((e) => send(chatId, 'P&L error: ' + esc(e.message || String(e)))); break;
     case '/pnltoken': case '/pnltokens': doPnlToken(chatId).catch((e) => send(chatId, 'P&L token error: ' + esc(e.message || String(e)))); break;
@@ -883,7 +914,7 @@ async function main() {
     { command: 'react', description: 'Jual pas ada pembeli asli: /react on' },
     { command: 'reactmin', description: 'Min beli asli (USD) buat trigger: /reactmin 15' },
     { command: 'reactpct', description: 'Persen dijual per trigger: /reactpct 25' },
-    { command: 'gasgwei', description: 'Target harga gas (gwei): /gasgwei 0.01' },
+    { command: 'gas', description: 'Pilih gas: /gas cheap (termurah) / /gas 0.01 / /gas auto' },
     { command: 'dumpall', description: 'Jual SEKARANG semua token: /dumpall 100' },
     { command: 'pnl', description: 'Rugi/untung (saldo + treasury + fee)' },
     { command: 'pnltoken', description: 'Rugi PER TOKEN (wallet mana beli apa)' },

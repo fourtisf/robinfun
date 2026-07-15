@@ -59,8 +59,10 @@ const CFG = {
   reactMinUsd: Math.max(1, Number(process.env.REACT_MIN_USD || 15)),
   reactSellPct: Math.min(100, Math.max(1, Number(process.env.REACT_SELL_PCT || 25))),
   reactMaxCount: Math.max(1, Number(process.env.REACT_MAX_COUNT || 3)),
-  // Gas: target gas price (gwei). The bot pays min(this, network) so it never
-  // OVERpays; if the chain's floor is higher the tx may sit — raise this then.
+  // Gas price mode: 'cheap' = pay the network base-fee (cheapest that still
+  // confirms, no tip) · 'fixed' = pay exactly gasGwei (floored to base-fee) ·
+  // 'auto' = let ethers decide. gasGwei is the manual value used by 'fixed'.
+  gasMode: (() => { const m = String(process.env.GAS_MODE || 'cheap').toLowerCase(); return ['cheap', 'fixed', 'auto'].includes(m) ? m : 'cheap'; })(),
   gasGwei: Math.max(0, Number(process.env.GAS_GWEI || 0.01)),
   // Random buy sizes: when a MAX is set, each buy is a random ETH amount in
   // [MIN, MAX] (organic-looking volume) instead of the fixed amount above.
@@ -417,16 +419,24 @@ async function isGraduated(provider, curveAddr) {
 async function waitBounded(tx) { // never hang the bot on a stuck tx
   try { return await tx.wait(1, 180000); } catch (e) { if (e && e.code === 'TIMEOUT') return null; throw e; }
 }
-// Cheap-gas overrides: pay min(configured gwei, network) so we never OVERpay,
-// but also never sit below the network floor. gasGwei=0 → let ethers decide.
-// If the chain's floor is above the cap the tx may sit → raise GAS_GWEI.
+// Gas-price overrides by mode:
+//   'auto'  → {} (ethers decides — safest if txs ever get stuck)
+//   'cheap' → pay the network BASE-FEE with no tip (cheapest that still confirms)
+//   'fixed' → pay exactly gasGwei, floored UP to the base-fee so it never sits
+// Reads the latest block's baseFeePerGas (the true floor); falls back to
+// getFeeData / a tiny default if the chain doesn't report one.
 async function gasOverrides(provider) {
-  if (!(CFG.gasGwei > 0)) return {};
-  const cap = ethers.parseUnits(String(CFG.gasGwei), 'gwei');
-  let net = 0n;
-  try { const fd = await provider.getFeeData(); net = fd.gasPrice || fd.maxFeePerGas || 0n; } catch (_) {}
-  const gasPrice = (net > 0n && net < cap) ? net : cap;   // min(net, cap), floored at cap when net unknown
-  return { gasPrice };
+  if (CFG.gasMode === 'auto') return {};
+  let floor = 0n;
+  try { const blk = await provider.getBlock('latest'); if (blk && blk.baseFeePerGas) floor = blk.baseFeePerGas; } catch (_) {}
+  if (floor === 0n) { try { const fd = await provider.getFeeData(); floor = fd.gasPrice || 0n; } catch (_) {} }
+  if (CFG.gasMode === 'cheap') {
+    const gp = floor > 0n ? floor : ethers.parseUnits('0.01', 'gwei');
+    return { gasPrice: gp };
+  }
+  // 'fixed': honour the chosen gwei but never below the floor (else it sits).
+  const want = ethers.parseUnits(String(CFG.gasGwei > 0 ? CFG.gasGwei : 0.01), 'gwei');
+  return { gasPrice: (floor > 0n && floor > want) ? floor : want };
 }
 async function ensureApprove(wallet, ca, spender, amount) {
   const erc = new ethers.Contract(ca, ERC20_ABI, wallet);
