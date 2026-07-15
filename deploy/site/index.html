@@ -1731,6 +1731,17 @@ const WALLET_SVG = {
   metamask:'<span style="width:46px;height:46px;border-radius:13px;background:#E2761B;display:flex;align-items:center;justify-content:center;font-size:26px">🦊</span>',
 };
 
+// Universal links to open a specific wallet app on mobile with a WalletConnect
+// session (so tapping the tile jumps to the app, not a QR). https links open the
+// app if installed, else its store page. Wallets without one fall back to the WC
+// modal (which has its own maintained deep-links).
+const WALLET_WCLINK = {
+  metamask:'https://metamask.app.link/wc?uri=',
+  trust:'https://link.trustwallet.com/wc?uri=',
+  safepal:'https://link.safepal.io/wc?uri=',
+};
+function isMobile(){ return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||''); }
+
 // Resolve a curated wallet to a live provider (+icon), or null if not installed.
 function resolveWallet(w){
   for(const d of discoveredWallets.values()){
@@ -1772,15 +1783,19 @@ function walletIcon(icon, w){
 function openWalletModal(){
   // Grid of curated popular wallets (like the big launchpads).
   const grid = document.getElementById('wm-grid');
+  const mobile = isMobile();
   grid.innerHTML = CURATED_WALLETS.map(w=>{
     const r = resolveWallet(w);
     const found = !!r;
-    const action = found ? "connectCurated('"+w.key+"')" : "installWallet('"+w.install+"')";
-    return '<button type="button" class="wm-tile'+(found?'':' wm-off')+'" onclick="'+action+'">'+
-      (found?'':'<span class="wm-badge">!</span>')+
+    // Mobile browsers have no injected provider — connect via WalletConnect (opens
+    // the app) instead of showing a misleading "Install". Every tile is tappable.
+    const connectable = found || mobile;
+    const action = connectable ? "connectCurated('"+w.key+"')" : "installWallet('"+w.install+"')";
+    return '<button type="button" class="wm-tile'+(connectable?'':' wm-off')+'" onclick="'+action+'">'+
+      (connectable?'':'<span class="wm-badge">!</span>')+
       walletIcon(found?r.icon:'', w)+
       '<span class="wm-t-nm">'+w.name+'</span>'+
-      (found?'':'<span class="wm-install">Install</span>')+
+      (connectable?'':'<span class="wm-install">Install</span>')+
     '</button>';
   }).join('');
   // Reset "More Wallets" to collapsed each open.
@@ -1832,15 +1847,16 @@ async function connectProvider(provider){
 async function connectCurated(key){
   const w = CURATED_WALLETS.find(x=>x.key===key); if(!w) return;
   const r = resolveWallet(w);
-  if(!r){ installWallet(w.install); return; }
-  await connectProvider(r.provider);
+  if(r) return connectProvider(r.provider);                 // injected (extension / in-app browser)
+  if(isMobile()) return connectWalletConnect(w);            // mobile → open the wallet app via WalletConnect
+  installWallet(w.install);                                 // desktop, not installed → download page
 }
 // Keep a stable index list for discovered wallets referenced in "More Wallets".
 function registerDiscovered(d){ let i = wmList.indexOf(d); if(i<0){ wmList.push(d); i = wmList.length-1; } return i; }
 async function connectWith(i){ const entry = wmList[i]; if(entry) await connectProvider(entry.provider); }
 
 // WalletConnect (QR / mobile). Needs a free project id from cloud.reown.com.
-async function connectWalletConnect(){
+async function connectWalletConnect(preferred){
   if(!WALLETCONNECT_PROJECT_ID){
     toast('WalletConnect is not configured','seal');
     return;
@@ -1852,15 +1868,20 @@ async function connectWalletConnect(){
     const EthereumProvider = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
     if(!EthereumProvider || !EthereumProvider.init) throw new Error('provider module failed to load');
     const cid = parseInt(CHAIN.chainId,16);
+    // If a specific wallet was tapped on mobile and we know its universal link,
+    // jump straight into that app (no QR); otherwise show the WalletConnect modal.
+    const link = preferred && WALLET_WCLINK[preferred.key];
+    const direct = !!(link && isMobile());
     const wc = await EthereumProvider.init({
       projectId: WALLETCONNECT_PROJECT_ID,
       chains:[cid],
       optionalChains:[cid],
-      showQrModal:true,
+      showQrModal: !direct,
       rpcMap:{ [cid]: CHAIN.rpcUrls[0] },
       metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/favicon.png'] },
     });
-    await wc.connect();   // opens the QR modal
+    if(direct){ wc.on('display_uri', (uri)=>{ try{ window.location.href = link + encodeURIComponent(uri); }catch(_){} }); }
+    await wc.connect();   // opens the app (direct) or the QR modal
     const accs = (wc.accounts && wc.accounts.length) ? wc.accounts : await wc.request({method:'eth_accounts'});
     if(accs && accs.length){ activeProvider = wc; attachProviderEvents(wc); await ensureChain(wc); onWalletConnected(accs[0]); closeWalletModal(); }
     else toast('WalletConnect: no account returned','seal');
@@ -3425,6 +3446,15 @@ async function doTradeReal(t){
     // Safety net: a graduated token should have been routed to the DEX path by
     // doTrade(); if we somehow land here, don't send a doomed curve tx.
     if(t.graduated){ return doTradeDex(t); }
+    // Make sure we know the curve address — on a fresh page / mobile connect it
+    // may not have resolved yet. Without this, new Contract(undefined) throws
+    // "invalid value for Contract target".
+    if(!t.curveAddr || !ethers.isAddress(t.curveAddr)){
+      t.curveAddr = await curveOfAny(t.ca, roProvider()).catch(()=>'');
+    }
+    if(!t.curveAddr || !ethers.isAddress(t.curveAddr)){
+      toast('Still loading this token — tap Buy again in a moment','seal'); btn.disabled=false; setSide(side); return;
+    }
     const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
     const curveW = new ethers.Contract(t.curveAddr, CURVE_ABI, signer);
     const curveR = new ethers.Contract(t.curveAddr, CURVE_ABI, roProvider());
