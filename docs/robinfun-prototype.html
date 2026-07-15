@@ -1822,24 +1822,31 @@ async function connectWith(i){ const entry = wmList[i]; if(entry) await connectP
 
 async function connectWalletConnect(){
   if(!WALLETCONNECT_PROJECT_ID){
-    toast('WalletConnect belum aktif — isi WALLETCONNECT_PROJECT_ID (gratis di cloud.reown.com)','seal');
+    toast('WalletConnect is not configured','seal');
     return;
   }
   try{
-    toast('Membuka WalletConnect…','jade');
-    const { EthereumProvider } = await import('https://esm.sh/@walletconnect/ethereum-provider@2');
+    toast('Opening WalletConnect…','jade');
+    const mod = await import('https://esm.sh/@walletconnect/ethereum-provider@2?bundle');
+    const EthereumProvider = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
+    if(!EthereumProvider || !EthereumProvider.init) throw new Error('provider module failed to load');
     const cid = parseInt(CHAIN.chainId,16);
     const wc = await EthereumProvider.init({
       projectId: WALLETCONNECT_PROJECT_ID,
-      chains:[cid], optionalChains:[cid], showQrModal:true,
+      chains:[cid],
+      optionalChains:[cid],
+      showQrModal:true,
       rpcMap:{ [cid]: CHAIN.rpcUrls[0] },
-      metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/favicon.ico'] },
+      metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/favicon.png'] },
     });
     await wc.connect();
-    const accs = wc.accounts || (await wc.request({method:'eth_accounts'}));
-    if(accs && accs.length){ activeProvider = wc; attachProviderEvents(wc); onWalletConnected(accs[0]); closeWalletModal(); }
+    const accs = (wc.accounts && wc.accounts.length) ? wc.accounts : await wc.request({method:'eth_accounts'});
+    if(accs && accs.length){ activeProvider = wc; attachProviderEvents(wc); await ensureChain(wc); onWalletConnected(accs[0]); closeWalletModal(); }
+    else toast('WalletConnect: no account returned','seal');
   }catch(err){
-    toast('WalletConnect gagal — coba lagi','seal');
+    console.error('WalletConnect error:', err);
+    const m = (err && (err.message || String(err))) || 'unknown error';
+    toast('WalletConnect failed: '+m.slice(0,90),'seal');
   }
 }
 

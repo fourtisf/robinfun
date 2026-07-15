@@ -1359,7 +1359,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
       <p data-i18n-html="stake.p">The protocol keeps a 1% curve fee, a 1% post-graduation fee on every token, and 10% of every creator fee across the whole platform. Stake $ROBIN and that revenue streams back to you in <b>real ETH</b> — no inflation, no emissions, just the house edge shared with holders.</p>
     </div>
     <div id="stk-soon" style="display:none;margin:0 0 22px;padding:14px 18px;border:1px solid rgba(198,242,60,.35);border-radius:14px;background:rgba(198,242,60,.06);font-family:var(--font-mono);font-size:14px;color:var(--gilt-bright)">
-      🔒 <b>Staking coming soon.</b> $ROBIN belum diluncurkan — angka di bawah bukan data live. Fee protokol tetap terkumpul dan akan dibagikan ke staker begitu vault staking aktif.
+      🔒 <b>Staking coming soon.</b> $ROBIN hasn't launched yet — the numbers below aren't live data. Protocol fees keep accruing and will be shared with stakers once the staking vault goes live.
     </div>
     <div class="stake-grid">
       <div class="panel t-stat"><div class="k">Est. APR · 30d</div><div class="v gold" id="stk-apr">—%</div><div class="s">paid in ETH</div></div>
@@ -1842,24 +1842,32 @@ async function connectWith(i){ const entry = wmList[i]; if(entry) await connectP
 // WalletConnect (QR / mobile). Needs a free project id from cloud.reown.com.
 async function connectWalletConnect(){
   if(!WALLETCONNECT_PROJECT_ID){
-    toast('WalletConnect belum aktif — isi WALLETCONNECT_PROJECT_ID (gratis di cloud.reown.com)','seal');
+    toast('WalletConnect is not configured','seal');
     return;
   }
   try{
-    toast('Membuka WalletConnect…','jade');
-    const { EthereumProvider } = await import('https://esm.sh/@walletconnect/ethereum-provider@2');
+    toast('Opening WalletConnect…','jade');
+    // Load the provider (bundled with its deps) from a CDN at runtime.
+    const mod = await import('https://esm.sh/@walletconnect/ethereum-provider@2?bundle');
+    const EthereumProvider = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
+    if(!EthereumProvider || !EthereumProvider.init) throw new Error('provider module failed to load');
     const cid = parseInt(CHAIN.chainId,16);
     const wc = await EthereumProvider.init({
       projectId: WALLETCONNECT_PROJECT_ID,
-      chains:[cid], optionalChains:[cid], showQrModal:true,
+      chains:[cid],
+      optionalChains:[cid],
+      showQrModal:true,
       rpcMap:{ [cid]: CHAIN.rpcUrls[0] },
-      metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/favicon.ico'] },
+      metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/favicon.png'] },
     });
-    await wc.connect();
-    const accs = wc.accounts || (await wc.request({method:'eth_accounts'}));
-    if(accs && accs.length){ activeProvider = wc; attachProviderEvents(wc); onWalletConnected(accs[0]); closeWalletModal(); }
+    await wc.connect();   // opens the QR modal
+    const accs = (wc.accounts && wc.accounts.length) ? wc.accounts : await wc.request({method:'eth_accounts'});
+    if(accs && accs.length){ activeProvider = wc; attachProviderEvents(wc); await ensureChain(wc); onWalletConnected(accs[0]); closeWalletModal(); }
+    else toast('WalletConnect: no account returned','seal');
   }catch(err){
-    toast('WalletConnect gagal — coba lagi','seal');
+    console.error('WalletConnect error:', err);
+    const m = (err && (err.message || String(err))) || 'unknown error';
+    toast('WalletConnect failed: '+m.slice(0,90),'seal');
   }
 }
 
