@@ -1742,6 +1742,14 @@ async function sendTx(to, data, value, onHash){
   if(rc && rc.status === 0){ const e = new Error('transaction reverted on-chain'); e.reverted = true; throw e; }
   return rc;   // receipt on success, or null on a 180s read timeout
 }
+// Clean a revert reason for display.
+function revertMsg(e){
+  const m = (e && (e.shortMessage || e.reason || (e.info&&e.info.error&&e.info.error.message) || e.message)) || 'would revert';
+  return String(m).replace(/^execution reverted:?\s*/i,'').slice(0,140) || 'would revert';
+}
+// True when an error is a genuine on-chain REVERT (vs a network/read hiccup), so a
+// pre-flight simulation only BLOCKS on a real revert, never on a flaky read.
+function isRevert(e){ return !!(e && (e.code==='CALL_EXCEPTION' || e.reason || e.data || /revert/i.test(String(e.shortMessage||e.message||'')))); }
 
 /* ---- Multi-wallet discovery (EIP-6963) ----
    Every installed injected wallet (MetaMask, Rabby, Coinbase, Brave, OKX, …)
@@ -3685,6 +3693,10 @@ async function doTradeReal(t){
       const val = ethers.parseEther(ethIn.toFixed(12));
       const q = await curveR.quoteBuy(val);
       const minOut = q.tokensOut * SLIP / 1000n;
+      // Pre-flight: simulate the exact buy so a would-be revert shows its REASON
+      // (and costs no gas). Only block on a real revert, not a flaky read.
+      try{ await curveR.buy.staticCall(minOut, deadline, { from: owner, value: val }); }
+      catch(sim){ if(isRevert(sim)) throw new Error('buy would fail: '+revertMsg(sim)); }
       btn.textContent = 'Confirm in wallet…';
       const rc = await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('buy', [minOut, deadline]), val, ()=>{ toast('Buy sent — waiting…','jade'); btn.textContent='Buying…'; });
       toast(rc ? 'Bought $'+t.ticker+' ✓' : 'Buy sent — confirmation is slow; check your wallet before retrying.','jade');
@@ -3698,6 +3710,10 @@ async function doTradeReal(t){
       }
       const q = await curveR.quoteSell(tokensIn);
       const minEth = q.net * SLIP / 1000n;
+      // Pre-flight: simulate the exact sell (from the user) so a would-be revert —
+      // e.g. slippage, or a missing approval — shows its REASON before we spend gas.
+      try{ await curveR.sell.staticCall(tokensIn, minEth, deadline, { from: owner }); }
+      catch(sim){ if(isRevert(sim)) throw new Error('sell would fail: '+revertMsg(sim)); }
       btn.textContent = 'Confirm in wallet…';
       const rc = await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('sell', [tokensIn, minEth, deadline]), null, ()=>{ toast('Sell sent — waiting…','seal'); btn.textContent='Selling…'; });
       toast(rc ? 'Sold $'+t.ticker+' ✓' : 'Sell sent — confirmation is slow; check your wallet before retrying.','seal');
