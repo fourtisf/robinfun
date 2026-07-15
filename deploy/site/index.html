@@ -2105,6 +2105,33 @@ function cardHtml(t){
     </div>
   </div>`;
 }
+/* "Heat" score for the Trending tab — not just 24h volume, but how ALIVE a token
+   is right now: recent activity (decays as trades go stale), price momentum,
+   freshness (new launches trend), and holder interest. So a token being traded
+   in the last few minutes and rising beats a stale token that had one big day. */
+function heatScore(t){
+  const now = Date.now();
+  const vol = t.vol24 || 0;                                   // 24h volume (USD)
+  // recency of the last trade — exponential decay, half-life 45 min
+  const sinceLast = Math.max(0, now - (t.lastTrade || t.created || now));
+  const recency = Math.pow(0.5, sinceLast / (45*60e3));       // 1.0 now → 0.5 @45m → 0.25 @90m
+  // momentum — a rising price boosts, a dumping one dampens
+  const momentum = 1 + Math.max(-0.6, Math.min(1.5, (t.chg24||0)/100));
+  // freshness — brand-new launches are inherently "trending"
+  const ageH = (now - (t.created||now)) / 3600e3;
+  const freshness = ageH < 3 ? 1.6 : ageH < 12 ? 1.25 : ageH < 48 ? 1.0 : 0.85;
+  // holder interest (log-scaled so it nudges, never dominates)
+  const holders = 1 + Math.log10((t.holders||0) + 1) * 0.5;
+  // fine-grained: if we have this token's trade list (it was opened), reward
+  // volume + trade-count in the LAST HOUR much more than stale 24h volume.
+  let recentBoost = 0;
+  if(t.trades && t.trades.length){
+    const hourAgo = now - 3600e3; let vEth=0, cnt=0;
+    for(const tr of t.trades){ if(tr.ts>=hourAgo){ vEth+=(tr.eth||0); cnt++; } }
+    recentBoost = vEth*ETH_USD*3 + cnt*200;
+  }
+  return (vol*0.6 + recentBoost + 5) * recency * momentum * freshness * holders;
+}
 function sortTokens(list){
   const l=[...list];
   switch(filter){
@@ -2114,7 +2141,7 @@ function sortTokens(list){
     case 'graduated': return l.filter(t=>robinGrad(t)).sort((a,b)=>b.vol24-a.vol24);
     case 'watch': return l.filter(t=>WATCH.has(t.id)).sort((a,b)=>b.lastTrade-a.lastTrade);
     case 'soon': return l.filter(t=>!robinGrad(t)).sort((a,b)=>b.mcap-a.mcap);
-    default: return l.sort((a,b)=>(b.vol24*(1+b.chg24/200))-(a.vol24*(1+a.chg24/200)));
+    default: return l.sort((a,b)=>heatScore(b)-heatScore(a));   // Trending = heat
   }
 }
 function renderGrid(){
