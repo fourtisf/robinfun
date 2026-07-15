@@ -1888,6 +1888,26 @@ async function ensureChain(provider){
     }
   }
 }
+// Normalise a chain id (hex string "0x1237", decimal string, or number) to a
+// number, so the "right network" check works no matter how the wallet reports it.
+const TARGET_CHAIN = parseInt(CHAIN.chainId, 16);   // 4663
+function toChainNum(raw){
+  if(raw==null) return NaN;
+  if(typeof raw==='number') return raw;
+  const s=String(raw).trim();
+  return /^0x/i.test(s) ? parseInt(s,16) : parseInt(s,10);
+}
+// True when the provider is on Robinhood Chain. Reads chainId, tolerant of format;
+// gives the wallet a beat to finish switching before reporting a mismatch.
+async function onRobinhoodChain(provider){
+  for(let i=0;i<3;i++){
+    let cid;
+    try{ cid = toChainNum(await provider.request({method:'eth_chainId'})); }catch(_){ cid = NaN; }
+    if(cid===TARGET_CHAIN) return true;
+    await new Promise(r=>setTimeout(r,250));   // switch may still be propagating
+  }
+  return false;
+}
 
 function onWalletConnected(addr){
   wallet = addr;
@@ -3325,7 +3345,7 @@ async function doTradeDex(t){
   try{
     if(!activeProvider){ toast('Connect a wallet first','seal'); connectWallet(); return; }
     await ensureChain(activeProvider);
-    if((await activeProvider.request({method:'eth_chainId'}))!==CHAIN.chainId){ toast('Switch to Robinhood Chain','seal'); return; }
+    if(!(await onRobinhoodChain(activeProvider))){ toast('Switch to Robinhood Chain','seal'); return; }
     const amt = parseFloat(document.getElementById('amt').value)||0;
     if(!(amt>0)){ toast('Enter an amount','seal'); return; }
     const signer = await new ethers.BrowserProvider(activeProvider).getSigner();
@@ -3399,7 +3419,7 @@ async function doTradeReal(t){
   try{
     if(!activeProvider){ toast('Connect a wallet first','seal'); connectWallet(); return; }
     await ensureChain(activeProvider);
-    if((await activeProvider.request({method:'eth_chainId'}))!==CHAIN.chainId){ toast('Switch to Robinhood Chain','seal'); return; }
+    if(!(await onRobinhoodChain(activeProvider))){ toast('Switch to Robinhood Chain','seal'); return; }
     const amt = parseFloat(document.getElementById('amt').value)||0;
     if(!(amt>0)){ toast('Enter an amount','seal'); return; }
     // Safety net: a graduated token should have been routed to the DEX path by
@@ -4043,7 +4063,7 @@ async function realLaunch(meta){
     if(!activeProvider){ toast('Connect your wallet first','seal'); connectWallet(); return; }
     busy(true,'Switching network…');
     await ensureChain(activeProvider);
-    if((await activeProvider.request({method:'eth_chainId'})) !== CHAIN.chainId){
+    if(!(await onRobinhoodChain(activeProvider))){
       toast('Switch your wallet to Robinhood Chain, then Deploy again','seal'); busy(false,'Deploy token'); return;
     }
     busy(true,'Confirm in wallet…');
