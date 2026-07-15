@@ -20,7 +20,7 @@ const {
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
-  creatorOwedTotal, ownedTokens,
+  creatorOwedTotal, ownedTokens, tokenPnl,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -119,7 +119,8 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 <b>/claim</b> — 💸 klaim SEMUA reward creator ke wallet
 <b>/autosale on|off</b> — 🔻 auto-jual holding di SEMUA token berkala
 <b>/dumpall</b> [%] — 🔻 jual SEKARANG semua token dari semua wallet
-<b>/pnl</b> — 📊 rugi/untung dari deposit (semua token history)
+<b>/pnl</b> — 📊 rugi/untung (saldo + treasury + fee)
+<b>/pnltoken</b> — 📊 rugi PER TOKEN (wallet mana beli apa)
 <b>/setdeposit</b> 1.0 — 📥 catat total ETH yang kamu setor
 <b>/go</b> · <b>/stop</b> — mulai / berhenti auto-launch
 <b>/status</b> — status seeder + saldo
@@ -141,19 +142,36 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 
 Alur: <b>/wallets → kirim ETH (L1) → /bridge → /go</b> ✅`;
 
+// Cached per-wallet token counts (enumerating all factory tokens is heavy, so we
+// refresh in the background and show the last-known count — first /wallets may
+// show "…" until the first refresh lands).
+let _ownedCache = { at: 0, rows: null, busy: false };
+async function ownedCached() {
+  if (_ownedCache.rows && Date.now() - _ownedCache.at < 180000) return _ownedCache.rows;
+  if (_ownedCache.busy) return _ownedCache.rows;
+  _ownedCache.busy = true;
+  try { _ownedCache.rows = await ownedTokens(provider, wallets); _ownedCache.at = Date.now(); } catch (_) {}
+  finally { _ownedCache.busy = false; }
+  return _ownedCache.rows;
+}
 async function walletsMsg() {
   const [l2bals, l1bals, usd] = await Promise.all([balances(), l1Balances(), ethUsd()]);
+  ownedCached();   // fire-and-forget refresh; use whatever's cached now
+  const counts = {};
+  for (const r of (_ownedCache.rows || [])) { const k = String(r.creator).toLowerCase(); counts[k] = (counts[k] || 0) + 1; }
   let t = `<b>💰 Deployer wallets (${wallets.length})</b>\nKirim ETH ke alamat berikut:\n`;
   let tL2 = 0n, tL1 = 0n;
   wallets.forEach((w, i) => {
     const b2 = l2bals[i]; tL2 += b2;
-    let line = `\n<code>${w.address}</code>\n   🟣 RH: ${ethShort(b2)} ETH${usdOf(b2, usd)}`;
+    const nTok = counts[w.address.toLowerCase()];
+    const tokTxt = _ownedCache.rows ? `🪙 ${nTok || 0} token` : '🪙 …';
+    let line = `\n<code>${w.address}</code>\n   🟣 RH: ${ethShort(b2)} ETH${usdOf(b2, usd)} · ${tokTxt}`;
     if (l1bals) { const b1 = l1bals[i]; tL1 += b1; line += ` · ⟠ L1: ${ethShort(b1)} ETH${usdOf(b1, usd)}${b1 > 0n ? ' 🌉' : ''}`; }
     t += line;
   });
   t += `\n\n<b>Total RH: ${ethShort(tL2)} ETH${usdOf(tL2, usd)}</b>`;
   if (l1bals) t += `\n<b>Total L1: ${ethShort(tL1)} ETH${usdOf(tL1, usd)}</b>\n🌉 = ada ETH di Ethereum → /bridge ke Robinhood Chain`;
-  t += `\n\n🔑 /keys · harga ETH ${usd ? fmtUsd(usd) : '—'} · backup wallets.json`;
+  t += `\n\n🔑 /keys · 📊 /pnltoken (rugi per token) · harga ETH ${usd ? fmtUsd(usd) : '—'}`;
   return t;
 }
 
@@ -504,6 +522,30 @@ async function doPnl(chatId, args) {
     `\n<i>Setoranmu (cek /wallets sebelum trading) − Total di atas = rugi. Deposit tidak dihitung otomatis karena bridge tidak terbaca akurat.</i>` +
     (held ? `\n💡 Jual sisa token dulu (<code>/dumpall</code>) lalu <code>/pnl</code> lagi.` : ''));
 }
+// Per-token P&L: which token each wallet bought/sold, and the loss on each.
+async function doPnlToken(chatId) {
+  await send(chatId, '📊 Menghitung P&L per token dari histori curve… (agak lama, ~1 menit)');
+  const rows = await tokenPnl(provider, wallets, 40);
+  if (!rows.length) { await send(chatId, 'Belum ada data trading token.'); return; }
+  const usd = await ethUsd();
+  const u = (e) => usd ? ` ($${(e * usd).toFixed(2)})` : '';
+  const byCa = new Map(state.last.map((t) => [String(t.ca).toLowerCase(), t]));
+  const walletNo = {}; wallets.forEach((w, i) => { walletNo[w.address.toLowerCase()] = i + 1; });
+  const active = rows.filter((r) => r.buy > 0 || r.sell > 0).sort((a, b) => a.pnl - b.pnl);   // biggest loss first
+  const totBuy = active.reduce((s, r) => s + r.buy, 0), totSell = active.reduce((s, r) => s + r.sell, 0);
+  const lines = active.slice(0, 30).map((r) => {
+    const t = byCa.get(String(r.ca).toLowerCase());
+    const wNo = walletNo[String(r.creator).toLowerCase()] || '?';
+    const tick = (t && t.ticker) ? '$' + t.ticker : r.ca.slice(0, 8) + '…';
+    return `${r.pnl < 0 ? '📉' : '📈'} <b>${tick}</b> <i>(W${wNo})</i> beli ${r.buy.toFixed(3)} · jual ${r.sell.toFixed(3)} · <b>${r.pnl >= 0 ? '+' : ''}${r.pnl.toFixed(4)}</b>`;
+  });
+  await send(chatId,
+    `📊 <b>P&L per token</b>  <i>(${active.length} token aktif, ${rows.length} dicek — max 40 terbaru)</i>\n` +
+    `Total beli <b>${totBuy.toFixed(3)} ETH</b> · jual <b>${totSell.toFixed(3)} ETH</b> · rugi <b>${(totSell - totBuy).toFixed(4)} ETH</b>${u(Math.abs(totSell - totBuy))}\n` +
+    `<i>W1..W5 = wallet pembuat (urutan /wallets)</i>\n\n` +
+    lines.join('\n') +
+    (active.length > 30 ? `\n… (${active.length - 30} token lagi)` : ''));
+}
 
 // ---------------- command dispatch (shared by text + buttons) ----------------
 async function dispatch(chatId, cmd, args) {
@@ -556,6 +598,7 @@ async function dispatch(chatId, cmd, args) {
     case '/autosaleevery': await setCfg(chatId, 'autoSaleEverySec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 30, 'auto-sale interval (detik)'); break;
     case '/dumpall': doDumpAll(chatId, args).catch((e) => send(chatId, 'Dump error: ' + esc(e.message || String(e)))); break;
     case '/pnl': case '/profit': doPnl(chatId, args).catch((e) => send(chatId, 'P&L error: ' + esc(e.message || String(e)))); break;
+    case '/pnltoken': case '/pnltokens': doPnlToken(chatId).catch((e) => send(chatId, 'P&L token error: ' + esc(e.message || String(e)))); break;
     case '/setdeposit': doSetDeposit(chatId, args).catch((e) => send(chatId, 'Deposit error: ' + esc(e.message || String(e)))); break;
     case '/sweep': {
       const dest = args[0];
@@ -783,7 +826,8 @@ async function main() {
     { command: 'autosalepct', description: 'Persen auto-sale: /autosalepct 100' },
     { command: 'autosaleevery', description: 'Interval auto-sale (detik): /autosaleevery 600' },
     { command: 'dumpall', description: 'Jual SEKARANG semua token: /dumpall 100' },
-    { command: 'pnl', description: 'Rugi/untung dari deposit (semua token)' },
+    { command: 'pnl', description: 'Rugi/untung (saldo + treasury + fee)' },
+    { command: 'pnltoken', description: 'Rugi PER TOKEN (wallet mana beli apa)' },
     { command: 'setdeposit', description: 'Catat total ETH disetor: /setdeposit 1.0' },
     { command: 'go', description: 'Mulai auto-launch token' },
     { command: 'stop', description: 'Berhenti launch' },

@@ -594,6 +594,52 @@ async function protocolPending(provider) {
   try { return Number(ethers.formatEther(await new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider).protocolPending())); }
   catch (_) { return 0; }
 }
+// Per-token trading P&L for the bot's tokens, from the CURVE Buy/Sell events
+// (grossEth paid on buys, netEth received on sells), attributed to our wallets.
+// Bounded to the most recent `maxTokens` (event scans are heavy). Returns
+// [{ ca, creator, buy, sell, pnl, perW:{addr:{buy,sell}} }], best-effort.
+async function tokenPnl(provider, wallets, maxTokens = 40) {
+  const owned = await ownedTokens(provider, wallets);
+  if (!owned.length) return [];
+  const factory = new ethers.Contract(CFG.factory, FACTORY_ABI, provider);
+  const head = await provider.getBlockNumber();
+  const mineSet = new Set(wallets.map((w) => w.address.toLowerCase()));
+  // Probe the widest getLogs window this RPC accepts (once, on the newest curve).
+  let chunk = 0;
+  try {
+    const c0 = await factory.curveOf(owned[owned.length - 1].ca);
+    if (c0 && c0 !== ethers.ZeroAddress) {
+      const cc = new ethers.Contract(c0, CURVE_ABI, provider);
+      for (const w of [90000, 45000, 18000, 7000, 2500, 800]) { try { await cc.queryFilter(cc.filters.Buy(), Math.max(0, head - w), head); chunk = w; break; } catch (_) {} }
+    }
+  } catch (_) {}
+  if (!chunk) chunk = 2500;
+  const items = owned.slice(-maxTokens);
+  const rows = await mapLimit(items, 5, async (t) => {
+    let curve = ''; try { curve = await factory.curveOf(t.ca); } catch (_) {}
+    if (!curve || curve === ethers.ZeroAddress) return { ca: t.ca, creator: t.creator, buy: 0, sell: 0, pnl: 0, perW: {} };
+    const c = new ethers.Contract(curve, CURVE_ABI, provider);
+    const perW = {};
+    const add = (addr, key, eth) => { const a = String(addr || '').toLowerCase(); if (!mineSet.has(a)) return; if (!perW[a]) perW[a] = { buy: 0, sell: 0 }; perW[a][key] += eth; };
+    const FLOOR = Math.max(0, head - Math.min(2000000, chunk * 40));
+    let seen = false, empty = 0;
+    for (let hi = head; hi > FLOOR; hi -= chunk) {
+      const lo = Math.max(FLOOR, hi - chunk);
+      let buys = [], sells = [];
+      try { [buys, sells] = await Promise.all([c.queryFilter(c.filters.Buy(), lo, hi), c.queryFilter(c.filters.Sell(), lo, hi)]); }
+      catch (_) { if (lo === FLOOR) break; continue; }
+      if (buys.length || sells.length) { seen = true; empty = 0; } else if (seen && ++empty >= 3) break;
+      for (const e of buys) add(e.args.recipient, 'buy', Number(ethers.formatEther(e.args.grossEth)));
+      for (const e of sells) add(e.args.trader, 'sell', Number(ethers.formatEther(e.args.netEth)));
+      if (lo === FLOOR) break;
+    }
+    let buy = 0, sell = 0;
+    for (const a of Object.keys(perW)) { buy += perW[a].buy; sell += perW[a].sell; }
+    return { ca: t.ca, creator: t.creator, buy, sell, pnl: sell - buy, perW };
+  });
+  return rows.filter(Boolean);
+}
+
 // The treasury address (from the FeeRouter) and its live balance — read DIRECTLY
 // from chain (verifiable on robinhoodscan), never reconstructed from tx history.
 async function treasuryInfo(provider) {
@@ -690,5 +736,5 @@ module.exports = {
   makeL1Provider, verifyInbox, bridgeOne,
   resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
-  mapLimit, ownedTokens, creatorOwedTotal,
+  mapLimit, ownedTokens, creatorOwedTotal, tokenPnl,
 };
