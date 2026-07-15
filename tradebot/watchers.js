@@ -16,17 +16,23 @@ function setNotifier(fn) { if (typeof fn === 'function') _notify = fn; }
 
 // ------------------------------------------------------------------ snipe
 let _lastSnipeBlock = 0;
+const SNIPE_MAX_SPAN = Math.max(200, Number(process.env.SNIPE_MAX_SPAN || 2000));
 async function snipeCycle() {
-  const armed = core.allUsers().filter((u) => u.snipe && u.snipe.on && Number(u.snipe.ethAmount) > 0);
-  if (!armed.length) return;                          // nobody armed → skip the scan
   const prov = core.provider();
-  const factory = new ethers.Contract(core.CFG.factory, core.FACTORY_ABI, prov);
   let head;
   try { head = await prov.getBlockNumber(); } catch (_) { return; }
-  if (!_lastSnipeBlock) { _lastSnipeBlock = head; return; }   // baseline: only future launches
-  if (head < _lastSnipeBlock) { _lastSnipeBlock = head; return; }
+  // ALWAYS keep the cursor pinned near head, even when nobody is armed — otherwise
+  // it freezes while disarmed and a re-arm back-fills a huge (unbounded) range,
+  // buying into every stale launch or wedging on an oversized getLogs query.
+  if (!_lastSnipeBlock || head < _lastSnipeBlock) _lastSnipeBlock = head;
+  const armed = core.allUsers().filter((u) => u.snipe && u.snipe.on && Number(u.snipe.ethAmount) > 0);
+  if (!armed.length) { _lastSnipeBlock = head; return; }
+  const factory = new ethers.Contract(core.CFG.factory, core.FACTORY_ABI, prov);
+  // Clamp the span so a stale cursor can never issue an unbounded getLogs range.
+  const from = Math.max(_lastSnipeBlock + 1, head - SNIPE_MAX_SPAN);
+  if (from > head) { _lastSnipeBlock = head; return; }
   let evs = [];
-  try { evs = await factory.queryFilter(factory.filters.TokenCreated(), _lastSnipeBlock + 1, head); }
+  try { evs = await factory.queryFilter(factory.filters.TokenCreated(), from, head); }
   catch (_) { return; }
   _lastSnipeBlock = head;
   for (const e of evs) {
@@ -105,8 +111,14 @@ async function ordersCycle() {
         }
         fired = true;
       } catch (err) {
-        _notify(u.chatId, `⚠️ Order on $${esc(o.sym || '')} failed: ${esc(err.message || String(err))}`);
-        keep.push(o);   // keep so the user can see/cancel; don't silently drop
+        // Bound retries + suppress duplicate failure DMs — the trigger stays
+        // satisfied every cycle, so without this it would spin/spam (and could
+        // re-attempt a trade) forever.
+        o.attempts = (o.attempts || 0) + 1;
+        if (!o.notifiedError) { _notify(u.chatId, `⚠️ Order on $${esc(o.sym || '')} failed: ${esc(err.message || String(err))}`); o.notifiedError = true; }
+        const MAX_ATTEMPTS = Math.max(1, Number(process.env.ORDER_MAX_ATTEMPTS || 3));
+        if (o.attempts < MAX_ATTEMPTS) { keep.push(o); }
+        else { _notify(u.chatId, `🛑 Order on $${esc(o.sym || '')} cancelled after ${o.attempts} failed attempts.`); }
         fired = true;
       }
       if (!fired) keep.push(o);

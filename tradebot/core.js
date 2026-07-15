@@ -225,11 +225,29 @@ async function ensureApprove(wallet, ca, spender, amount) {
   if (cur < amount) { const gas = await gasOverrides(); const tx = await erc.approve(spender, ethers.MaxUint256, gas); await tx.wait(); }
 }
 
+// Slippage as basis points from the user's setting (percent). Default 5% so a
+// trade is NEVER sent fully unprotected; capped at 50%.
+function slipBps(u) {
+  let s = Number(u && u.settings && u.settings.slippage);
+  if (!(s > 0)) s = 5;
+  if (s > 50) s = 50;
+  return BigInt(Math.round(s * 100));
+}
+const WAD = 10n ** 18n;
+
 // ---------------------------------------------------------------- fee + referral
+// Charge the bot fee and CONFIRM it before returning a hash — a reverted/failed
+// fee tx returns null so referral commission is never credited for a fee that
+// didn't actually move.
 async function _chargeFee(wallet, feeWei) {
   if (feeWei <= 0n || !CFG.feeWallet || !/^0x[0-9a-fA-F]{40}$/.test(CFG.feeWallet)) return null;
-  try { const gas = await gasOverrides(); const tx = await wallet.sendTransaction({ to: CFG.feeWallet, value: feeWei, ...gas }); waitBounded(tx); return tx.hash; }
-  catch (e) { console.error('fee charge failed', e.message); return null; }
+  try {
+    const gas = await gasOverrides();
+    const tx = await wallet.sendTransaction({ to: CFG.feeWallet, value: feeWei, ...gas });
+    const rc = await waitBounded(tx);
+    if (rc && rc.status === 0) return null;   // reverted on-chain
+    return tx.hash;
+  } catch (e) { console.error('fee charge failed', e.message); return null; }
 }
 function _creditReferral(user, feeWei) {
   if (!user.referredBy || feeWei <= 0n) return;
@@ -258,26 +276,44 @@ async function buy(chatId, ca, ethAmount) {
 
   const curve = await resolveCurve(ca);
   const grad = curve ? await isGraduated(curve) : true;
+  if (!curve) throw new Error('not a Robinfun token (no curve found)');
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const gas = await gasOverrides();
+  const slip = slipBps(u);
   const before = await tokenBalance(ca, wallet.address);
 
   let venue, hash;
   if (curve && !grad) {
-    const tx = await new ethers.Contract(curve, CURVE_ABI, wallet).buy(0n, deadline, { value: spend, ...gas });
+    // EXACT expected tokens via a simulated buy → real slippage floor (never 0n,
+    // which would let a sandwich bot drain the trade). staticCall accounts for the
+    // curve fee + creator levy; slip only guards against price moving before it lands.
+    const cc = new ethers.Contract(curve, CURVE_ABI, wallet);
+    let minTok;
+    try { const exp = await cc.buy.staticCall(0n, deadline, { value: spend }); minTok = exp * (10000n - slip) / 10000n; }
+    catch (e) { throw new Error('could not quote this buy (try again / lower amount): ' + (e.shortMessage || e.message || e)); }
+    const tx = await cc.buy(minTok, deadline, { value: spend, ...gas });
     venue = 'curve'; hash = tx.hash; await waitBounded(tx);
   } else {
-    if (!curve) throw new Error('not a Robinfun token (no curve found)');
-    const tx = await new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet)
-      .swapExactETHForTokensSupportingFeeOnTransferTokens(0n, [CFG.weth, ca], wallet.address, deadline, { value: spend, ...gas });
+    // DEX tokens are fee-on-transfer (levy up to 10%) and getAmountsOut ignores
+    // that, so widen the tolerance a bit so a legit buy doesn't revert — still far
+    // tighter than the wide-open 0n that let a sandwich take everything.
+    const router = new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet);
+    let expTok = 0n;
+    try { const amts = await router.getAmountsOut(spend, [CFG.weth, ca]); expTok = amts[1]; }
+    catch (e) { throw new Error('could not quote this DEX buy (try again): ' + (e.shortMessage || e.message || e)); }
+    const dexSlip = slip + 1200n > 5000n ? 5000n : slip + 1200n;
+    const minTok = expTok > 0n ? expTok * (10000n - dexSlip) / 10000n : 0n;
+    if (minTok <= 0n) throw new Error('no liquidity / zero quote for this token');
+    const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(minTok, [CFG.weth, ca], wallet.address, deadline, { value: spend, ...gas });
     venue = 'dex'; hash = tx.hash; await waitBounded(tx);
   }
   const after = await tokenBalance(ca, wallet.address);
   const got = after > before ? after - before : 0n;
 
-  // Fee + referral (after a successful buy, so a failed buy never charges).
+  // Fee AFTER a successful buy (a failed buy never charges). Referral only if the
+  // fee actually confirmed.
   const feeHash = await _chargeFee(wallet, fee);
-  _creditReferral(u, fee);
+  if (feeHash) _creditReferral(u, fee);
 
   // Position accounting.
   const meta = await tokenMeta(ca);
@@ -304,27 +340,39 @@ async function sell(chatId, ca, pct) {
 
   const curve = await resolveCurve(ca);
   const grad = curve ? await isGraduated(curve) : true;
+  if (!curve) throw new Error('not a Robinfun token (no curve found)');
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const gas = await gasOverrides();
+  const slip = slipBps(u);
+  const spender = (curve && !grad) ? curve : CFG.dexRouter;
+  // Approve BEFORE snapshotting ethBefore, so the approval tx's gas doesn't get
+  // mis-counted as trade proceeds.
+  await ensureApprove(wallet, ca, spender, amount);
   const ethBefore = await ethBalance(wallet.address);
 
   let venue, hash;
   if (curve && !grad) {
-    await ensureApprove(wallet, ca, curve, amount);
-    const tx = await new ethers.Contract(curve, CURVE_ABI, wallet).sell(amount, 0n, deadline, gas);
+    const cc = new ethers.Contract(curve, CURVE_ABI, wallet);
+    let minEth;
+    try { const exp = await cc.sell.staticCall(amount, 0n, deadline); minEth = exp * (10000n - slip) / 10000n; }
+    catch (e) { throw new Error('could not quote this sell (try again): ' + (e.shortMessage || e.message || e)); }
+    const tx = await cc.sell(amount, minEth, deadline, gas);
     venue = 'curve'; hash = tx.hash; await waitBounded(tx);
   } else {
-    if (!curve) throw new Error('not a Robinfun token (no curve found)');
-    await ensureApprove(wallet, ca, CFG.dexRouter, amount);
-    const tx = await new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet)
-      .swapExactTokensForETHSupportingFeeOnTransferTokens(amount, 0n, [ca, CFG.weth], wallet.address, deadline, gas);
+    const router = new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet);
+    let expEth = 0n;
+    try { const amts = await router.getAmountsOut(amount, [ca, CFG.weth]); expEth = amts[1]; }
+    catch (e) { throw new Error('could not quote this DEX sell (try again): ' + (e.shortMessage || e.message || e)); }
+    const dexSlip = slip + 1200n > 5000n ? 5000n : slip + 1200n;
+    const minEth = expEth > 0n ? expEth * (10000n - dexSlip) / 10000n : 0n;
+    const tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(amount, minEth, [ca, CFG.weth], wallet.address, deadline, gas);
     venue = 'dex'; hash = tx.hash; await waitBounded(tx);
   }
   const ethAfter = await ethBalance(wallet.address);
   const proceeds = ethAfter > ethBefore ? ethAfter - ethBefore : 0n;   // net of gas, approximate
   const fee = (proceeds * BigInt(CFG.feeBps)) / 10000n;
   const feeHash = await _chargeFee(wallet, fee);
-  _creditReferral(u, fee);
+  if (feeHash) _creditReferral(u, fee);
 
   const key = ca.toLowerCase();
   const pos = u.positions[key];
@@ -340,18 +388,24 @@ async function sell(chatId, ca, pct) {
 
 // Send ETH out of the user's wallet to `to`. amount = human ETH, or 'max'.
 async function withdraw(chatId, to, amount) {
-  if (!/^0x[0-9a-fA-F]{40}$/.test(String(to || '').trim())) throw new Error('invalid destination address');
+  to = String(to || '').trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('invalid destination address');
+  if (/^0x0{40}$/i.test(to)) throw new Error('refusing to send to the zero address');
   const wallet = signerFor(chatId);
   const bal = await ethBalance(wallet.address);
   const gas = await gasOverrides();
-  const gp = gas.gasPrice || ethers.parseUnits('0.01', 'gwei');
-  const gasCost = gp * 21000n * 2n;   // headroom
+  let gp = gas.gasPrice;
+  if (!gp) { try { const fd = await provider().getFeeData(); gp = fd.gasPrice || fd.maxFeePerGas; } catch (_) {} }
+  if (!gp || gp <= 0n) gp = ethers.parseUnits('0.1', 'gwei');
+  const gasCost = gp * 21000n * 3n;   // headroom
   let value;
-  if (String(amount).toLowerCase() === 'max') { value = bal - gasCost; }
-  else { value = ethers.parseEther(String(amount)); }
+  if (String(amount).toLowerCase() === 'max') value = bal - gasCost;
+  else value = ethers.parseEther(String(amount));
   if (value <= 0n) throw new Error('nothing to withdraw (after gas)');
   if (value + gasCost > bal) throw new Error('amount exceeds balance after gas');
-  const tx = await wallet.sendTransaction({ to: to.trim(), value, ...gas });
+  // Send with the SAME gasPrice we reserved, so a 'max' withdraw can't fail from
+  // ethers auto-picking a higher fee than budgeted.
+  const tx = await wallet.sendTransaction({ to, value, gasPrice: gp });
   await waitBounded(tx);
   return { hash: tx.hash, sentEth: Number(ethers.formatEther(value)) };
 }

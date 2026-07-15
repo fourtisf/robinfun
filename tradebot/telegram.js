@@ -175,6 +175,14 @@ async function doSell(chatId, ca, pct) {
 let BOT_USERNAME = '';
 async function handleUpdate(up) {
   try {
+    // Custodial bot: DMs ONLY. In a group, chat.id is shared, so everyone would
+    // control one wallet and could resolve each other's pending actions. Refuse.
+    const chat = (up.message && up.message.chat) || (up.callback_query && up.callback_query.message && up.callback_query.message.chat);
+    if (chat && chat.type !== 'private') {
+      if (up.callback_query) await answer(up.callback_query.id, 'DM me privately — group use is disabled.');
+      else if (up.message) await send(chat.id, 'This is a custodial trading bot — please DM me privately. Group use is disabled for security.');
+      return;
+    }
     if (up.message) return await onMessage(up.message);
     if (up.callback_query) return await onCallback(up.callback_query);
   } catch (e) { console.error('handleUpdate', e.message); }
@@ -188,6 +196,8 @@ async function onMessage(m) {
   // Multi-step text input (withdraw address/amount, custom amounts, order prices).
   const p = pending.get(chatId);
   if (p && !text.startsWith('/')) { pending.delete(chatId); return await resolvePending(chatId, p, text); }
+  if (text.startsWith('/')) pending.delete(chatId);   // any command aborts a pending flow
+  if (text === '/cancel') return send(chatId, 'Cancelled.', mainMenu());
 
   if (text.startsWith('/start')) {
     const parts = text.split(/\s+/);
@@ -222,9 +232,16 @@ async function onCallback(q) {
   const chatId = q.message.chat.id;
   const mid = q.message.message_id;
   const data = q.data || '';
-  await answer(q.id);
   const [k, ca, arg] = data.split(':');
+  if (k !== 'oc') await answer(q.id);   // 'oc' answers itself with a toast below
 
+  if (data === 'wdcancel') { pending.delete(chatId); return send(chatId, 'Withdrawal cancelled.', mainMenu()); }
+  if (data === 'wdok') {
+    const pp = pending.get(chatId); pending.delete(chatId);
+    if (!pp || pp.action !== 'wd_confirm') return send(chatId, 'Nothing to confirm (expired). Start again with /withdraw.');
+    try { await send(chatId, '⏳ Sending…'); const r = await core.withdraw(chatId, pp.to, pp.amt); return send(chatId, `✅ Sent <b>${r.sentEth} ETH</b>\n${txLink(r.hash)}`); }
+    catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e))); }
+  }
   if (data === 'menu') return edit(chatId, mid, '🏠 <b>Robinfun Trade Bot</b>\n\nPaste a contract address to trade, or pick:', mainMenu());
   if (data === 'help') return edit(chatId, mid, helpText(), mainMenu());
   if (data === 'wal') { const w = await walletScreen(chatId); return edit(chatId, mid, w.text, w.kb); }
@@ -257,9 +274,9 @@ async function resolvePending(chatId, p, text) {
     if (p.action === 'snipe_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); const u = core.ensureUser(chatId); u.snipe.ethAmount = String(Number(t)); core.saveStore(); const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
     if (p.action === 'wd_addr') { if (!isCa(t)) return send(chatId, '❌ That is not a valid address. Try /withdraw again.'); pending.set(chatId, { action: 'wd_amt', to: t }); return send(chatId, `Amount of ETH to send to <code>${short(t)}</code> — a number, or <code>max</code>:`); }
     if (p.action === 'wd_amt') {
-      await send(chatId, '⏳ Sending…');
-      const r = await core.withdraw(chatId, p.to, t);
-      return send(chatId, `✅ Sent <b>${r.sentEth} ETH</b>\n${txLink(r.hash)}`);
+      if (!(String(t).toLowerCase() === 'max' || Number(t) > 0)) return send(chatId, 'Send a positive amount, or <code>max</code>.');
+      pending.set(chatId, { action: 'wd_confirm', to: p.to, amt: t });
+      return send(chatId, `⚠️ <b>Confirm withdrawal</b>\n\nSend <b>${esc(t)} ETH</b> to:\n<code>${esc(p.to)}</code>\n\nThis is <b>irreversible</b>. Double-check the address.`, rows([btn('✅ Yes, send', 'wdok'), btn('✖ Cancel', 'wdcancel')]));
     }
     if (p.action === 'tp_price' || p.action === 'sl_price') {
       const usdPrice = Number(t);
