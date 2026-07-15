@@ -139,8 +139,12 @@ async function scanCurve(curve, lo, hi, chunk) {
       curve.queryFilter(curve.filters.Buy(), from, to),
       curve.queryFilter(curve.filters.Sell(), from, to),
     ]); } catch (_) { continue; }
-    for (const e of buys)  { const a = e.args; const vE = Number(ethers.formatEther(a.virtualEthReserve)), vT = Number(ethers.formatUnits(a.virtualTokenReserve, 18)); events.push({ block: e.blockNumber, li: e.index, eth: Number(ethers.formatEther(a.grossEth)), priceEth: vT > 0 ? vE / vT : 0, buy: true }); }
-    for (const e of sells) { const a = e.args; const vE = Number(ethers.formatEther(a.virtualEthReserve)), vT = Number(ethers.formatUnits(a.virtualTokenReserve, 18)); events.push({ block: e.blockNumber, li: e.index, eth: Number(ethers.formatEther(a.netEth)), priceEth: vT > 0 ? vE / vT : 0, buy: false }); }
+    // rE/rT = post-trade virtual reserves — carried through so the aggregator can
+    // report curve LIQUIDITY to DexScreener/GeckoTerminal (they read reserves off
+    // swap events; without this every curve token shows Liquidity $0 even after we
+    // submit the feed). li = on-chain log index → stable swap ids (no dedup double-count).
+    for (const e of buys)  { const a = e.args; const vE = Number(ethers.formatEther(a.virtualEthReserve)), vT = Number(ethers.formatUnits(a.virtualTokenReserve, 18)); events.push({ block: e.blockNumber, li: e.index, eth: Number(ethers.formatEther(a.grossEth)), priceEth: vT > 0 ? vE / vT : 0, buy: true, rE: vE, rT: vT }); }
+    for (const e of sells) { const a = e.args; const vE = Number(ethers.formatEther(a.virtualEthReserve)), vT = Number(ethers.formatUnits(a.virtualTokenReserve, 18)); events.push({ block: e.blockNumber, li: e.index, eth: Number(ethers.formatEther(a.netEth)), priceEth: vT > 0 ? vE / vT : 0, buy: false, rE: vE, rT: vT }); }
   }
   return events;
 }
@@ -242,9 +246,10 @@ async function indexToken(rec, head, nowSec) {
     const ts = backfilling ? Math.max(0, nowSec - (head - e.block) * bt) : nowSec;
     s.volAllEth += e.eth;
     s.recent.push([Math.round(ts), e.eth]);
-    // Full trade row for the /trades + /ohlc + aggregator API: ts, block, price
-    // (ETH), eth volume, side.
-    s.trades.push({ t: Math.round(ts), blk: e.block, pe: e.priceEth || 0, e: e.eth, b: !!e.buy });
+    // Full trade row for the /trades + /ohlc + aggregator API: ts, block, log
+    // index (li → stable swap ids), price (ETH), eth volume, side, and post-trade
+    // reserves (rE/rT → curve liquidity for the DEX aggregator feed).
+    s.trades.push({ t: Math.round(ts), blk: e.block, li: (e.li == null ? 0 : e.li), pe: e.priceEth || 0, e: e.eth, b: !!e.buy, rE: e.rE || 0, rT: e.rT || 0 });
   }
   // keep trades sorted by time and bounded (memory) — last ~1500 or ~14 days
   s.trades.sort((a, b) => a.t - b.t);
@@ -367,15 +372,16 @@ function eventsInRange(fromBlock, toBlock, limit = 1000) {
     for (const x of s.trades) {
       if (x.blk >= from && x.blk <= to) {
         out.push({
-          address: ca, block: x.blk, ts: x.t,
+          address: ca, block: x.blk, ts: x.t, logIndex: (x.li == null ? 0 : x.li),
           priceNative: x.pe || 0, priceUsd: (x.pe || 0) * idx.ethUsd,
           amountEth: x.e || 0, amountUsd: (x.e || 0) * idx.ethUsd,
           eventType: x.b ? 'buy' : 'sell',
+          reserveEth: x.rE || 0, reserveTok: x.rT || 0,
         });
       }
     }
   }
-  out.sort((a, b) => a.block - b.block);
+  out.sort((a, b) => a.block - b.block || a.logIndex - b.logIndex);
   return out.slice(0, Math.min(5000, Math.max(1, Number(limit) || 1000)));
 }
 

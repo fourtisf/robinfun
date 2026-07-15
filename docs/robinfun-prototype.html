@@ -2639,13 +2639,23 @@ async function loadHoldings(addr){
   const myRun = ++_pfHoldRun;
   const wrap = document.getElementById('pf-held-list');
   const setT=(id,v)=>{ const e=document.getElementById(id); if(e) e.textContent=v; };
-  const real = TOKENS.filter(t=>realToken(t));
-  if(!real.length){ setT('pf-held','0'); setT('pf-held-cnt','0'); setT('pf-holdval','$0'); wrap.innerHTML='<div class="pf-empty">No on-chain coins to check yet.</div>'; return; }
   const ro = roProvider();
   const alive = ()=> myRun===_pfHoldRun && profileAddr()===addr;
-  // FAST PATH: one balanceOf per token, bounded concurrency, PROGRESSIVE render —
-  // paint each holding the instant its balance resolves, value it with the
-  // server-indexed price (t.price), no extra per-token currentPrice()/curveOf().
+  // Scan set from the AUTHORITATIVE on-chain sources: TOKENS UNION every coin this
+  // wallet launched (factory events), so a created+held coin missing from the
+  // board isn't dropped from "Coins held" (the "hold 2, shows 1" bug).
+  const scan = new Map();
+  for(const t of TOKENS.filter(realToken)){ if(t.ca) scan.set(t.ca.toLowerCase(), t); }
+  try{
+    const f = new ethers.Contract(FACTORY_ADDR, FACTORY_ABI, ro);
+    let evs;
+    try{ evs = await f.queryFilter(f.filters.TokenCreated(null,null,addr), 0, 'latest'); }
+    catch(_){ const head = await ro.getBlockNumber(); evs = await f.queryFilter(f.filters.TokenCreated(null,null,addr), Math.max(0,head-500000), head); }
+    for(const e of evs){ const ca=e.args && e.args.token; if(ca && !scan.has(ca.toLowerCase())){ const k=TOKENS.find(t=>t.ca&&t.ca.toLowerCase()===ca.toLowerCase()); scan.set(ca.toLowerCase(), k || { ca, name:e.args.name, ticker:e.args.symbol, price:0 }); } }
+  }catch(_){}
+  if(!alive()) return;
+  const real = [...scan.values()];
+  if(!real.length){ setT('pf-held','0'); setT('pf-held-cnt','0'); setT('pf-holdval','$0'); wrap.innerHTML='<div class="pf-empty">No on-chain coins to check yet.</div>'; return; }
   const rowHtml = (r)=>{
     const pct = (r.amt/SUPPLY*100);
     return '<div class="pf-row" onclick="openTokenRef(\''+r.t.ca+'\')">'+
@@ -2656,23 +2666,24 @@ async function loadHoldings(addr){
     '</div>';
   };
   const held = [];
-  let done = 0, totalVal = 0;
+  let done = 0, failed = 0, totalVal = 0;
   wrap.innerHTML = '<div class="pf-empty" id="pf-held-loading">Scanning your coins… 0/'+real.length+'</div>';
   const paint = ()=>{ held.sort((a,b)=>b.val-a.val); wrap.innerHTML = held.map(rowHtml).join(''); };
-  const withTimeout = (p, ms)=> Promise.race([p, new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')), ms))]);
+  const withTimeout = (p, ms)=> new Promise((res,rej)=>{ const to=setTimeout(()=>rej(new Error('timeout')), ms); p.then(v=>{clearTimeout(to);res(v);}, e=>{clearTimeout(to);rej(e);}); });
+  const readBal = (t)=> withTimeout(new ethers.Contract(t.ca, ERC20_ABI, ro).balanceOf(addr), 12000);
   const check = async (t)=>{
     if(!alive()) return;
-    try{
-      const balRaw = await withTimeout(new ethers.Contract(t.ca, ERC20_ABI, ro).balanceOf(addr), 12000);
-      if(!alive()) return;
-      const amt = Number(ethers.formatEther(balRaw));
-      if(amt > 1e-9){
-        const val = amt*(t.price||0);
-        held.push({ t, amt, val }); totalVal += val;
-        setT('pf-held', String(held.length)); setT('pf-held-cnt', String(held.length)); setT('pf-holdval', fmtUsdFull(totalVal));
-        paint();
-      }
-    }catch(_){}
+    let balRaw;
+    try{ balRaw = await readBal(t); }
+    catch(_){ if(!alive()) return; try{ balRaw = await readBal(t); }catch(_2){ failed++; done++; return; } }
+    if(!alive()) return;
+    const amt = Number(ethers.formatEther(balRaw));
+    if(amt > 1e-9){
+      const val = amt*(t.price||0);
+      held.push({ t, amt, val }); totalVal += val;
+      setT('pf-held', String(held.length)); setT('pf-held-cnt', String(held.length)); setT('pf-holdval', fmtUsdFull(totalVal));
+      paint();
+    }
     done++;
     const ld = document.getElementById('pf-held-loading'); if(ld && !held.length) ld.textContent = 'Scanning your coins… '+done+'/'+real.length;
   };
@@ -2681,8 +2692,9 @@ async function loadHoldings(addr){
   await Promise.all(Array.from({length:Math.min(POOL, real.length)}, worker));
   if(!alive()) return;
   setT('pf-held', String(held.length)); setT('pf-held-cnt', String(held.length)); setT('pf-holdval', fmtUsdFull(totalVal));
-  if(!held.length){ wrap.innerHTML='<div class="pf-empty">No coin balances yet — buy something on the board.</div>'; return; }
-  paint();
+  if(!held.length){ wrap.innerHTML='<div class="pf-empty">No coin balances yet — buy something on the board.</div>'; }
+  else paint();
+  if(failed){ const note=document.createElement('div'); note.className='pf-empty'; note.style.marginTop='8px'; note.textContent='Incomplete — '+failed+' coin'+(failed>1?'s':'')+" couldn't be checked (network). Reload to retry."; wrap.appendChild(note); }
 }
 async function loadCreatedCoins(addr){
   const wrap = document.getElementById('pf-created-list');
@@ -3897,6 +3909,7 @@ async function loadServerTokens(){
       restoreBoardCache();         // paint last-known mcap/volume INSTANTLY (survives refresh)
       renderGrid(); renderStats(); renderTape();
       refreshBoard();              // pull server-computed stats (instant); falls back to on-chain sweep
+      if(document.getElementById('page-profile').classList.contains('active')) renderProfile();
     }
     if(pendingTokenId){   // resolve a deep-linked /token/<ca-or-id> once tokens arrive
       const t = tokenByRef(pendingTokenId);
@@ -4139,10 +4152,16 @@ async function realLaunch(meta){
 
     toast('Launch sent — waiting for confirmation…','jade');
     const receipt = await sendTx(FACTORY_ADDR, factory.interface.encodeFunctionData('createToken', [params]), value, ()=>busy(true,'Deploying…'));
+    // status===0 → reverted (real failure); null → read-proxy timeout (pending,
+    // token may already be mined — never "Launch failed"); else → success.
+    if(receipt && receipt.status === 0){ throw new Error('Transaction reverted — token not created (deploy fee changed on-chain, or dev-buy slippage).'); }
     let ca=null;
-    for(const lg of receipt.logs){
-      try{ const p=factory.interface.parseLog(lg); if(p && p.name==='TokenCreated'){ ca=p.args.token; break; } }catch(_){}
+    if(receipt && receipt.logs){
+      for(const lg of receipt.logs){
+        try{ const p=factory.interface.parseLog(lg); if(p && p.name==='TokenCreated'){ ca=p.args.token; break; } }catch(_){}
+      }
     }
+    if(!receipt){ toast('Launch sent — confirmation is taking longer than usual. Your token may already be live; refresh in a moment.','jade'); }
     busy(false,'Deploy token');
 
     // Seed neutral — this is a REAL token, so every stat (mcap, volume,

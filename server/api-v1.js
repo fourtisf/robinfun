@@ -226,16 +226,20 @@ function dexEvents(store, stats, fromBlock, toBlock, limit) {
   const rows = stats.eventsInRange(fromBlock, toBlock, limit);
   // token ca -> pair id, cached per call
   const pairOf = {};
-  const events = rows.map((x, i) => {
+  const events = rows.map((x) => {
     const ca = x.address;
     if (!(ca in pairOf)) { const s = st.perToken[ca]; pairOf[ca] = (s && (s.pair || s.curve)) || ca; }
     const buy = x.eventType === 'buy';
+    // Stable swap coordinate = block + on-chain log index. Using the array
+    // position instead made the SAME swap get a different id per query window,
+    // so aggregators double-counted it. logIndex is invariant across windows.
+    const li = (x.logIndex == null ? 0 : x.logIndex);
     return {
       block: { blockNumber: x.block, blockTimestamp: x.ts },
       eventType: 'swap',
-      txnId: `${x.block}-${i}`,          // synthetic (no per-swap tx hash indexed)
-      txnIndex: i,
-      eventIndex: i,
+      txnId: `${x.block}-${li}`,
+      txnIndex: li,
+      eventIndex: li,
       maker: null,
       pairId: pairOf[ca],
       // Buy = ETH in / token out; Sell = token in / ETH out. amount1 is the ETH side.
@@ -245,7 +249,10 @@ function dexEvents(store, stats, fromBlock, toBlock, limit) {
       priceUsd: x.priceUsd,
       volumeUsd: x.amountUsd,
       side: x.eventType,
-      reserves: null,
+      // Post-trade reserves so GeckoTerminal/DexScreener can compute LIQUIDITY for
+      // curve tokens (asset0 = token, asset1 = NATIVE/ETH). Null when unknown
+      // (e.g. graduated DEX swaps, which don't carry per-event reserves yet).
+      reserves: (x.reserveTok || x.reserveEth) ? { asset0: x.reserveTok, asset1: x.reserveEth } : null,
     };
   });
   return { events };
