@@ -4255,7 +4255,7 @@ async function realLaunch(meta){
     });
     t.ca = ca || '';
     TOKENS.unshift(t); LAUNCH_COUNT++; lastDeployedId=t.id;
-    showLaunchReceipt(meta, t, { ca, txHash: tx.hash });
+    showLaunchReceipt(meta, t, { ca, txHash: (receipt && receipt.hash) || null });
     renderGrid(); renderStats(); clearLogo();
     apiCreateToken(t).then(rec=>{ t.srvId=rec.id; if(rec.logo){ t.logo=rec.logo; renderGrid(); if(currentTokenId===t.id) renderToken(); } }).catch(()=>{});
   }catch(err){
