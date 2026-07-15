@@ -681,6 +681,23 @@ input[type=range]::-moz-range-thumb{
 .wm-go{color:var(--cream-mute);font-family:var(--font-mono);font-size:14px}
 .wm-empty{color:var(--cream-dim);font-size:13px;margin-bottom:6px}
 .wm-foot{color:var(--cream-mute);font-size:11px;margin-top:15px;text-align:center}
+/* rich wallet grid (curated popular wallets) */
+.wm-modal{width:min(440px,100%)}
+.wm-sec{font-family:var(--font-mono);font-size:11px;letter-spacing:.16em;color:var(--cream-mute);margin:16px 0 11px}
+.wm-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+.wm-tile{position:relative;display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:9px;padding:17px 8px 14px;border:1px solid var(--rule-2);border-radius:15px;background:var(--ledger);cursor:pointer;transition:border-color .15s,background .15s,transform .05s}
+.wm-tile:hover{border-color:var(--gilt);background:var(--gilt-dim)}
+.wm-tile:active{transform:translateY(1px)}
+.wm-t-ico{width:46px;height:46px;border-radius:13px;object-fit:cover;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;font-size:18px;font-family:var(--font-display)}
+.wm-t-nm{font-size:12.5px;font-weight:600;color:var(--cream);text-align:center;line-height:1.15}
+.wm-install{font-size:11px;color:var(--gilt-bright);font-weight:700;letter-spacing:.02em}
+.wm-badge{position:absolute;top:9px;right:9px;width:17px;height:17px;border-radius:50%;background:#F6851B;color:#0B0F04;font-size:11px;font-weight:800;display:flex;align-items:center;justify-content:center}
+.wm-more{display:flex;align-items:center;gap:11px;width:100%;margin-top:13px;padding:15px 16px;border:1px solid var(--rule-2);border-radius:13px;background:var(--ledger);color:var(--cream);font-weight:600;font-size:14px;cursor:pointer;transition:border-color .15s}
+.wm-more:hover{border-color:var(--gilt)}
+.wm-more-ic{color:var(--gilt)}
+.wm-more-arrow{margin-left:auto;color:var(--cream-mute);font-size:18px}
+.wm-morelist{display:flex;flex-direction:column;gap:8px;margin-top:10px;max-height:280px;overflow-y:auto}
+@media(max-width:420px){.wm-grid{grid-template-columns:repeat(2,1fr)}}
 .levied{
   position:absolute;top:18px;right:52px;font-family:var(--font-display);font-weight:700;font-size:20px;
   letter-spacing:.1em;color:var(--gilt-bright);border:2.5px solid var(--gilt);border-radius:8px;padding:2px 12px;
@@ -1442,9 +1459,14 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 <div class="modal-back" id="walletModal" onclick="if(event.target===this)closeWalletModal()">
   <div class="modal wm-modal">
     <button class="modal-close" onclick="closeWalletModal()" aria-label="Close">✕</button>
-    <h3>Connect a wallet</h3>
-    <p class="m-sub">Pick your wallet to continue on Robinhood Chain.</p>
-    <div class="wm-list" id="wm-list"></div>
+    <h3>Connect Wallet</h3>
+    <p class="m-sub">Choose your wallet to continue on Robinhood Chain</p>
+    <div class="wm-sec">WALLET</div>
+    <div class="wm-grid" id="wm-grid"></div>
+    <button type="button" class="wm-more" id="wm-more-btn" aria-expanded="false" onclick="toggleMoreWallets()">
+      <span class="wm-more-ic">▦</span><span>More Wallets</span><span class="wm-more-arrow">›</span>
+    </button>
+    <div class="wm-morelist" id="wm-morelist" style="display:none"></div>
     <p class="wm-foot">Robinfun never moves funds without your approval in the wallet.</p>
   </div>
 </div>
@@ -1652,6 +1674,44 @@ function walletOptions(){
   return list;
 }
 
+/* ---- Curated popular wallets (shown as a grid, like the big launchpads) ----
+   Each is resolved to an injected provider via EIP-6963 rdns/name or a legacy
+   window flag. If found → connect; if not → "Install" opens the download page. */
+const WALLETCONNECT_PROJECT_ID = '';   // <- free at cloud.reown.com; enables the QR/mobile "WalletConnect" option
+const CURATED_WALLETS = [
+  { key:'binance',  name:'Binance Wallet', color:'#F3BA2F', letter:'B', match:'binance',
+    rdns:['com.binance.wallet','com.binance.web3wallet'], legacy:()=>window.binancew3w?.ethereum||window.BinanceChain||(window.ethereum?.isBinance?window.ethereum:null),
+    install:'https://www.binance.com/en/web3wallet' },
+  { key:'trust',    name:'Trust Wallet', color:'#3375BB', letter:'T', match:'trust',
+    rdns:['com.trustwallet.app'], legacy:()=>window.trustwallet||(window.ethereum?.isTrust||window.ethereum?.isTrustWallet?window.ethereum:null),
+    install:'https://trustwallet.com/download' },
+  { key:'okx',      name:'OKX Wallet', color:'#000000', letter:'O', match:'okx',
+    rdns:['com.okex.wallet','com.okx.wallet'], legacy:()=>window.okxwallet||(window.ethereum?.isOkxWallet||window.ethereum?.isOKExWallet?window.ethereum:null),
+    install:'https://www.okx.com/web3' },
+  { key:'safepal',  name:'SafePal', color:'#4A6CF7', letter:'S', match:'safepal',
+    rdns:['io.safepal','com.safepal'], legacy:()=>window.safepal||window.safepalProvider||(window.ethereum?.isSafePal?window.ethereum:null),
+    install:'https://www.safepal.com/download' },
+  { key:'tokenpocket', name:'TokenPocket', color:'#2980FE', letter:'TP', match:'tokenpocket',
+    rdns:['pro.tokenpocket'], legacy:()=>window.tokenpocket?.ethereum||(window.ethereum?.isTokenPocket?window.ethereum:null),
+    install:'https://www.tokenpocket.pro/en/download/app' },
+  { key:'metamask', name:'MetaMask', color:'#F6851B', letter:'M', match:'metamask',
+    rdns:['io.metamask','io.metamask.flask'], legacy:()=>(window.ethereum?.isMetaMask&&!window.ethereum?.isBraveWallet?window.ethereum:null),
+    install:'https://metamask.io/download/' },
+];
+// Extra wallets that show up under "More Wallets" if installed (via EIP-6963).
+const CURATED_KEYS = new Set(CURATED_WALLETS.flatMap(w=>w.rdns));
+
+// Resolve a curated wallet to a live provider (+icon), or null if not installed.
+function resolveWallet(w){
+  for(const d of discoveredWallets.values()){
+    const rdns=(d.info.rdns||'').toLowerCase(), nm=(d.info.name||'').toLowerCase();
+    if(w.rdns.some(r=>r.toLowerCase()===rdns) || (w.match && nm.includes(w.match)))
+      return { provider:d.provider, icon:d.info.icon };
+  }
+  try{ const p = w.legacy && w.legacy(); if(p) return { provider:p, icon:'' }; }catch(_){}
+  return null;
+}
+
 async function connectWallet(){
   // Already connected → the address button opens a small wallet menu.
   if(wallet){ openWalletMenu(); return; }
@@ -1674,28 +1734,59 @@ document.addEventListener('click',(e)=>{
   if(!menu.contains(e.target) && btn && !btn.contains(e.target)) closeWalletMenu();
 });
 
+function walletIcon(icon, w){
+  return icon
+    ? '<img class="wm-t-ico" src="'+icon+'" alt="">'
+    : '<span class="wm-t-ico" style="background:'+w.color+'">'+w.letter+'</span>';
+}
 function openWalletModal(){
-  wmList = walletOptions();
-  const box = document.getElementById('wm-list');
-  if(!wmList.length){
-    box.innerHTML =
-      '<p class="wm-empty">No EVM wallet detected. Install one, then reload:</p>'+
-      '<a class="wm-row" href="https://metamask.io/download/" target="_blank" rel="noopener noreferrer"><span class="wm-ico wm-ico-ph"></span><span class="wm-nm">Get MetaMask</span><span class="wm-go">↗</span></a>'+
-      '<a class="wm-row" href="https://rabby.io/" target="_blank" rel="noopener noreferrer"><span class="wm-ico wm-ico-ph"></span><span class="wm-nm">Get Rabby</span><span class="wm-go">↗</span></a>';
-  }else{
-    box.innerHTML = wmList.map((w,i)=>
-      '<button type="button" class="wm-row" onclick="connectWith('+i+')">'+
-        (w.info.icon?'<img class="wm-ico" src="'+w.info.icon+'" alt="">':'<span class="wm-ico wm-ico-ph"></span>')+
-        '<span class="wm-nm">'+esc(w.info.name)+'</span><span class="wm-go">→</span>'+
-      '</button>').join('');
-  }
+  // Grid of curated popular wallets (like the big launchpads).
+  const grid = document.getElementById('wm-grid');
+  grid.innerHTML = CURATED_WALLETS.map(w=>{
+    const r = resolveWallet(w);
+    const found = !!r;
+    const action = found ? "connectCurated('"+w.key+"')" : "installWallet('"+w.install+"')";
+    return '<button type="button" class="wm-tile'+(found?'':' wm-off')+'" onclick="'+action+'">'+
+      (found?'':'<span class="wm-badge">!</span>')+
+      walletIcon(found?r.icon:'', w)+
+      '<span class="wm-t-nm">'+w.name+'</span>'+
+      (found?'':'<span class="wm-install">Install</span>')+
+    '</button>';
+  }).join('');
+  // Reset "More Wallets" to collapsed each open.
+  const ml = document.getElementById('wm-morelist'); if(ml){ ml.style.display='none'; ml.innerHTML=''; }
+  const mb = document.getElementById('wm-more-btn'); if(mb) mb.setAttribute('aria-expanded','false');
   document.getElementById('walletModal').classList.add('open');
 }
+function toggleMoreWallets(){
+  const ml = document.getElementById('wm-morelist'), mb = document.getElementById('wm-more-btn');
+  if(!ml) return;
+  const open = ml.style.display!=='none';
+  if(open){ ml.style.display='none'; mb&&mb.setAttribute('aria-expanded','false'); return; }
+  // Build: WalletConnect (QR) first, then every EIP-6963 wallet not already in the grid.
+  let rows = '<button type="button" class="wm-row" onclick="connectWalletConnect()">'+
+      '<span class="wm-ico wm-ico-ph" style="background:#3b99fc;color:#fff;display:flex;align-items:center;justify-content:center;font-size:15px">◈</span>'+
+      '<span class="wm-nm">WalletConnect</span><span class="wm-go">Scan QR</span></button>';
+  const extra = [...discoveredWallets.values()].filter(d=>{
+    const rdns=(d.info.rdns||'').toLowerCase();
+    return !CURATED_KEYS.has(rdns) && !CURATED_WALLETS.some(w=>w.match && (d.info.name||'').toLowerCase().includes(w.match));
+  });
+  rows += extra.map(d=>{
+    const i = registerDiscovered(d);
+    return '<button type="button" class="wm-row" onclick="connectWith('+i+')">'+
+      (d.info.icon?'<img class="wm-ico" src="'+d.info.icon+'" alt="">':'<span class="wm-ico wm-ico-ph"></span>')+
+      '<span class="wm-nm">'+esc(d.info.name)+'</span><span class="wm-go">→</span></button>';
+  }).join('');
+  ml.innerHTML = rows;
+  ml.style.display='flex';
+  mb&&mb.setAttribute('aria-expanded','true');
+}
 function closeWalletModal(){ document.getElementById('walletModal').classList.remove('open'); }
+function installWallet(url){ window.open(url,'_blank','noopener'); }
 
-async function connectWith(i){
-  const entry = wmList[i]; if(!entry) return;
-  const provider = entry.provider;
+// Shared connect path for any injected provider.
+async function connectProvider(provider){
+  if(!provider){ toast('Wallet not found','seal'); return; }
   try{
     const accounts = await provider.request({method:'eth_requestAccounts'});
     if(!accounts || !accounts.length){ toast('Wallet connection cancelled','seal'); return; }
@@ -1706,6 +1797,39 @@ async function connectWith(i){
     closeWalletModal();
   }catch(err){
     toast('Connection failed'+(err && err.code===4001?' — you rejected the request':''),'seal');
+  }
+}
+async function connectCurated(key){
+  const w = CURATED_WALLETS.find(x=>x.key===key); if(!w) return;
+  const r = resolveWallet(w);
+  if(!r){ installWallet(w.install); return; }
+  await connectProvider(r.provider);
+}
+// Keep a stable index list for discovered wallets referenced in "More Wallets".
+function registerDiscovered(d){ let i = wmList.indexOf(d); if(i<0){ wmList.push(d); i = wmList.length-1; } return i; }
+async function connectWith(i){ const entry = wmList[i]; if(entry) await connectProvider(entry.provider); }
+
+// WalletConnect (QR / mobile). Needs a free project id from cloud.reown.com.
+async function connectWalletConnect(){
+  if(!WALLETCONNECT_PROJECT_ID){
+    toast('WalletConnect belum aktif — isi WALLETCONNECT_PROJECT_ID (gratis di cloud.reown.com)','seal');
+    return;
+  }
+  try{
+    toast('Membuka WalletConnect…','jade');
+    const { EthereumProvider } = await import('https://esm.sh/@walletconnect/ethereum-provider@2');
+    const cid = parseInt(CHAIN.chainId,16);
+    const wc = await EthereumProvider.init({
+      projectId: WALLETCONNECT_PROJECT_ID,
+      chains:[cid], optionalChains:[cid], showQrModal:true,
+      rpcMap:{ [cid]: CHAIN.rpcUrls[0] },
+      metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/favicon.ico'] },
+    });
+    await wc.connect();
+    const accs = wc.accounts || (await wc.request({method:'eth_accounts'}));
+    if(accs && accs.length){ activeProvider = wc; attachProviderEvents(wc); onWalletConnected(accs[0]); closeWalletModal(); }
+  }catch(err){
+    toast('WalletConnect gagal — coba lagi','seal');
   }
 }
 
