@@ -576,6 +576,7 @@ input[type=range]::-moz-range-thumb{
 .chart-tools .tf.active{color:var(--gilt-bright);border-color:var(--rule-2);background:var(--ink-2)}
 .chart-wrap{position:relative;width:100%;height:360px}
 #chart{width:100%;height:100%;display:block}
+@media(max-width:760px){.chart-wrap{height:240px}}
 .stat-strip{display:grid;grid-template-columns:repeat(auto-fit,minmax(92px,1fr));gap:1px;background:var(--rule);border-top:1px solid var(--rule);margin-top:14px}
 .stat-cell{background:var(--ledger);padding:11px 13px}
 .stat-cell .k{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--cream-mute)}
@@ -1932,6 +1933,8 @@ function onWalletConnected(addr){
   toast('Wallet connected — <b>'+shortAddr(addr)+'</b>','jade');
   seedMyTokens();
   renderTreasury();
+  // If a token page is open, sync its balance + state to the just-connected wallet.
+  if(currentTokenId){ const t=tok(); if(t && realToken(t)){ loadBalances(t); refreshReal(t, true); } }
   if(document.getElementById('page-stake').classList.contains('active')) renderStake();
   if(document.getElementById('page-profile').classList.contains('active')){ PROFILE_ADDR=null; renderProfile(); }
 }
@@ -2752,17 +2755,18 @@ function renderToken(fresh){
       : '<span class="gold">◈ on the bonding curve</span>';
   const lc = document.getElementById('tk-links'); if(lc) lc.innerHTML = tokenLinks(t);
   document.getElementById('tk-price').textContent = fmtPrice(t.price);
-  // For a real token whose chain data hasn't loaded yet, show placeholders
-  // instead of the seed values — never fake numbers. refreshReal() fills them.
-  const pending = realToken(t) && !t._loaded;
+  // Show the already-known market data (from the server on-chain indexer — real,
+  // not simulated) IMMEDIATELY so the page never looks stuck; refreshReal() then
+  // overwrites it with the fresh direct-from-chain read. Blank only what we
+  // genuinely don't have yet.
   const c = document.getElementById('tk-chg');
-  c.textContent = pending ? '— · 24h' : (t.chg24>=0?'+':'')+t.chg24.toFixed(1)+'% · 24h';
-  c.className = 'tok-chg '+(pending?'':(t.chg24>=0?'up':'down'));
-  document.getElementById('ts-mcap').textContent = pending ? '—' : fmtUsd(t.mcap);
-  document.getElementById('ts-vol').textContent = pending ? '—' : fmtUsd(t.vol24);
-  document.getElementById('ts-volall').textContent = pending ? '—' : fmtUsd(t.volAll!=null ? t.volAll : (t.vol24||0));
-  document.getElementById('ts-holders').textContent = pending ? '—' : t.holders.toLocaleString();
-  document.getElementById('ts-earned').textContent = pending ? '—' : rewardStr(t.earnedEth);
+  c.textContent = (t.chg24!=null) ? ((t.chg24>=0?'+':'')+t.chg24.toFixed(1)+'% · 24h') : '— · 24h';
+  c.className = 'tok-chg '+((t.chg24==null)?'':(t.chg24>=0?'up':'down'));
+  document.getElementById('ts-mcap').textContent = t.mcap ? fmtUsd(t.mcap) : '—';
+  document.getElementById('ts-vol').textContent = (t.vol24!=null) ? fmtUsd(t.vol24) : '—';
+  document.getElementById('ts-volall').textContent = (t.volAll!=null) ? fmtUsd(t.volAll) : ((t.vol24!=null) ? fmtUsd(t.vol24) : '—');
+  document.getElementById('ts-holders').textContent = t.holders ? t.holders.toLocaleString() : '—';
+  document.getElementById('ts-earned').textContent = (t.earnedEth!=null) ? rewardStr(t.earnedEth) : '—';
   /* curve / graduation progress — 3 phases:
      bonding → % of curve toward Uniswap · listed → LP toward GRAD_LP_ETH · graduated */
   const fill = document.getElementById('tk-fill');
@@ -2789,7 +2793,7 @@ function renderToken(fresh){
   document.getElementById('li-decay').textContent = t.decay? 'halves to '+(t.buyTax/2)+'/'+(t.sellTax/2) : 'unchanged';
   document.getElementById('li-ren').textContent = t.renounced? 'renounced — locked' : 'lower-only';
   document.getElementById('li-dest').innerHTML = destHtml(t);
-  document.getElementById('li-earned').textContent = pending ? '—' : rewardStr(t.earnedEth);
+  document.getElementById('li-earned').textContent = (t.earnedEth!=null) ? rewardStr(t.earnedEth) : '—';
   document.getElementById('fee-note').textContent = side==='buy'
     ? (t.buyTax>0? t.buyTax+'% buy fee → creator' : 'no buy fee')
     : (t.sellTax>0? t.sellTax+'% sell fee → creator' : 'no sell fee');
@@ -2989,6 +2993,7 @@ function drawChartCanvas(t){
    signed by the user's wallet. Demo tokens keep the simulation.
    ================================================================ */
 let realPoll = null;
+let LOG_CHUNK = 0;   // widest eth_getLogs window this RPC accepts — probed once, reused for every token
 async function loadCurveState(t){
   if(!realToken(t)) return false;
   try{
@@ -3019,21 +3024,25 @@ async function loadCurveState(t){
     return true;
   }catch(e){ console.error('loadCurveState', e); t._readErr = (e&&(e.shortMessage||e.message))||'chain read failed'; return false; }
 }
+// Read the connected wallet's balances. ETH and token are read SEPARATELY so a
+// slow/failed token read never hides the ETH balance, and this runs independently
+// of the curve-state read (so "Balance:" fills in even while the chart loads).
 async function loadBalances(t){
-  try{
-    if(!realToken(t) || !wallet) return;
-    const ro = roProvider();
-    const [ethBal, tokBal] = await Promise.all([
-      ro.getBalance(wallet),
-      new ethers.Contract(t.ca, ERC20_ABI, ro).balanceOf(wallet)
-    ]);
-    t._ethBal = Number(ethers.formatEther(ethBal));
-    t._tokBal = Number(ethers.formatUnits(tokBal, 18));
-    if(currentTokenId===t.id){
-      const bal = document.getElementById('amt-bal');
-      if(bal) bal.textContent = side==='buy' ? t._ethBal.toFixed(4)+' ETH' : fmtNum(t._tokBal)+' $'+t.ticker;
-    }
-  }catch(e){ console.error('loadBalances', e); }
+  if(!wallet || !t || !t.ca) return;
+  const ro = roProvider();
+  const setBal = () => {
+    if(currentTokenId!==t.id) return;
+    const bal = document.getElementById('amt-bal'); if(!bal) return;
+    bal.textContent = side==='buy'
+      ? ((t._ethBal!=null?t._ethBal:0).toFixed(4)+' ETH')
+      : (fmtNum(t._tokBal||0)+' $'+t.ticker);
+  };
+  // ETH balance — the one that matters for buying; never let it get stuck at 0.
+  try{ t._ethBal = Number(ethers.formatEther(await ro.getBalance(wallet))); setBal(); }
+  catch(e){ console.error('loadBalances eth', e); }
+  // Token balance — separate try so an ETH-only wallet still shows its ETH.
+  try{ t._tokBal = Number(ethers.formatUnits(await new ethers.Contract(t.ca, ERC20_ABI, ro).balanceOf(wallet), 18)); setBal(); }
+  catch(e){ console.error('loadBalances tok', e); }
 }
 async function loadCurveTrades(t){
   try{
@@ -3042,13 +3051,12 @@ async function loadCurveTrades(t){
     const head = await ro.getBlockNumber();
     // Probe (once) the widest eth_getLogs window this RPC will accept. Some nodes
     // cap the block span and reject anything wider; others take a huge range.
-    if(!t._logChunk){
+    if(!LOG_CHUNK){
       for(const c of [90000, 45000, 18000, 7000, 2500, 800]){
-        try{ await curve.queryFilter(curve.filters.Buy(), Math.max(0, head-c), head); t._logChunk = c; break; }catch(_){}
+        try{ await curve.queryFilter(curve.filters.Buy(), Math.max(0, head-c), head); LOG_CHUNK = c; break; }catch(_){}
       }
     }
-    const chunk = t._logChunk;
-    if(!chunk){ console.error('loadCurveTrades: getLogs rejected at every window'); return; }
+    const chunk = LOG_CHUNK || 800;   // reused across tokens — only the first probes
     // Raw-log cache keyed "block:index:side" so repeat polls dedupe and stay cheap.
     if(!t._rawCurve) t._rawCurve = new Map();
     const add = (e,buy)=> t._rawCurve.set(e.blockNumber+':'+e.index+':'+(buy?'b':'s'), {a:e.args, block:e.blockNumber, li:e.index, buy});
@@ -3204,6 +3212,7 @@ function buildCandlesFromTrades(t){
   t.candles = out.slice(-140);   // keep the most recent
 }
 async function refreshReal(t, withTrades){
+  loadBalances(t);            // fire-and-forget — show the wallet balance ASAP, even if the chart read is slow
   const ok = await loadCurveState(t);
   if(currentTokenId!==t.id) return;
   if(!ok){
@@ -3301,8 +3310,8 @@ async function loadDexTrades(t){
     // window, then PAGE BACKWARD merging each window into a persistent cache so
     // repeat polls stay cheap. Don't stop on the first non-throwing but too-
     // recent span — that would miss older swaps → $0 volume.
-    let chunk = t._logChunk;
-    if(!chunk){ for(const c of [90000,45000,18000,7000,2500,800]){ try{ await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-c), head); chunk=c; break; }catch(_){} } }
+    let chunk = LOG_CHUNK;
+    if(!chunk){ for(const c of [90000,45000,18000,7000,2500,800]){ try{ await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-c), head); chunk=c; LOG_CHUNK=c; break; }catch(_){} } }
     if(!chunk) return [];
     if(!t._rawDex) t._rawDex = new Map();
     const addSwap = e => t._rawDex.set(e.blockNumber+':'+e.index, e);
