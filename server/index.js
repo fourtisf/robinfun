@@ -168,11 +168,15 @@ app.get('/api/v1/tokens/:ca/ohlc', publicCors, (req, res) => {
   res.json(t);
 });
 
-// ---- OpenAPI spec + interactive docs (Swagger UI) ----
+// ---- OpenAPI spec + interactive docs (Swagger UI) + integration guide ----
 app.get('/api/v1/openapi.json', publicCors, (req, res) => res.json(apiV1.openapi(apiBase(req))));
 app.get('/api/v1/docs', (req, res) => {
   res.set('Cache-Control', 'public, max-age=300');
   res.type('html').send(apiV1.docsHtml(apiBase(req)));
+});
+app.get('/api/v1/guide', (req, res) => {
+  res.set('Cache-Control', 'public, max-age=300');
+  res.type('html').send(apiV1.guideHtml(apiBase(req)));
 });
 
 // ---- Aggregator (GeckoTerminal / DexScreener) endpoints ----

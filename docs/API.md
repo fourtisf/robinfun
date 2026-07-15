@@ -4,6 +4,7 @@ A read-only HTTP API that exposes every token launched on Robinfun with live
 market data (price, market cap, volume, status). Partners use it to **auto-list**
 Robinfun tokens, power aggregators/trackers, or feed wallets and bots.
 
+- **New here?** Start with the step-by-step **[integration guide](https://robinfun.io/api/v1/guide)** (copy-paste examples) or the interactive **[API reference](https://robinfun.io/api/v1/docs)**.
 - **Base URL:** `https://robinfun.io/api/v1`
 - **Auth:** none — public, read-only. `CORS` is open (`Access-Control-Allow-Origin: *`), so it works from a browser too.
 - **Format:** JSON. All money fields are USD unless the name ends in `Eth`/`Native`.
