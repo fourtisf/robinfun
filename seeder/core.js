@@ -116,6 +116,7 @@ const ERC20_ABI = [
 const FEEROUTER_ABI = [
   'function creatorOwed(address token) view returns (uint256)',            // unclaimed, per token
   'function creatorEarnedLifetime(address token) view returns (uint256)',  // lifetime (claimed + unclaimed)
+  'function protocolPending() view returns (uint256)',                     // protocol revenue flushable → treasury
   'function claim(address token)',                                          // claim one token (caller must be creator)
   'function claimMany(address[] tokens)',                                   // claim many in one tx
 ];
@@ -503,6 +504,17 @@ async function creatorEarnings(provider, cas) {
   return out;
 }
 
+// Protocol revenue currently flushable to the treasury (owner's wallet). ETH.
+async function protocolPending(provider) {
+  try { return Number(ethers.formatEther(await new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider).protocolPending())); }
+  catch (_) { return 0; }
+}
+// Token balance an address holds (float), 0 on error.
+async function tokenBalance(provider, ca, addr) {
+  try { return Number(ethers.formatUnits(await new ethers.Contract(ca, ERC20_ABI, provider).balanceOf(addr), 18)); }
+  catch (_) { return 0; }
+}
+
 // Claim creator levy fees. `launched` = [{ ca, creator }]. Only tokens whose
 // creator is one of OUR `wallets` (and that have a positive owed balance) are
 // claimed, grouped per creator wallet via claimMany (one tx each). The ETH lands
@@ -543,5 +555,5 @@ module.exports = {
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
   resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
-  creatorEarnings, claimCreator,
+  creatorEarnings, claimCreator, protocolPending, tokenBalance,
 };

@@ -19,7 +19,7 @@ const {
   ethers, CFG, FACTORY_ABI, makeProvider, loadOrCreateWallets,
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
-  creatorEarnings, claimCreator,
+  creatorEarnings, claimCreator, protocolPending, tokenBalance,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -37,6 +37,8 @@ const state = {
   last: [],
   cfg: { devBuyEth: CFG.devBuyEth, intervalSec: CFG.intervalSec, levyBps: CFG.levyBps, maxTokens: CFG.maxTokens },
   l1seen: {}, // per-wallet last-seen L1 balance (decimal string) — survives restarts
+  deposited: 0, // total ETH the user says they funded the bot with (for /pnl loss calc)
+  spent: 0,     // cumulative ETH spent by the bot (deploy + buys) — auto-tracked
 };
 function loadState() {
   try {
@@ -116,6 +118,8 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 <b>/claim</b> — 💸 klaim SEMUA reward creator ke wallet
 <b>/autosale on|off</b> — 🔻 auto-jual holding di SEMUA token berkala
 <b>/dumpall</b> [%] — 🔻 jual SEKARANG semua token dari semua wallet
+<b>/pnl</b> — 📊 rugi/untung dari deposit (semua token history)
+<b>/setdeposit</b> 1.0 — 📥 catat total ETH yang kamu setor
 <b>/go</b> · <b>/stop</b> — mulai / berhenti auto-launch
 <b>/status</b> — status seeder + saldo
 <b>/stats</b> — jumlah token dibuat + total market cap
@@ -444,6 +448,50 @@ async function doAutoSale(chatId, args) {
     ? `✅ Auto-sale <b>ON</b> — tiap <b>${CFG.autoSaleEverySec}s</b> bot jual <b>${CFG.autoSalePct}%</b> holding di SEMUA token yang sudah dibuat. (/autosale off untuk stop)`
     : `🛑 Auto-sale <b>OFF</b>.`);
 }
+// ---- P&L: how much of the deposit is left / lost across all launched tokens ----
+async function doSetDeposit(chatId, args) {
+  const v = Number(args[0]);
+  if (!(v >= 0)) { await send(chatId, 'Format: <code>/setdeposit 1.0</code> — catat total ETH yang kamu setor ke bot (buat hitung rugi di /pnl).'); return; }
+  state.deposited = v; saveState();
+  await send(chatId, `✅ Deposit tercatat: <b>${v} ETH</b>. Ketik <code>/pnl</code> untuk lihat rugi/untung.`);
+}
+async function doPnl(chatId, args) {
+  if (args[0] !== undefined && Number(args[0]) >= 0) { state.deposited = Number(args[0]); saveState(); }
+  await send(chatId, '📊 Menghitung P&L… (baca saldo + fee on-chain)');
+  const usd = await ethUsd();
+  const u = (e) => usd ? ` ($${(e * usd).toFixed(2)})` : '';
+  const dep = Number(state.deposited) || 0;
+  // 1) live wallet ETH (Robinhood Chain), 2) creator fees claimable, 3) protocol pending → treasury
+  const bals = await balances();
+  const walletEth = bals.reduce((s, b) => s + Number(ethers.formatEther(b)), 0);
+  const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
+  const earn = await creatorEarnings(provider, cas);
+  const claimEth = earn.reduce((s, e) => s + (e.owed || 0), 0);
+  const protoEth = await protocolPending(provider);
+  // held tokens still un-sold (parallel scan; value not quoted — sell via /dumpall to realise)
+  const heldFlags = await Promise.all(cas.map(async (ca) => {
+    for (const w of wallets) { if (await tokenBalance(provider, ca, w.address) > 0) return true; }
+    return false;
+  }));
+  const held = heldFlags.filter(Boolean).length;
+  const recoverable = walletEth + claimEth + protoEth;
+  const pnl = recoverable - dep;
+  const pct = dep > 0 ? (pnl / dep * 100) : 0;
+  const spent = Number(state.spent) || 0;
+  await send(chatId,
+    `📊 <b>P&L Bot</b>\n` +
+    `📥 Deposit tercatat: <b>${dep.toFixed(4)} ETH</b>${u(dep)}  <i>(/setdeposit)</i>\n` +
+    `━━━━━━━━━━━━━\n` +
+    `👛 Saldo wallet (RH): <b>${walletEth.toFixed(4)} ETH</b>${u(walletEth)}\n` +
+    `💸 Fee creator claimable: <b>${claimEth.toFixed(4)} ETH</b>${u(claimEth)}  <i>(/claim)</i>\n` +
+    `🏦 Fee protokol → treasury: <b>${protoEth.toFixed(4)} ETH</b>${u(protoEth)}  <i>(flush di admin)</i>\n` +
+    `🪙 Token belum dijual: <b>${held}</b> posisi${held ? '  <i>(/dumpall untuk realisasi)</i>' : ''}\n` +
+    `━━━━━━━━━━━━━\n` +
+    `💰 Total bisa ditarik: <b>${recoverable.toFixed(4)} ETH</b>${u(recoverable)}\n` +
+    `${pnl >= 0 ? '📈' : '📉'} <b>P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} ETH</b>${u(Math.abs(pnl))}${dep > 0 ? ` · <b>${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</b>` : ''}\n` +
+    (pnl < 0 ? `\n⚠️ Selisih rugi = ETH yang <b>terkunci di LP graduated</b> (burned) + slippage jual. Tidak bisa balik.\n` : '') +
+    `\n<i>Bot mencatat total belanja sejak update ini: ${spent.toFixed(4)} ETH${u(spent)}. Set deposit real: /setdeposit &lt;eth&gt;.</i>`);
+}
 
 // ---------------- command dispatch (shared by text + buttons) ----------------
 async function dispatch(chatId, cmd, args) {
@@ -495,6 +543,8 @@ async function dispatch(chatId, cmd, args) {
     case '/autosalepct': await setCfg(chatId, 'autoSalePct', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 1 && Number(v) <= 100, 'auto-sale (%)'); break;
     case '/autosaleevery': await setCfg(chatId, 'autoSaleEverySec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 30, 'auto-sale interval (detik)'); break;
     case '/dumpall': doDumpAll(chatId, args).catch((e) => send(chatId, 'Dump error: ' + esc(e.message || String(e)))); break;
+    case '/pnl': case '/profit': doPnl(chatId, args).catch((e) => send(chatId, 'P&L error: ' + esc(e.message || String(e)))); break;
+    case '/setdeposit': doSetDeposit(chatId, args).catch((e) => send(chatId, 'Deposit error: ' + esc(e.message || String(e)))); break;
     case '/sweep': {
       const dest = args[0];
       if (!dest || !ethers.isAddress(dest)) { await send(chatId, 'Format: <code>/sweep 0xTujuan</code>'); break; }
@@ -596,6 +646,7 @@ async function launchLoop() {
       const refunded = Math.max(0, devIntended - devBuyEth);
       const gasEth = Number(ethers.formatEther(r.gasCostWei || 0n)), deployEth = Number(ethers.formatEther(deployFee));
       const totalEth = deployEth + devBuyEth + gasEth + peerEth;
+      state.spent = (Number(state.spent) || 0) + totalEth;   // cumulative spend for /pnl
       const devLine = refunded > 1e-6
         ? `💰 dev-buy <b>${devBuyEth.toFixed(6)} ETH</b>${u(devBuyEth)}  <i>(diminta ${devIntended} — sisa ${refunded.toFixed(6)} ETH refund, kena cap graduasi)</i>`
         : `💰 dev-buy <b>${devBuyEth.toFixed(6)} ETH</b>${u(devBuyEth)}`;
@@ -720,6 +771,8 @@ async function main() {
     { command: 'autosalepct', description: 'Persen auto-sale: /autosalepct 100' },
     { command: 'autosaleevery', description: 'Interval auto-sale (detik): /autosaleevery 600' },
     { command: 'dumpall', description: 'Jual SEKARANG semua token: /dumpall 100' },
+    { command: 'pnl', description: 'Rugi/untung dari deposit (semua token)' },
+    { command: 'setdeposit', description: 'Catat total ETH disetor: /setdeposit 1.0' },
     { command: 'go', description: 'Mulai auto-launch token' },
     { command: 'stop', description: 'Berhenti launch' },
     { command: 'status', description: 'Status seeder & saldo' },
