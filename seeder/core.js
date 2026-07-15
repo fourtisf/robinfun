@@ -50,6 +50,18 @@ const CFG = {
   autoSaleOn: /^(1|true|yes|on)$/i.test(process.env.AUTO_SALE_ON || ''),
   autoSaleEverySec: Math.max(30, Number(process.env.AUTO_SALE_EVERY_SEC || 600)),
   autoSalePct: Math.min(100, Math.max(1, Number(process.env.AUTO_SALE_PCT || 100))),
+  // REACT-TO-BUY (market-maker / seed recovery): when a REAL buyer (not one of our
+  // wallets) buys ≥ reactMinUsd of a token we hold, sell a CAPPED slice to recover
+  // seed capital + take small profit. Capped (reactSellPct per hit, reactMaxCount
+  // hits per token) so it never fully dumps / rugs a real holder. Off by default.
+  reactOn: /^(1|true|yes|on)$/i.test(process.env.REACT_ON || ''),
+  reactEverySec: Math.max(20, Number(process.env.REACT_EVERY_SEC || 45)),
+  reactMinUsd: Math.max(1, Number(process.env.REACT_MIN_USD || 15)),
+  reactSellPct: Math.min(100, Math.max(1, Number(process.env.REACT_SELL_PCT || 25))),
+  reactMaxCount: Math.max(1, Number(process.env.REACT_MAX_COUNT || 3)),
+  // Gas: target gas price (gwei). The bot pays min(this, network) so it never
+  // OVERpays; if the chain's floor is higher the tx may sit — raise this then.
+  gasGwei: Math.max(0, Number(process.env.GAS_GWEI || 0.01)),
   // Random buy sizes: when a MAX is set, each buy is a random ETH amount in
   // [MIN, MAX] (organic-looking volume) instead of the fixed amount above.
   // Option A defaults: random dev-buy 0.02–0.08 ETH and peer-buy 0.01–0.04 ETH —
@@ -108,6 +120,9 @@ const CURVE_ABI = [
   'function graduationProgress() view returns (uint256 collected, uint256 target)',
   'function buy(uint256 minTokensOut, uint256 deadline) payable returns (uint256)',
   'function sell(uint256 tokensIn, uint256 minEthOut, uint256 deadline) returns (uint256)',
+  // Events — lets the bot detect who is buying (react to REAL, non-bot buyers).
+  'event Buy(address indexed trader, address indexed recipient, uint256 grossEth, uint256 curveFeeEth, uint256 levyEth, uint256 netEth, uint256 tokensOut, uint256 virtualEthReserve, uint256 virtualTokenReserve)',
+  'event Sell(address indexed trader, uint256 tokensIn, uint256 grossEth, uint256 curveFeeEth, uint256 levyEth, uint256 netEth, uint256 virtualEthReserve, uint256 virtualTokenReserve)',
 ];
 
 const ROUTER_ABI = [
@@ -402,10 +417,21 @@ async function isGraduated(provider, curveAddr) {
 async function waitBounded(tx) { // never hang the bot on a stuck tx
   try { return await tx.wait(1, 180000); } catch (e) { if (e && e.code === 'TIMEOUT') return null; throw e; }
 }
+// Cheap-gas overrides: pay min(configured gwei, network) so we never OVERpay,
+// but also never sit below the network floor. gasGwei=0 → let ethers decide.
+// If the chain's floor is above the cap the tx may sit → raise GAS_GWEI.
+async function gasOverrides(provider) {
+  if (!(CFG.gasGwei > 0)) return {};
+  const cap = ethers.parseUnits(String(CFG.gasGwei), 'gwei');
+  let net = 0n;
+  try { const fd = await provider.getFeeData(); net = fd.gasPrice || fd.maxFeePerGas || 0n; } catch (_) {}
+  const gasPrice = (net > 0n && net < cap) ? net : cap;   // min(net, cap), floored at cap when net unknown
+  return { gasPrice };
+}
 async function ensureApprove(wallet, ca, spender, amount) {
   const erc = new ethers.Contract(ca, ERC20_ABI, wallet);
   const cur = await erc.allowance(wallet.address, spender).catch(() => 0n);
-  if (cur < amount) { const tx = await erc.approve(spender, ethers.MaxUint256); await tx.wait(); }
+  if (cur < amount) { const gas = await gasOverrides(wallet.provider || null); const tx = await erc.approve(spender, ethers.MaxUint256, gas); await tx.wait(); }
 }
 
 // Buy `ethAmount` ETH of token `ca` from `wallet`. Curve buy while bonding,
@@ -416,14 +442,15 @@ async function ensureApprove(wallet, ca, spender, amount) {
 async function botBuy(wallet, provider, ca, ethAmount) {
   const value = ethers.parseEther(String(ethAmount));
   const deadline = Math.floor(Date.now() / 1000) + 600;
+  const gas = await gasOverrides(provider);
   const curveAddr = await resolveCurve(provider, ca);
   const grad = curveAddr ? await isGraduated(provider, curveAddr) : true;
   if (curveAddr && !grad) {
-    const tx = await new ethers.Contract(curveAddr, CURVE_ABI, wallet).buy(0n, deadline, { value });
+    const tx = await new ethers.Contract(curveAddr, CURVE_ABI, wallet).buy(0n, deadline, { value, ...gas });
     return { ok: true, venue: 'curve', hash: tx.hash, pending: !(await waitBounded(tx)) };
   }
   const tx = await new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet)
-    .swapExactETHForTokensSupportingFeeOnTransferTokens(0n, [CFG.weth, ca], wallet.address, deadline, { value });
+    .swapExactETHForTokensSupportingFeeOnTransferTokens(0n, [CFG.weth, ca], wallet.address, deadline, { value, ...gas });
   return { ok: true, venue: 'dex', hash: tx.hash, pending: !(await waitBounded(tx)) };
 }
 
@@ -435,16 +462,17 @@ async function botSell(wallet, provider, ca, pct) {
   const amount = (bal * BigInt(p)) / 100n;
   if (amount <= 0n) return { skip: true, reason: 'saldo token 0' };
   const deadline = Math.floor(Date.now() / 1000) + 600;
+  const gas = await gasOverrides(provider);
   const curveAddr = await resolveCurve(provider, ca);
   const grad = curveAddr ? await isGraduated(provider, curveAddr) : true;
   if (curveAddr && !grad) {
     await ensureApprove(wallet, ca, curveAddr, amount);
-    const tx = await new ethers.Contract(curveAddr, CURVE_ABI, wallet).sell(amount, 0n, deadline);
+    const tx = await new ethers.Contract(curveAddr, CURVE_ABI, wallet).sell(amount, 0n, deadline, gas);
     return { ok: true, venue: 'curve', sold: amount, hash: tx.hash, pending: !(await waitBounded(tx)) };
   }
   await ensureApprove(wallet, ca, CFG.dexRouter, amount);
   const tx = await new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet)
-    .swapExactTokensForETHSupportingFeeOnTransferTokens(amount, 0n, [ca, CFG.weth], wallet.address, deadline);
+    .swapExactTokensForETHSupportingFeeOnTransferTokens(amount, 0n, [ca, CFG.weth], wallet.address, deadline, gas);
   return { ok: true, venue: 'dex', sold: amount, hash: tx.hash, pending: !(await waitBounded(tx)) };
 }
 
@@ -495,6 +523,63 @@ async function sellAllHoldings(provider, wallets, cas, pct) {
     }
   }
   return out;
+}
+
+// REACT-TO-BUY (market-maker / seed recovery). For each BONDING token we hold,
+// scan new Buy events; if REAL (non-bot) buyers bought ≥ reactMinUsd since the
+// last check, sell reactSellPct% from the wallet with the biggest bag — capped
+// at reactMaxCount hits/token so it recovers seed capital + small profit WITHOUT
+// fully dumping (a real holder never gets rugged; we always leave liquidity).
+// `st` is a persisted map { [ca]: { last: block, hits: n } } (mutated in place).
+// Returns { actions:[{ca,wallet,pct,realUsd,hits,hash}|{ca,error}], scanned }.
+async function reactToBuys(provider, wallets, st) {
+  st = st || {};
+  const mine = new Set(wallets.map((w) => w.address.toLowerCase()));
+  const owned = await ownedTokens(provider, wallets);
+  if (!owned.length) return { actions: [], scanned: 0 };
+  let head = 0;
+  try { head = await provider.getBlockNumber(); } catch (_) { return { actions: [], scanned: 0 }; }
+  const usd = await ethUsd();
+  const minEth = usd > 0 ? CFG.reactMinUsd / usd : 0.01;
+  const actions = [];
+  for (const { ca } of owned) {
+    // First time we see a token, baseline at the current head so we only react to
+    // buys that arrive AFTER react-mode was enabled (never backfill into old buys).
+    const rec = st[ca] || { last: head, hits: 0 };
+    st[ca] = rec;
+    if (rec.hits >= CFG.reactMaxCount) continue;            // budget spent: keep the rest, never full-dump
+    const curve = await resolveCurve(provider, ca);
+    if (!curve) continue;
+    if (await isGraduated(provider, curve)) continue;       // only react while bonding
+    const from = Math.min(rec.last + 1, head);
+    if (from > head) continue;
+    let logs = [];
+    try { const c = new ethers.Contract(curve, CURVE_ABI, provider); logs = await c.queryFilter(c.filters.Buy(), from, head); }
+    catch (_) { rec.last = head; continue; }
+    rec.last = head;
+    let realEth = 0n;
+    for (const ev of logs) {
+      const a = ev.args || {};
+      const trader = String(a.trader || '').toLowerCase();
+      const recip = String(a.recipient || '').toLowerCase();
+      if (mine.has(trader) || mine.has(recip)) continue;    // our own buy: ignore
+      realEth += a.grossEth || 0n;
+    }
+    const realUsd = Number(ethers.formatEther(realEth)) * usd;
+    if (Number(ethers.formatEther(realEth)) < minEth) continue;
+    // sell reactSellPct% from the wallet holding the most of this token
+    let best = null, bestBal = 0n;
+    for (const w of wallets) {
+      const b = await new ethers.Contract(ca, ERC20_ABI, provider).balanceOf(w.address).catch(() => 0n);
+      if (b > bestBal) { bestBal = b; best = w; }
+    }
+    if (!best || bestBal <= 0n) continue;
+    try {
+      const r = await botSell(best, provider, ca, CFG.reactSellPct);
+      if (!r.skip) { rec.hits += 1; actions.push({ ca, wallet: best.address, pct: CFG.reactSellPct, realUsd, hits: rec.hits, hash: r.hash }); }
+    } catch (e) { actions.push({ ca, error: e.shortMessage || e.message }); }
+  }
+  return { actions, scanned: owned.length };
 }
 
 // ---- creator fee (levy) earnings: read + claim ----
@@ -736,5 +821,5 @@ module.exports = {
   makeL1Provider, verifyInbox, bridgeOne,
   resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
-  mapLimit, ownedTokens, creatorOwedTotal, tokenPnl,
+  mapLimit, ownedTokens, creatorOwedTotal, tokenPnl, reactToBuys, gasOverrides,
 };

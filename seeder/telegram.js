@@ -20,7 +20,7 @@ const {
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
-  creatorOwedTotal, ownedTokens, tokenPnl,
+  creatorOwedTotal, ownedTokens, tokenPnl, reactToBuys,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -40,6 +40,7 @@ const state = {
   l1seen: {}, // per-wallet last-seen L1 balance (decimal string) — survives restarts
   deposited: 0, // total ETH the user says they funded the bot with (for /pnl loss calc)
   spent: 0,     // cumulative ETH spent by the bot (deploy + buys) — auto-tracked
+  react: {},    // react-to-buy checkpoint per token { [ca]: { last: block, hits: n } }
 };
 function loadState() {
   try {
@@ -48,6 +49,7 @@ function loadState() {
     if (!Array.isArray(state.admins)) state.admins = [];
     if (!Array.isArray(state.last)) state.last = [];
     if (!state.l1seen || typeof state.l1seen !== 'object') state.l1seen = {};
+    if (!state.react || typeof state.react !== 'object') state.react = {};
     if (!state.cfg) state.cfg = { devBuyEth: CFG.devBuyEth, intervalSec: CFG.intervalSec, levyBps: CFG.levyBps, maxTokens: CFG.maxTokens };
     if (CFG.tgAdmins.length) state.admins = Array.from(new Set([...state.admins.map(String), ...CFG.tgAdmins.map(String)]));
   } catch (_) {}
@@ -70,6 +72,12 @@ function applyCfg() {
   if (state.cfg.autoSaleOn !== undefined) CFG.autoSaleOn = !!state.cfg.autoSaleOn;
   if (state.cfg.autoSaleEverySec !== undefined) CFG.autoSaleEverySec = Math.max(30, Number(state.cfg.autoSaleEverySec) || 600);
   if (state.cfg.autoSalePct !== undefined) CFG.autoSalePct = Math.min(100, Math.max(1, Number(state.cfg.autoSalePct) || 100));
+  if (state.cfg.reactOn !== undefined) CFG.reactOn = !!state.cfg.reactOn;
+  if (state.cfg.reactEverySec !== undefined) CFG.reactEverySec = Math.max(20, Number(state.cfg.reactEverySec) || 45);
+  if (state.cfg.reactMinUsd !== undefined) CFG.reactMinUsd = Math.max(1, Number(state.cfg.reactMinUsd) || 15);
+  if (state.cfg.reactSellPct !== undefined) CFG.reactSellPct = Math.min(100, Math.max(1, Number(state.cfg.reactSellPct) || 25));
+  if (state.cfg.reactMaxCount !== undefined) CFG.reactMaxCount = Math.max(1, Number(state.cfg.reactMaxCount) || 3);
+  if (state.cfg.gasGwei !== undefined) CFG.gasGwei = Math.max(0, Number(state.cfg.gasGwei) || 0);
   ['devBuyMin', 'devBuyMax', 'peerBuyMin', 'peerBuyMax'].forEach((k) => { if (state.cfg[k] !== undefined) CFG[k] = String(state.cfg[k]); });
 }
 loadState(); applyCfg();
@@ -321,6 +329,8 @@ auto-buy ${CFG.autoBuyEth} ETH  <i>(/autobuy)</i> · auto-sell ${CFG.autoSellPct
 peer-buy ${CFG.peerBuyers} wallet × ${Number(CFG.peerBuyMax) > 0 ? `${CFG.peerBuyMin || CFG.peerBuyEth}–${CFG.peerBuyMax} ETH (acak)` : `${CFG.peerBuyEth} ETH`}  <i>(/peerbuyers /peerbuy /peerrange)</i>
 sell-after ${CFG.sellAfterSec ? CFG.sellAfterSec + 's · ' + CFG.sellPct + '%' : 'off'}  <i>(/sellafter /sellpct)</i>
 auto-sale ${CFG.autoSaleOn ? `<b>ON</b> · ${CFG.autoSalePct}% tiap ${CFG.autoSaleEverySec}s` : 'off'}  <i>(/autosale /autosalepct /autosaleevery)</i>
+react-buy ${CFG.reactOn ? `<b>ON</b> · pembeli asli ≥$${CFG.reactMinUsd} → jual ${CFG.reactSellPct}% (maks ${CFG.reactMaxCount}×)` : 'off'}  <i>(/react)</i>
+gas ${CFG.gasGwei > 0 ? `${CFG.gasGwei} gwei` : 'auto'}  <i>(/gasgwei)</i>
 max tokens ${CFG.maxTokens || '∞'}  <i>(/max)</i>
 backend ${CFG.backend}
 funder ${funder ? 'set (auto allow-list + fund)' : 'none (self-funded)'}`;
@@ -465,6 +475,25 @@ async function doAutoSale(chatId, args) {
     ? `✅ Auto-sale <b>ON</b> — tiap <b>${CFG.autoSaleEverySec}s</b> bot jual <b>${CFG.autoSalePct}%</b> holding di SEMUA token yang sudah dibuat. (/autosale off untuk stop)`
     : `🛑 Auto-sale <b>OFF</b>.`);
 }
+// React-to-buy: kalau ada pembeli ASLI (bukan wallet kita) beli ≥ $reactMin,
+// bot jual sebagian (capped) buat recover modal — bukan dump total.
+async function doReact(chatId, args) {
+  const a = (args[0] || '').toLowerCase();
+  if (a !== 'on' && a !== 'off') {
+    await send(chatId,
+      `🟢➡️🔻 <b>React-to-buy</b> (market-maker / recover modal)\n` +
+      `Sekarang: <b>${CFG.reactOn ? 'ON' : 'OFF'}</b>\n\n` +
+      `Kalau ada pembeli ASLI (bukan wallet bot) beli ≥ <b>$${CFG.reactMinUsd}</b> di token yang kita punya, bot jual <b>${CFG.reactSellPct}%</b> dari bag terbesar — maksimal <b>${CFG.reactMaxCount}×</b> per token (biar TIDAK dump total / rug holder asli).\n` +
+      `Gas dipakai: target <b>${CFG.gasGwei} gwei</b> · cek tiap ${CFG.reactEverySec}s\n\n` +
+      `Nyalakan: <code>/react on</code> · matikan: <code>/react off</code>\n` +
+      `Atur: <code>/reactmin 15</code> (USD) · <code>/reactpct 25</code> (%) · <code>/reacthits 3</code> · <code>/reactevery 45</code> · <code>/gasgwei 0.01</code>`);
+    return;
+  }
+  state.cfg.reactOn = (a === 'on'); applyCfg(); saveState();
+  await send(chatId, a === 'on'
+    ? `✅ React-to-buy <b>ON</b> — pembeli asli ≥ $${CFG.reactMinUsd} → jual ${CFG.reactSellPct}% (maks ${CFG.reactMaxCount}×/token). Gas ${CFG.gasGwei} gwei. (/react off untuk stop)`
+    : `🛑 React-to-buy <b>OFF</b>.`);
+}
 // ---- P&L: how much of the deposit is left / lost across all launched tokens ----
 async function doSetDeposit(chatId, args) {
   const v = Number(args[0]);
@@ -596,6 +625,12 @@ async function dispatch(chatId, cmd, args) {
     case '/autosale': doAutoSale(chatId, args).catch((e) => send(chatId, 'Auto-sale error: ' + esc(e.message || String(e)))); break;
     case '/autosalepct': await setCfg(chatId, 'autoSalePct', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 1 && Number(v) <= 100, 'auto-sale (%)'); break;
     case '/autosaleevery': await setCfg(chatId, 'autoSaleEverySec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 30, 'auto-sale interval (detik)'); break;
+    case '/react': doReact(chatId, args).catch((e) => send(chatId, 'React error: ' + esc(e.message || String(e)))); break;
+    case '/reactmin': await setCfg(chatId, 'reactMinUsd', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 1, 'react min buy (USD)'); break;
+    case '/reactpct': await setCfg(chatId, 'reactSellPct', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 1 && Number(v) <= 100, 'react jual (%)'); break;
+    case '/reacthits': await setCfg(chatId, 'reactMaxCount', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 1, 'react maks hit/token'); break;
+    case '/reactevery': await setCfg(chatId, 'reactEverySec', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 20, 'react interval (detik)'); break;
+    case '/gasgwei': await setCfg(chatId, 'gasGwei', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0, 'gas (gwei)'); break;
     case '/dumpall': doDumpAll(chatId, args).catch((e) => send(chatId, 'Dump error: ' + esc(e.message || String(e)))); break;
     case '/pnl': case '/profit': doPnl(chatId, args).catch((e) => send(chatId, 'P&L error: ' + esc(e.message || String(e)))); break;
     case '/pnltoken': case '/pnltokens': doPnlToken(chatId).catch((e) => send(chatId, 'P&L token error: ' + esc(e.message || String(e)))); break;
@@ -759,6 +794,26 @@ async function autoSaleLoop() {
   }
 }
 
+// ---------------- react-to-buy: sell a capped slice when REAL buyers appear ----------------
+async function reactLoop() {
+  for (;;) {
+    if (!CFG.reactOn) { await sleep(3000); continue; }
+    if (!trading) {
+      trading = true;
+      try {
+        const { actions } = await reactToBuys(provider, wallets, state.react);
+        saveState();
+        const sells = actions.filter((a) => a.hash);
+        for (const a of sells) {
+          const short = `${a.ca.slice(0, 8)}…`;
+          await broadcast(`🟢➡️🔻 Ada pembeli asli di <code>${short}</code> (~$${Math.round(a.realUsd)}) → jual <b>${a.pct}%</b> (hit ${a.hits}/${CFG.reactMaxCount}) untuk recover modal.`);
+        }
+      } catch (e) { console.error('react loop error:', e.message); } finally { trading = false; }
+    }
+    await sleep(CFG.reactEverySec * 1000);
+  }
+}
+
 // ---------------- L1 watcher: auto-detect ETH arriving on Ethereum ----------------
 // Baseline (state.l1seen) is persisted, so a pm2 restart with ETH already sitting
 // on L1 still nudges once, and known balances don't re-notify on every restart.
@@ -825,6 +880,10 @@ async function main() {
     { command: 'autosale', description: 'Auto-jual berkala SEMUA token: /autosale on' },
     { command: 'autosalepct', description: 'Persen auto-sale: /autosalepct 100' },
     { command: 'autosaleevery', description: 'Interval auto-sale (detik): /autosaleevery 600' },
+    { command: 'react', description: 'Jual pas ada pembeli asli: /react on' },
+    { command: 'reactmin', description: 'Min beli asli (USD) buat trigger: /reactmin 15' },
+    { command: 'reactpct', description: 'Persen dijual per trigger: /reactpct 25' },
+    { command: 'gasgwei', description: 'Target harga gas (gwei): /gasgwei 0.01' },
     { command: 'dumpall', description: 'Jual SEKARANG semua token: /dumpall 100' },
     { command: 'pnl', description: 'Rugi/untung (saldo + treasury + fee)' },
     { command: 'pnltoken', description: 'Rugi PER TOKEN (wallet mana beli apa)' },
@@ -852,6 +911,7 @@ async function main() {
   else console.log('⚠️ No admin yet — the FIRST person to DM the bot IN A PRIVATE CHAT claims admin. Set TELEGRAM_ADMIN_IDS in seeder/.env to lock this down and close the claim window.');
   launchLoop().catch((e) => console.error('loop crashed:', e));
   autoSaleLoop().catch((e) => console.error('auto-sale loop crashed:', e));
+  reactLoop().catch((e) => console.error('react loop crashed:', e));
   l1Watcher().catch((e) => console.error('l1 watcher crashed:', e));
   await poll();
 }
