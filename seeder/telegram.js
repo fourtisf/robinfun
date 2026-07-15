@@ -482,36 +482,40 @@ async function doPnl(chatId, args) {
   const heldFlags = await Promise.all(cas.map(async (ca) => { for (const w of wallets) { if (await tokenBalance(provider, ca, w.address) > 0) return true; } return false; }));
   const held = heldFlags.filter(Boolean).length;
 
-  const recoverable = walletEth + claimEth + protoEth;
+  // "Bisa ditarik" INCLUDES the ETH already swept to the treasury — that's still
+  // your money, just moved out of the bot wallets.
+  const recoverable = walletEth + cf.sweepOut + claimEth + protoEth;
   const pnl = recoverable - dep;
   const pct = dep > 0 ? (pnl / dep * 100) : 0;
-  const deployEth = (Number(state.launched) || 0) * 0.001;   // approx: deploy fee × launches
+  const tradeLoss = cf.spent - cf.tradeIn;   // deposit-independent: what trading itself cost
+  const deployEth = (Number(state.launched) || 0) * 0.001;
   const perLines = wallets.map((w, i) => {
     const k = w.address.toLowerCase();
     const bal = walletByAddr[k] || 0;
     const owed = Number(ethers.formatEther(owedByAddr[k] || 0n));
-    const c = cf.per[k] || { out: 0, tradeIn: 0 };
-    return `#${i + 1} <code>${w.address.slice(0, 8)}…</code> saldo <b>${bal.toFixed(4)}</b> · beli/keluar ${c.out.toFixed(3)} · jual/balik ${c.tradeIn.toFixed(3)} · fee ${owed.toFixed(4)}`;
+    const c = cf.per[k] || { spent: 0, tradeIn: 0 };
+    return `#${i + 1} <code>${w.address.slice(0, 8)}…</code> saldo <b>${bal.toFixed(4)}</b> · beli ${c.spent.toFixed(3)} · jual ${c.tradeIn.toFixed(3)} · fee ${owed.toFixed(4)}`;
   });
 
   await send(chatId,
     `📊 <b>P&L LENGKAP</b>\n` +
     `\n<b>━ Arus kas (on-chain) ━</b>\n` +
     `📥 Deposit masuk: <b>${dep.toFixed(4)} ETH</b>${u(dep)}  <i>(${depSrc})</i>\n` +
-    `📤 Total keluar (beli+deploy+gas): <b>${cf.out.toFixed(4)} ETH</b>${u(cf.out)}\n` +
+    `📤 Beli+deploy: <b>${cf.spent.toFixed(4)} ETH</b>${u(cf.spent)}  <i>(${state.launched || 0} launch, deploy ±${deployEth.toFixed(3)})</i>\n` +
     `📥 Balik dari jual/refund: <b>${cf.tradeIn.toFixed(4)} ETH</b>${u(cf.tradeIn)}\n` +
-    `   ↳ deploy ±${deployEth.toFixed(3)} ETH (${state.launched || 0} launch × 0.001)\n` +
+    `📉 <b>Rugi trading: ${tradeLoss.toFixed(4)} ETH</b>${u(Math.abs(tradeLoss))}  <i>(beli − jual)</i>\n` +
     `\n<b>━ Posisi sekarang ━</b>\n` +
     `👛 Saldo wallet: <b>${walletEth.toFixed(4)} ETH</b>${u(walletEth)}\n` +
+    `🏦 Sudah di treasury (sweep): <b>${cf.sweepOut.toFixed(4)} ETH</b>${u(cf.sweepOut)}\n` +
     `💸 Fee creator claimable: <b>${claimEth.toFixed(4)} ETH</b>${u(claimEth)}  <i>(/claim)</i>\n` +
-    `🏦 Fee protokol → treasury: <b>${protoEth.toFixed(4)} ETH</b>${u(protoEth)}  <i>(flush admin)</i>\n` +
+    `📤 Fee protokol → treasury: <b>${protoEth.toFixed(4)} ETH</b>${u(protoEth)}  <i>(flush admin)</i>\n` +
     `🪙 Token belum dijual: <b>${held}</b> posisi${held ? '  <i>(/dumpall)</i>' : ''}\n` +
     `\n<b>━ Hasil ━</b>\n` +
-    `💰 Total bisa ditarik: <b>${recoverable.toFixed(4)} ETH</b>${u(recoverable)}\n` +
+    `💰 Total masih milikmu: <b>${recoverable.toFixed(4)} ETH</b>${u(recoverable)}\n` +
     (dep > 0
-      ? `${pnl >= 0 ? '📈' : '📉'} <b>P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} ETH</b>${u(Math.abs(pnl))} · <b>${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</b>\n`
-      : `⚠️ Deposit belum terdeteksi — set manual: <code>/setdeposit 1.0</code>\n`) +
-    (dep > 0 && pnl < 0 ? `⚠️ Rugi = ETH terkunci di <b>LP graduated (burned)</b> + slippage. Tidak bisa balik.\n` : '') +
+      ? `${pnl >= 0 ? '📈' : '📉'} <b>P&L: ${pnl >= 0 ? '+' : ''}${pnl.toFixed(4)} ETH</b>${u(Math.abs(pnl))} · <b>${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%</b> (vs deposit)\n`
+      : `⚠️ Deposit belum terbaca (explorer down) — /setdeposit &lt;eth&gt;\n`) +
+    (dep > 0 && pnl < 0 ? `⚠️ Rugi = ETH terkunci di <b>LP graduated (burned)</b> + slippage jual. Tidak bisa balik.\n` : '') +
     `\n<b>━ Per wallet ━</b>\n${perLines.join('\n')}\n` +
     (held ? `\n💡 Jual sisa token dulu (<code>/dumpall</code>) lalu <code>/pnl</code> lagi biar akurat.` : ''));
 }

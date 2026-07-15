@@ -540,43 +540,52 @@ async function detectDeposits(wallets) {
   return Number(ethers.formatEther(total));
 }
 
-// Full cash-flow of the wallets from chain history (Blockscout), per wallet + total:
-//   depositIn — EXTERNAL ETH funded in (normal tx, from a non-bot address)
-//   out       — ETH that left (buys + deploy fees + gas + transfers out)
-//   tradeIn   — ETH that came back from trades/refunds (internal tx in, from a contract)
-// Deposits and trade-proceeds are on different Blockscout endpoints, so they never
-// mix. Returns { depositIn, out, tradeIn, per:{addr:{...}} } in ETH. Never throws.
+// Full cash-flow of the wallets from chain history (Blockscout), per wallet + total.
+// Classifies every transfer so the P&L needs no manual deposit figure:
+//   depositIn — money funded IN: external transfers AND bridge credits (a self
+//               deposit lands as from==to==wallet, so we count self-txs — that was
+//               the bug that made bridged ETH invisible). Inter-wallet moves excluded.
+//   spent     — buys + deploy: OUT txs that call a contract (input data present) + gas
+//   sweepOut  — plain OUT transfers (e.g. /sweep to the treasury) — still your money
+//   tradeIn   — sell proceeds + graduation refunds (internal tx IN, from a contract)
+// Returns everything in ETH. Never throws.
 async function walletCashflow(wallets) {
   const api = (process.env.EXPLORER_API || 'https://robinhoodchain.blockscout.com/api').replace(/\/+$/, '');
   const mine = new Set(wallets.map((w) => w.address.toLowerCase()));
+  const big = (x) => { try { return BigInt(x || '0'); } catch (_) { return 0n; } };
   const per = {};
-  let depositIn = 0n, out = 0n, tradeIn = 0n;
+  let depositIn = 0n, spent = 0n, sweepOut = 0n, tradeIn = 0n;
   for (const w of wallets) {
     const lc = w.address.toLowerCase();
-    const p = per[lc] = { depositIn: 0n, out: 0n, tradeIn: 0n };
-    try {   // normal txs: external funding IN, and everything the wallet spent OUT
+    const p = per[lc] = { depositIn: 0n, spent: 0n, sweepOut: 0n, tradeIn: 0n };
+    try {   // normal txs
       const j = await (await fetch(`${api}?module=account&action=txlist&address=${w.address}&sort=asc`, { signal: AbortSignal.timeout(12000) })).json();
       if (Array.isArray(j.result)) for (const tx of j.result) {
         if (String(tx.isError) === '1') continue;
-        const v = (() => { try { return BigInt(tx.value || '0'); } catch (_) { return 0n; } })();
-        const gas = (() => { try { return BigInt(tx.gasUsed || '0') * BigInt(tx.gasPrice || '0'); } catch (_) { return 0n; } })();
-        if ((tx.to || '').toLowerCase() === lc && !mine.has((tx.from || '').toLowerCase())) { p.depositIn += v; depositIn += v; }
-        if ((tx.from || '').toLowerCase() === lc) { p.out += v + gas; out += v + gas; }
+        const v = big(tx.value), gas = big(tx.gasUsed) * big(tx.gasPrice);
+        const to = (tx.to || '').toLowerCase(), from = (tx.from || '').toLowerCase();
+        const isCall = !!(tx.input && tx.input.length > 2 && tx.input !== '0x');
+        if (from === lc && to === lc) { p.depositIn += v; depositIn += v; continue; }        // bridge/self credit IN
+        if (to === lc && !mine.has(from)) { p.depositIn += v; depositIn += v; }               // external funding IN
+        if (from === lc) {
+          if (isCall) { p.spent += v + gas; spent += v + gas; }                               // buy / deploy (contract call)
+          else { p.sweepOut += v; sweepOut += v; p.spent += gas; spent += gas; }              // plain transfer out (sweep)
+        }
       }
     } catch (_) {}
     try {   // internal txs: sell proceeds + graduation refunds coming back IN
       const j = await (await fetch(`${api}?module=account&action=txlistinternal&address=${w.address}&sort=asc`, { signal: AbortSignal.timeout(12000) })).json();
       if (Array.isArray(j.result)) for (const tx of j.result) {
         if (String(tx.isError) === '1') continue;
-        const v = (() => { try { return BigInt(tx.value || '0'); } catch (_) { return 0n; } })();
-        if ((tx.to || '').toLowerCase() === lc && !mine.has((tx.from || '').toLowerCase())) { p.tradeIn += v; tradeIn += v; }
+        const v = big(tx.value); const to = (tx.to || '').toLowerCase(), from = (tx.from || '').toLowerCase();
+        if (to === lc && !mine.has(from)) { p.tradeIn += v; tradeIn += v; }
       }
     } catch (_) {}
   }
   const f = (x) => Number(ethers.formatEther(x));
   const perOut = {};
-  for (const [k, v] of Object.entries(per)) perOut[k] = { depositIn: f(v.depositIn), out: f(v.out), tradeIn: f(v.tradeIn) };
-  return { depositIn: f(depositIn), out: f(out), tradeIn: f(tradeIn), per: perOut };
+  for (const [k, v] of Object.entries(per)) perOut[k] = { depositIn: f(v.depositIn), spent: f(v.spent), sweepOut: f(v.sweepOut), tradeIn: f(v.tradeIn) };
+  return { depositIn: f(depositIn), spent: f(spent), sweepOut: f(sweepOut), tradeIn: f(tradeIn), per: perOut };
 }
 
 // Protocol revenue currently flushable to the treasury (owner's wallet). ETH.
