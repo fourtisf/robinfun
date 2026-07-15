@@ -71,11 +71,22 @@ if command -v pm2 >/dev/null 2>&1; then
   log "Refreshing deps + restarting pm2 apps"
   ( cd "$SRC_DIR/server" && npm install --omit=dev --no-audit --no-fund ) || true
   ( cd "$SRC_DIR/seeder" && npm install --no-audit --no-fund ) || true
+  [ -d "$SRC_DIR/tradebot" ] && ( cd "$SRC_DIR/tradebot" && npm install --omit=dev --no-audit --no-fund ) || true
   # restart whichever of these exist; fall back to restarting all
-  pm2 restart robinfun-api robinfun-bot robinfun-seeder-bot --update-env >/dev/null 2>&1 \
+  pm2 restart robinfun-api robinfun-bot robinfun-seeder-bot robinfun-tradebot --update-env >/dev/null 2>&1 \
     || pm2 restart all >/dev/null 2>&1 || true
   pm2 save >/dev/null 2>&1 || true
   log "pm2 apps restarted"
+  # First-time only: start the trade bot under pm2 if it isn't registered yet.
+  # Requires TRADEBOT_TOKEN + WALLET_SECRET + FEE_WALLET in the environment/.env.
+  if [ -d "$SRC_DIR/tradebot" ] && ! pm2 describe robinfun-tradebot >/dev/null 2>&1; then
+    if [ -n "${TRADEBOT_TOKEN:-}" ] && [ -n "${WALLET_SECRET:-}" ]; then
+      ( cd "$SRC_DIR/tradebot" && pm2 start index.js --name robinfun-tradebot --update-env ) && pm2 save >/dev/null 2>&1 || true
+      log "robinfun-tradebot started"
+    else
+      warn "tradebot present but not started — set TRADEBOT_TOKEN + WALLET_SECRET + FEE_WALLET, then: cd $SRC_DIR/tradebot && pm2 start index.js --name robinfun-tradebot"
+    fi
+  fi
 elif systemctl list-unit-files 2>/dev/null | grep -q '^robinfun-api\.service'; then
   log "Restarting the API via systemd"
   ( cd "$SRC_DIR/server" && npm install --omit=dev --no-audit --no-fund ) || true

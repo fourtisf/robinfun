@@ -1,0 +1,15 @@
+{
+  "name": "robinfun-tradebot",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Custodial Maestro-style Telegram trading bot for Robinfun on Robinhood Chain.",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "ethers": "^6.15.0"
+  }
+}
