@@ -89,6 +89,14 @@ async function addToken(rec) {
   else saveJsonTokens();
   return rec;
 }
+async function updateToken(id, patch) {
+  const t = tokens.find((x) => x.id === id);
+  if (!t) return null;
+  Object.assign(t, patch);
+  if (mongo) await mongo.tokensCol.updateOne({ id }, { $set: patch });
+  else saveJsonTokens();
+  return t;
+}
 async function removeTokens(matchFn) {
   const removed = tokens.filter(matchFn);
   if (!removed.length) return removed;
@@ -104,4 +112,4 @@ async function saveSettings(next) {
   return settings;
 }
 
-module.exports = { init, allTokens, findToken, countTokens, getSettings, backend, addToken, removeTokens, saveSettings };
+module.exports = { init, allTokens, findToken, countTokens, getSettings, backend, addToken, updateToken, removeTokens, saveSettings };

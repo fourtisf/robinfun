@@ -267,6 +267,19 @@ app.post('/api/tokens', rateLimit, async (req, res) => {
 
     const ca = /^0x[0-9a-fA-F]{40}$/.test(String(b.ca || '').trim()) ? String(b.ca).trim() : '';
 
+    // Idempotent by CA: if this token already exists, don't create a duplicate.
+    // This makes the client's create-retry safe, and lets a launch whose first
+    // POST failed fill in its MISSING logo on a re-submit. We never overwrite
+    // existing metadata or an existing logo — the POST endpoint is unauthenticated,
+    // so overwriting would let anyone grief another creator's listing.
+    if (ca) {
+      const existing = store.allTokens().find((t) => t.ca && t.ca.toLowerCase() === ca.toLowerCase());
+      if (existing) {
+        if (logo && !existing.logo) await store.updateToken(existing.id, { logo });
+        return res.status(200).json(existing);
+      }
+    }
+
     const rec = {
       id: crypto.randomBytes(8).toString('hex'),
       name,

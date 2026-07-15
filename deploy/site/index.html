@@ -3986,18 +3986,28 @@ function tokenLinks(t){
    ================================================================ */
 const API = (typeof window!=='undefined' && window.ROBINFUN_API) || '';
 async function apiCreateToken(t){
-  const r = await fetch(API+'/api/tokens', {
-    method:'POST', headers:{'content-type':'application/json'},
-    body: JSON.stringify({
-      name:t.name, ticker:t.ticker, description:t.desc, ca:t.ca||'',
-      website:t.website, x:t.x, tg:t.tg,
-      buyFee:t.buyTax, sellFee:t.sellTax,
-      decay:!!t.decay, renounce:!!t.renounced,
-      creator:t.creator, logo:t.logo,   // data-URL; server stores it, returns a URL
-    })
+  const body = JSON.stringify({
+    name:t.name, ticker:t.ticker, description:t.desc, ca:t.ca||'',
+    website:t.website, x:t.x, tg:t.tg,
+    buyFee:t.buyTax, sellFee:t.sellTax,
+    decay:!!t.decay, renounce:!!t.renounced,
+    creator:t.creator, logo:t.logo,   // data-URL; server stores it, returns a URL
   });
-  if(!r.ok) throw new Error('api '+r.status);
-  return r.json();
+  // RETRY with backoff — a transient server hiccup at launch must NOT permanently
+  // drop the token's metadata + LOGO (that's why some launches showed a placeholder
+  // icon and were missing from the board). The CA is in the body, so a later retry
+  // resolves to the same token server-side.
+  let lastErr;
+  for(const wait of [0, 1500, 4000, 9000, 20000]){
+    if(wait) await new Promise(r=>setTimeout(r, wait));
+    try{
+      const r = await fetch(API+'/api/tokens', { method:'POST', headers:{'content-type':'application/json'}, body });
+      if(r.ok) return r.json();
+      lastErr = new Error('api '+r.status);
+      if(r.status>=400 && r.status<500) throw lastErr;   // client error — retrying won't help
+    }catch(e){ lastErr = e; }
+  }
+  throw lastErr || new Error('api create failed');
 }
 function tokenFromRecord(rec){
   const t = mkTok({
