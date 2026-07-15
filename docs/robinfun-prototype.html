@@ -1720,11 +1720,6 @@ const WALLET_SVG = {
   tokenpocket:'<svg viewBox="0 0 40 40" width="46" height="46" style="border-radius:13px;display:block"><rect width="40" height="40" rx="11" fill="#2980FE"/><path d="M12.5 13.5h15v4.2h-5.4v9.8h-4.2v-9.8h-5.4z" fill="#fff"/></svg>',
   metamask:'<span style="width:46px;height:46px;border-radius:13px;background:#E2761B;display:flex;align-items:center;justify-content:center;font-size:26px">🦊</span>',
 };
-const WALLET_WCLINK = {
-  metamask:'https://metamask.app.link/wc?uri=',
-  trust:'https://link.trustwallet.com/wc?uri=',
-  safepal:'https://link.safepal.io/wc?uri=',
-};
 function isMobile(){ return /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent||''); }
 function resolveWallet(w){
   for(const d of discoveredWallets.values()){
@@ -1823,13 +1818,13 @@ async function connectCurated(key){
   const w = CURATED_WALLETS.find(x=>x.key===key); if(!w) return;
   const r = resolveWallet(w);
   if(r) return connectProvider(r.provider);
-  if(isMobile()) return connectWalletConnect(w);
+  if(isMobile()) return connectWalletConnect();
   installWallet(w.install);
 }
 function registerDiscovered(d){ let i = wmList.indexOf(d); if(i<0){ wmList.push(d); i = wmList.length-1; } return i; }
 async function connectWith(i){ const entry = wmList[i]; if(entry) await connectProvider(entry.provider); }
 
-async function connectWalletConnect(preferred){
+async function connectWalletConnect(){
   if(!WALLETCONNECT_PROJECT_ID){
     toast('WalletConnect is not configured','seal');
     return;
@@ -1840,17 +1835,14 @@ async function connectWalletConnect(preferred){
     const EthereumProvider = mod.EthereumProvider || (mod.default && mod.default.EthereumProvider) || mod.default;
     if(!EthereumProvider || !EthereumProvider.init) throw new Error('provider module failed to load');
     const cid = parseInt(CHAIN.chainId,16);
-    const link = preferred && WALLET_WCLINK[preferred.key];
-    const direct = !!(link && isMobile());
     const wc = await EthereumProvider.init({
       projectId: WALLETCONNECT_PROJECT_ID,
       chains:[cid],
       optionalChains:[cid],
-      showQrModal: !direct,
+      showQrModal:true,
       rpcMap:{ [cid]: CHAIN.rpcUrls[0] },
       metadata:{ name:'Robinfun', description:'Fair-launch memecoins on Robinhood Chain', url:location.origin, icons:[location.origin+'/favicon.png'] },
     });
-    if(direct){ wc.on('display_uri', (uri)=>{ try{ window.location.href = link + encodeURIComponent(uri); }catch(_){} }); }
     await wc.connect();
     const accs = (wc.accounts && wc.accounts.length) ? wc.accounts : await wc.request({method:'eth_accounts'});
     if(accs && accs.length){ activeProvider = wc; attachProviderEvents(wc); await ensureChain(wc); onWalletConnected(accs[0]); closeWalletModal(); }
