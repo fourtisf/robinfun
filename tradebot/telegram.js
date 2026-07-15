@@ -74,9 +74,9 @@ function chainScreen(chatId) {
   kb.push([btn('« Menu', 'menu')]);
   return { text: `🌐 <b>Select chain</b>\n\nYour wallet is the same address on all of them. Pick where to trade:`, kb: { inline_keyboard: kb } };
 }
-async function tokenCard(chatId, ca) {
+async function tokenCard(chatId, ca, chainKey) {
   const u = core.ensureUser(chatId);
-  const chainKey = core.userChain(u);
+  chainKey = (chainKey && core.chainOf(chainKey)) ? chainKey : core.userChain(u);
   const ch = core.chainOf(chainKey);
   const snap = await core.tokenSnapshot(ca, chainKey).catch(() => null);
   if (!snap) return { text: `❌ Couldn't price <code>${short(ca)}</code> on ${ch.emoji} ${esc(ch.name)} — no pool/curve found here. Switch chain if it trades elsewhere.`, kb: rows([btn('🌐 Switch chain', 'chain'), btn('« Menu', 'menu')]) };
@@ -97,11 +97,13 @@ async function tokenCard(chatId, ca) {
     `<code>${ca}</code>\n${phase}\n\n` +
     `Price: <b>${priceUsd > 0 ? '$' + priceUsd.toPrecision(3) : snap.priceEth.toExponential(2) + ' ' + ch.native}</b>\n` +
     `Market cap: <b>${usd(snap.mcapEth, ch.native)}</b>${bagLine}`;
+  // Encode the CARD's chain in every action so a tap on a stale card trades on the
+  // chain it was rendered for, not whatever chain is active now.
   const kb = rows(
-    [btn(`Buy 0.01`, `b:${ca}:0.01`), btn('Buy 0.05', `b:${ca}:0.05`), btn('Buy 0.1', `b:${ca}:0.1`)],
-    [btn('Buy X', `bx:${ca}`), btn('Sell 50%', `s:${ca}:50`), btn('Sell 100%', `s:${ca}:100`)],
-    [btn('🎯 TP', `tp:${ca}`), btn('🛑 SL', `sl:${ca}`), btn('⏳ Limit buy', `lb:${ca}`)],
-    [btn('🔄 Refresh', `tok:${ca}`), btn('« Menu', 'menu')],
+    [btn(`Buy 0.01`, `b:${chainKey}:${ca}:0.01`), btn('Buy 0.05', `b:${chainKey}:${ca}:0.05`), btn('Buy 0.1', `b:${chainKey}:${ca}:0.1`)],
+    [btn('Buy X', `bx:${chainKey}:${ca}`), btn('Sell 50%', `s:${chainKey}:${ca}:50`), btn('Sell 100%', `s:${chainKey}:${ca}:100`)],
+    [btn('🎯 TP', `tp:${chainKey}:${ca}`), btn('🛑 SL', `sl:${chainKey}:${ca}`), btn('⏳ Limit buy', `lb:${chainKey}:${ca}`)],
+    [btn('🔄 Refresh', `tok:${chainKey}:${ca}`), btn('« Menu', 'menu')],
   );
   return { text, kb };
 }
@@ -143,25 +145,29 @@ function ordersScreen(chatId) {
 function referralScreen(chatId) {
   const u = core.ensureUser(chatId);
   const link = `https://t.me/${BOT_USERNAME}?start=${u.refCode}`;
+  const owed = u.refOwed || {};
+  const earned = Object.keys(owed).length
+    ? Object.entries(owed).map(([ck, wei]) => { const c = core.chainOf(ck) || { native: 'ETH' }; return `${Number(ethers.formatEther(BigInt(wei || '0'))).toFixed(5)} ${c.native}`; }).join(' · ')
+    : '0';
   return {
-    text: `🎁 <b>Referrals</b>\n\nShare your link — you earn <b>${(core.CFG.refShareBps / 100).toFixed(0)}%</b> of the bot fee on every trade your referrals make.\n\n<code>${link}</code>\n\nEarned so far: <b>${(u.refEarnedEth || 0).toFixed(5)} ETH</b>`,
+    text: `🎁 <b>Referrals</b>\n\nShare your link — you earn <b>${(core.CFG.refShareBps / 100).toFixed(0)}%</b> of the bot fee on every trade your referrals make.\n\n<code>${link}</code>\n\nEarned so far: <b>${earned}</b>`,
     kb: rows([btn('« Menu', 'menu')]),
   };
 }
 
 // ------------------------------------------------------------ actions
-async function doBuy(chatId, ca, amt) {
+async function doBuy(chatId, ca, amt, chain) {
   try {
     await send(chatId, `⏳ Buying ${esc(amt)} of <code>${short(ca)}</code>…`);
-    const r = await core.buy(chatId, ca, amt);
-    await send(chatId, `✅ <b>Bought</b> ${fmt(r.gotTokens)} $${esc(r.sym)}\nSpent ${r.spentEth} ${r.native} · fee ${r.feeEth.toFixed(5)} · ${r.venue}\n${txLink(r.chain, r.hash)}`, rows([btn('🔄 Card', `tok:${ca}`), btn('📊 Portfolio', 'pos')]));
+    const r = await core.buy(chatId, ca, amt, chain);
+    await send(chatId, `✅ <b>Bought</b> ${fmt(r.gotTokens)} $${esc(r.sym)}\nSpent ${r.spentEth} ${r.native} · fee ${r.feeEth.toFixed(5)} · ${r.venue}\n${txLink(r.chain, r.hash)}`, rows([btn('🔄 Card', `tok:${r.chain}:${ca}`), btn('📊 Portfolio', 'pos')]));
   } catch (e) { await send(chatId, `❌ Buy failed: ${esc(e.message || String(e))}`); }
 }
-async function doSell(chatId, ca, pct) {
+async function doSell(chatId, ca, pct, chain) {
   try {
     await send(chatId, `⏳ Selling ${pct}% of <code>${short(ca)}</code>…`);
-    const r = await core.sell(chatId, ca, pct);
-    await send(chatId, `✅ <b>Sold</b> ${r.soldPct}%\nGot ${r.proceedsEth} ${r.native} · fee ${r.feeEth.toFixed(5)} · ${r.venue}\n${txLink(r.chain, r.hash)}`, rows([btn('🔄 Card', `tok:${ca}`), btn('📊 Portfolio', 'pos')]));
+    const r = await core.sell(chatId, ca, pct, chain);
+    await send(chatId, `✅ <b>Sold</b> ${r.soldPct}%\nGot ${r.proceedsEth} ${r.native} · fee ${r.feeEth.toFixed(5)} · ${r.venue}\n${txLink(r.chain, r.hash)}`, rows([btn('🔄 Card', `tok:${r.chain}:${ca}`), btn('📊 Portfolio', 'pos')]));
   } catch (e) { await send(chatId, `❌ Sell failed: ${esc(e.message || String(e))}`); }
 }
 
@@ -224,7 +230,7 @@ async function onCallback(q) {
   if (data === 'wdcancel') { pending.delete(chatId); return send(chatId, 'Withdrawal cancelled.', mainMenu()); }
   if (data === 'wdok') {
     const pp = pending.get(chatId); pending.delete(chatId);
-    if (!pp || pp.action !== 'wd_confirm') return send(chatId, 'Nothing to confirm (expired). Start again with /withdraw.');
+    if (!pp || pp.action !== 'wd_confirm' || Date.now() - (pp.ts || 0) > PENDING_TTL) return send(chatId, 'Confirmation expired. Start again with /withdraw.');
     try { await send(chatId, '⏳ Sending…'); const r = await core.withdraw(chatId, pp.to, pp.amt, pp.chain); return send(chatId, `✅ Sent <b>${r.sentEth} ${r.native}</b>\n${txLink(pp.chain, r.hash)}`); }
     catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e))); }
   }
@@ -248,13 +254,17 @@ async function onCallback(q) {
   if (data === 'snoff') { const u = core.ensureUser(chatId); u.snipe.on = false; core.saveStore(); const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'snamt') { setPending(chatId, { action: 'snipe_amt' }); return send(chatId, 'Send the ETH amount to buy per snipe (e.g. <code>0.01</code>):'); }
 
-  if (k === 'tok') { const c = await tokenCard(chatId, ca); return edit(chatId, mid, c.text, c.kb); }
-  if (k === 'b') return doBuy(chatId, ca, arg);
-  if (k === 's') return doSell(chatId, ca, Number(arg));
-  if (k === 'bx') { setPending(chatId, { action: 'buy_amt', ca }); return send(chatId, `Send the amount to buy of <code>${short(ca)}</code>:`); }
-  if (k === 'tp') { setPending(chatId, { action: 'tp_price', ca }); return send(chatId, `Take-profit: send the target <b>USD price</b> to sell 100% at:`); }
-  if (k === 'sl') { setPending(chatId, { action: 'sl_price', ca }); return send(chatId, `Stop-loss: send the target <b>USD price</b> to sell 100% at:`); }
-  if (k === 'lb') { setPending(chatId, { action: 'lb_price', ca }); return send(chatId, `Limit buy: send <b>&lt;usd_price&gt; &lt;amount&gt;</b> (e.g. <code>0.002 0.05</code>) — buy when price drops to that:`); }
+  // Trade actions encode the CARD's chain: k:chain:ca[:arg]
+  if (k === 'tok' || k === 'b' || k === 's' || k === 'bx' || k === 'tp' || k === 'sl' || k === 'lb') {
+    const parts = data.split(':'); const ch = parts[1], tca = parts[2], a = parts[3];
+    if (k === 'tok') { const c = await tokenCard(chatId, tca, ch); return edit(chatId, mid, c.text, c.kb); }
+    if (k === 'b') return doBuy(chatId, tca, a, ch);
+    if (k === 's') return doSell(chatId, tca, Number(a), ch);
+    if (k === 'bx') { setPending(chatId, { action: 'buy_amt', ca: tca, chain: ch }); return send(chatId, `Send the amount to buy of <code>${short(tca)}</code>:`); }
+    if (k === 'tp') { setPending(chatId, { action: 'tp_price', ca: tca, chain: ch }); return send(chatId, `Take-profit: send the target <b>USD price</b> to sell 100% at:`); }
+    if (k === 'sl') { setPending(chatId, { action: 'sl_price', ca: tca, chain: ch }); return send(chatId, `Stop-loss: send the target <b>USD price</b> to sell 100% at:`); }
+    if (k === 'lb') { setPending(chatId, { action: 'lb_price', ca: tca, chain: ch }); return send(chatId, `Limit buy: send <b>&lt;usd_price&gt; &lt;amount&gt;</b> (e.g. <code>0.002 0.05</code>) — buy when price drops to that:`); }
+  }
   if (k === 'oc') { const ok = watchers.cancelOrder(chatId, ca); await answer(q.id, ok ? 'Cancelled' : 'Not found'); const s = ordersScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
 }
 
@@ -266,7 +276,7 @@ async function resolvePending(chatId, p, text, m) {
       try { const addr = await core.replaceWallet(chatId, t); return send(chatId, `✅ <b>Wallet imported</b>\n<code>${addr}</code>\n\nYour secret message was deleted. Trade as normal.`, rows([btn('💼 Wallet', 'wal')])); }
       catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e)) + '\n\n(Your message was deleted for safety — try Import again.)'); }
     }
-    if (p.action === 'buy_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); return doBuy(chatId, p.ca, t); }
+    if (p.action === 'buy_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); return doBuy(chatId, p.ca, t, p.chain); }
     if (p.action === 'snipe_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); const u = core.ensureUser(chatId); u.snipe.ethAmount = String(Number(t)); core.saveStore(); const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
     if (p.action === 'wd_addr') { if (!isCa(t)) return send(chatId, '❌ Not a valid address. Try /withdraw again.'); setPending(chatId, { action: 'wd_amt', to: t }); return send(chatId, `Amount to send to <code>${short(t)}</code> — a number, or <code>max</code>:`); }
     if (p.action === 'wd_amt') {
@@ -278,7 +288,7 @@ async function resolvePending(chatId, p, text, m) {
     if (p.action === 'wd_confirm') { setPending(chatId, p); return send(chatId, 'Please tap ✅ Yes or ✖ Cancel above, or /cancel.'); }
     if (p.action === 'tp_price' || p.action === 'sl_price') {
       const usdPrice = Number(t); if (!(usdPrice > 0)) return send(chatId, 'Send a positive USD price.');
-      const ch = activeChain(chatId); if (!(nativeUsd(ch.native) > 0)) return send(chatId, 'Price feed unavailable — try again shortly.');
+      const ch = (p.chain && core.chainOf(p.chain)) || activeChain(chatId); if (!(nativeUsd(ch.native) > 0)) return send(chatId, 'Price feed unavailable — try again shortly.');
       const meta = await core.tokenMeta(p.ca, ch.key);
       const type = p.action === 'tp_price' ? 'tp' : 'sl';
       watchers.addOrder(chatId, { type, ca: p.ca, sym: meta.sym, chain: ch.key, targetPriceEth: usdPrice / nativeUsd(ch.native), sellPct: 100 });
@@ -287,7 +297,7 @@ async function resolvePending(chatId, p, text, m) {
     if (p.action === 'lb_price') {
       const [pxStr, amtStr] = t.split(/\s+/); const usdPrice = Number(pxStr), amount = Number(amtStr);
       if (!(usdPrice > 0) || !(amount > 0)) return send(chatId, 'Format: <code>&lt;usd_price&gt; &lt;amount&gt;</code>');
-      const ch = activeChain(chatId); if (!(nativeUsd(ch.native) > 0)) return send(chatId, 'Price feed unavailable — try again shortly.');
+      const ch = (p.chain && core.chainOf(p.chain)) || activeChain(chatId); if (!(nativeUsd(ch.native) > 0)) return send(chatId, 'Price feed unavailable — try again shortly.');
       const meta = await core.tokenMeta(p.ca, ch.key);
       watchers.addOrder(chatId, { type: 'limitbuy', ca: p.ca, sym: meta.sym, chain: ch.key, targetPriceEth: usdPrice / nativeUsd(ch.native), ethAmount: String(amount) });
       return send(chatId, `✅ Limit buy set: ${amount} ${ch.native} of $${esc(meta.sym)} when price ≤ $${usdPrice}.`, rows([btn('📋 Orders', 'orders')]));
@@ -301,9 +311,10 @@ function askExport(chatId) {
 function adminScreen(chatId) {
   if (!core.CFG.admins.includes(String(chatId))) return send(chatId, 'Not authorized.');
   const users = core.allUsers();
-  let owed = 0n;
-  for (const u of users) { try { owed += BigInt(u._refOwedWei || '0'); } catch (_) {} }
-  return send(chatId, `🛠 <b>Admin</b>\n\nUsers: <b>${users.length}</b>\nReferral owed (unsettled): <b>${Number(ethers.formatEther(owed)).toFixed(5)} ETH</b>\n\nReferral payouts are settled manually from FEE_WALLET (see _refOwedWei in the store).`);
+  const byChain = {};
+  for (const u of users) { const o = u.refOwed || {}; for (const [ck, wei] of Object.entries(o)) { try { byChain[ck] = (BigInt(byChain[ck] || '0') + BigInt(wei || '0')).toString(); } catch (_) {} } }
+  const owedLines = Object.entries(byChain).map(([ck, wei]) => { const c = core.chainOf(ck) || { native: 'ETH', name: ck }; return `  ${c.name}: <b>${Number(ethers.formatEther(BigInt(wei))).toFixed(5)} ${c.native}</b>`; }).join('\n') || '  none';
+  return send(chatId, `🛠 <b>Admin</b>\n\nUsers: <b>${users.length}</b>\nReferral owed (unsettled), per chain:\n${owedLines}\n\nSettle manually from FEE_WALLET on each chain (refOwed[chain] in the store).`);
 }
 function helpText() {
   return (

@@ -136,7 +136,18 @@ function _refCode() { let c; do { c = crypto.randomBytes(4).toString('hex'); } w
 function ensureUser(chatId, referredBy) {
   const id = String(chatId);
   let u = DB.users[id];
-  if (u) { if (!u.activeChain) { u.activeChain = DEFAULT_CHAIN; saveStore(); } return u; }
+  if (u) {
+    // Backfill any field a stored record predates, so screens never crash on a
+    // partial/legacy user after a schema change.
+    let ch = false;
+    if (!u.activeChain) { u.activeChain = DEFAULT_CHAIN; ch = true; }
+    if (!u.positions || typeof u.positions !== 'object') { u.positions = {}; ch = true; }
+    if (!Array.isArray(u.orders)) { u.orders = []; ch = true; }
+    if (!u.snipe || typeof u.snipe !== 'object') { u.snipe = { on: false, ethAmount: '0.01' }; ch = true; }
+    if (!u.settings || typeof u.settings !== 'object') { u.settings = { slippage: 0 }; ch = true; }
+    if (ch) saveStore();
+    return u;
+  }
   const w = ethers.Wallet.createRandom();
   const code = _refCode();
   u = {
@@ -173,12 +184,21 @@ async function replaceWallet(chatId, secret) {
   const w = secret ? walletFromSecret(secret) : ethers.Wallet.createRandom();
   if (w.address.toLowerCase() === u.address.toLowerCase()) throw new Error('that is already your current wallet');
   const dust = ethers.parseEther('0.0002');
+  // Best-effort guard: refuse if the old wallet still holds NATIVE on any chain.
+  // Fail CLOSED on an RPC error (can't verify ⇒ don't switch) so a transient read
+  // failure can't wave through a funded wallet.
   for (const ch of chains.enabledChains()) {
-    const bal = await ethBalance(u.address, ch.key);
+    let bal;
+    try { bal = await providerFor(ch.key).getBalance(u.address); }
+    catch (_) { throw new Error(`couldn't verify your balance on ${ch.name} right now — try again in a moment.`); }
     if (bal > dust) throw new Error(`your current wallet still holds ${Number(ethers.formatEther(bal)).toFixed(5)} ${ch.native} on ${ch.name} — withdraw it (or export the key) first so it isn't lost.`);
   }
-  // New key ⇒ positions AND orders (snipe/TP/SL/limit) were bound to the old
-  // wallet's holdings; clear both. Write-through so the new key is durable.
+  // The native guard can't see ERC20 token bags, so ARCHIVE the old encrypted key
+  // before replacing it — nothing is ever unrecoverable (the key can still be
+  // exported later). Then clear positions/orders (bound to the old wallet).
+  u.oldWallets = u.oldWallets || [];
+  u.oldWallets.push({ address: u.address, enc: u.enc, at: Date.now() });
+  if (u.oldWallets.length > 20) u.oldWallets = u.oldWallets.slice(-20);
   u.address = w.address; u.enc = encrypt(w.privateKey); u.positions = {}; u.orders = [];
   saveStoreNow();
   return u.address;
@@ -282,14 +302,16 @@ async function _chargeFee(wallet, feeWei, chainKey) {
     return tx.hash;
   } catch (e) { console.error('fee charge failed', e.message); return null; }
 }
-function _creditReferral(user, feeWei) {
+function _creditReferral(user, feeWei, chainKey) {
   if (!user.referredBy || feeWei <= 0n) return;
   const refId = DB.refByCode[user.referredBy];
   const ref = refId && DB.users[refId];
   if (!ref) return;
   const share = (feeWei * BigInt(CFG.refShareBps)) / 10000n;
-  ref.refEarnedEth = (ref.refEarnedEth || 0) + Number(ethers.formatEther(share));
-  ref._refOwedWei = ((BigInt(ref._refOwedWei || '0')) + share).toString();
+  // Bucket per chain — a BNB fee share must NOT be summed with ETH shares (1 BNB
+  // != 1 ETH). refOwed[chainKey] = wei string, settled per native.
+  ref.refOwed = ref.refOwed || {};
+  ref.refOwed[chainKey] = ((BigInt(ref.refOwed[chainKey] || '0')) + share).toString();
   saveStore();
 }
 function posKey(chainKey, ca) { return chainKey + ':' + ca.toLowerCase(); }
@@ -305,7 +327,9 @@ async function buy(chatId, ca, ethAmount, chainKey) {
     const gross = ethers.parseEther(String(ethAmount));
     if (gross <= 0n) throw new Error('amount must be > 0');
     const bal = await ethBalance(wallet.address, chainKey);
-    const gasBuf = ethers.parseEther(CFG.gasBufferEth);
+    // L1 Ethereum gas dwarfs the L2 default — reserve more so a buy isn't left
+    // unable to pay for its own swap.
+    const gasBuf = ethers.parseEther(chainKey === 'ethereum' ? (process.env.ETH_GAS_BUFFER || '0.006') : CFG.gasBufferEth);
     if (bal < gross + gasBuf) throw new Error(`insufficient ${chain.native} — need ~${ethers.formatEther(gross + gasBuf)} incl. gas, have ${Number(ethers.formatEther(bal)).toFixed(5)}`);
     const fee = (gross * BigInt(CFG.feeBps)) / 10000n;
     const spend = gross - fee;
@@ -317,14 +341,14 @@ async function buy(chatId, ca, ethAmount, chainKey) {
     const slip = slipBps(u);
     const before = await tokenBalance(ca, wallet.address, chainKey);
 
-    let venue, hash;
+    let venue, hash, trc;
     if (curve && !grad) {
       const cc = new ethers.Contract(curve, CURVE_ABI, wallet);
       let minTok;
       try { const exp = await cc.buy.staticCall(0n, deadline, { value: spend }); minTok = exp * (10000n - slip) / 10000n; }
       catch (e) { throw new Error('could not quote this buy (try again / lower amount): ' + (e.shortMessage || e.message || e)); }
       const tx = await cc.buy(minTok, deadline, { value: spend, ...gas });
-      venue = 'curve'; hash = tx.hash; await waitBounded(tx);
+      venue = 'curve'; hash = tx.hash; trc = await waitBounded(tx);
     } else {
       const router = new ethers.Contract(chain.router, ROUTER_ABI, wallet);
       let expTok = 0n;
@@ -334,18 +358,19 @@ async function buy(chatId, ca, ethAmount, chainKey) {
       const minTok = expTok > 0n ? expTok * (10000n - dexSlip) / 10000n : 0n;
       if (minTok <= 0n) throw new Error('no liquidity / zero quote for this token on ' + chain.name);
       const tx = await router.swapExactETHForTokensSupportingFeeOnTransferTokens(minTok, [chain.weth, ca], wallet.address, deadline, { value: spend, ...gas });
-      venue = 'dex'; hash = tx.hash; await waitBounded(tx);
+      venue = 'dex'; hash = tx.hash; trc = await waitBounded(tx);
     }
     const after = await tokenBalance(ca, wallet.address, chainKey);
     const meta = await tokenMeta(ca, chainKey);
     const got = after > before ? after - before : 0n;
-    // Success is the on-chain balance CHANGE, not the receipt (which waitBounded
-    // may null on a timeout). No tokens received ⇒ don't charge the fee or record a
-    // position from stale data — surface it as pending.
-    if (got <= 0n) throw new Error('trade sent but not confirmed / no tokens received yet — check your wallet before retrying. Tx: ' + hash);
+    // Confirmed = receipt status 1 (waitBounded returns it; a revert would have
+    // thrown) OR a positive balance change. Only "pending" if BOTH the receipt
+    // timed out (null) AND the balance read shows no gain — so a successful buy
+    // whose balance read merely failed isn't falsely retried (double-buy).
+    if (!trc && got <= 0n) throw new Error('trade sent but not confirmed / no tokens received yet — check your wallet before retrying. Tx: ' + hash);
 
     const feeHash = await _chargeFee(wallet, fee, chainKey);
-    if (feeHash) _creditReferral(u, fee);
+    if (feeHash) _creditReferral(u, fee, chainKey);
 
     const key = posKey(chainKey, ca);
     const p = u.positions[key] || { chain: chainKey, ca, name: meta.name, sym: meta.sym, dec: meta.decimals, ethIn: 0, ethOut: 0, realizedEth: 0, tokens: '0' };
@@ -381,14 +406,14 @@ async function sell(chatId, ca, pct, chainKey) {
     await ensureApprove(wallet, ca, spender, amount, chainKey);   // before ethBefore snapshot
     const ethBefore = await ethBalance(wallet.address, chainKey);
 
-    let venue, hash;
+    let venue, hash, trc;
     if (onCurve) {
       const cc = new ethers.Contract(curve, CURVE_ABI, wallet);
       let minEth;
       try { const exp = await cc.sell.staticCall(amount, 0n, deadline); minEth = exp * (10000n - slip) / 10000n; }
       catch (e) { throw new Error('could not quote this sell (try again): ' + (e.shortMessage || e.message || e)); }
       const tx = await cc.sell(amount, minEth, deadline, gas);
-      venue = 'curve'; hash = tx.hash; await waitBounded(tx);
+      venue = 'curve'; hash = tx.hash; trc = await waitBounded(tx);
     } else {
       const router = new ethers.Contract(chain.router, ROUTER_ABI, wallet);
       let expEth = 0n;
@@ -396,17 +421,19 @@ async function sell(chatId, ca, pct, chainKey) {
       catch (e) { throw new Error('could not quote this sell on ' + chain.name + ' (no pool? try again): ' + (e.shortMessage || e.message || e)); }
       const dexSlip = slip + 1200n > 5000n ? 5000n : slip + 1200n;
       const minEth = expEth > 0n ? expEth * (10000n - dexSlip) / 10000n : 0n;
+      if (minEth <= 0n) throw new Error('no liquidity / zero quote for this sell on ' + chain.name);   // never send minOut=0 (sandwich drain)
       const tx = await router.swapExactTokensForETHSupportingFeeOnTransferTokens(amount, minEth, [ca, chain.weth], wallet.address, deadline, gas);
-      venue = 'dex'; hash = tx.hash; await waitBounded(tx);
+      venue = 'dex'; hash = tx.hash; trc = await waitBounded(tx);
     }
     const tokAfter = await erc.balanceOf(wallet.address);
-    // Success = tokens actually left the wallet (receipt may be null on timeout).
-    if (tokAfter >= bal) throw new Error('sell sent but not confirmed yet — check your wallet before retrying. Tx: ' + hash);
+    // Confirmed = receipt status 1, OR tokens actually left the wallet. Only
+    // "pending" if the receipt timed out AND the balance read shows no change.
+    if (!trc && tokAfter >= bal) throw new Error('sell sent but not confirmed yet — check your wallet before retrying. Tx: ' + hash);
     const ethAfter = await ethBalance(wallet.address, chainKey);
     const proceeds = ethAfter > ethBefore ? ethAfter - ethBefore : 0n;
     const fee = (proceeds * BigInt(CFG.feeBps)) / 10000n;
     const feeHash = await _chargeFee(wallet, fee, chainKey);
-    if (feeHash) _creditReferral(u, fee);
+    if (feeHash) _creditReferral(u, fee, chainKey);
 
     const key = posKey(chainKey, ca);
     const pos = u.positions[key];
