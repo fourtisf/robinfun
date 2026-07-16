@@ -13,6 +13,7 @@
  * recomputes from scratch.
  */
 const { ethers } = require('ethers');
+const EventEmitter = require('events');
 const fs = require('fs');
 const path = require('path');
 
@@ -62,7 +63,25 @@ function prov() {
 const idx = { ethUsd: 0, ethUsdAt: 0, blockTime: 0, blockTimeAt: 0, head: 0, updatedAt: 0, perToken: {} };
 let _getTokens = () => [];
 let _onEvent = () => {};   // (eventName, data) — e.g. webhook dispatcher
-function emitEvent(ev, data) { try { _onEvent(ev, data); } catch (_) {} }
+// Real-time event bus: the realtime feed (SSE/WS) subscribes here so on-chain
+// trades + graduations reach connected partners the instant they're indexed.
+// Kept separate from _onEvent (webhooks) so each can fail independently.
+const bus = new EventEmitter();
+bus.setMaxListeners(0);
+function emitEvent(ev, data) {
+  try { _onEvent(ev, data); } catch (_) {}
+  try { bus.emit(ev, data); } catch (_) {}
+}
+// Bus-only emit (does NOT hit the webhook dispatcher). Used for 'trade', which
+// the real-time feed wants but webhooks do not — routing it through emitEvent
+// would make webhooks.dispatch JSON.stringify + discard every trade needlessly.
+function emitBus(ev, data) { try { bus.emit(ev, data); } catch (_) {} }
+// Tokens whose live feed is "warm": we push real-time 'trade' events only AFTER
+// a token has completed one indexed cycle in THIS process. This Set is memory-only
+// (never checkpointed), so on restart it starts empty — the first post-restart
+// cycle, which catches up the entire downtime gap, is treated as catch-up and is
+// NOT flooded to subscribers. Steady-state cycles (small ranges) emit normally.
+const _liveReady = new Set();
 
 function loadCheckpoint() {
   try {
@@ -195,7 +214,7 @@ async function indexToken(rec, head, nowSec) {
     const wasGrad = s.graduated;
     s.graduated = !!grad;
     // Fire a one-time webhook event when a token graduates (curve → Uniswap).
-    if (!wasGrad && s.graduated && !s._gradFired) { s._gradFired = true; emitEvent('token.graduated', { address: rec.ca || ca, symbol: rec.ticker, name: rec.name, marketCapUsd: s.mcapUsd }); }
+    if (!wasGrad && s.graduated && !s._gradFired) { s._gradFired = true; emitEvent('token.graduated', { chainId: CHAIN_ID, address: rec.ca || ca, symbol: rec.ticker, name: rec.name, status: 'listed', graduated: true, priceUsd: s.priceUsd || null, marketCapUsd: s.mcapUsd || null }); }
     hadReserves = true;
   } catch (_) {}
 
@@ -250,7 +269,34 @@ async function indexToken(rec, head, nowSec) {
     // index (li → stable swap ids), price (ETH), eth volume, side, and post-trade
     // reserves (rE/rT → curve liquidity for the DEX aggregator feed).
     s.trades.push({ t: Math.round(ts), blk: e.block, li: (e.li == null ? 0 : e.li), pe: e.priceEth || 0, e: e.eth, b: !!e.buy, rE: e.rE || 0, rT: e.rT || 0 });
+    // Push freshly-seen trades to the real-time feed (SSE/WS). Emit only for the
+    // steady-state incremental scan of a WARM token: skip a token's first-sight
+    // backfill (replays history) AND the first cycle after a process restart
+    // (catches up the downtime gap) — either would flood subscribers with old
+    // fills mislabeled "now". `_liveReady` gates both (see its definition).
+    if (!backfilling && _liveReady.has(ca)) {
+      const pe = e.priceEth || 0;
+      const usd = idx.ethUsd > 0;   // null (not 0) when the ETH/USD rate isn't known yet
+      emitBus('trade', {
+        chainId: CHAIN_ID,
+        address: rec.ca || ca,
+        symbol: rec.ticker || null,
+        name: rec.name || null,
+        side: e.buy ? 'buy' : 'sell',
+        priceEth: pe,
+        priceUsd: usd ? pe * idx.ethUsd : null,
+        volumeEth: e.eth || 0,
+        volumeUsd: usd ? (e.eth || 0) * idx.ethUsd : null,
+        block: e.block,
+        txnId: `${e.block}-${(e.li == null ? 0 : e.li)}`,
+        ts: Math.round(ts) * 1000,
+      });
+    }
   }
+  // Mark this token "warm" AFTER its first indexed cycle in this process, so the
+  // NEXT cycle's trades (genuinely live) emit while this cycle's (backfill or
+  // post-restart catch-up) do not.
+  _liveReady.add(ca);
   // keep trades sorted by time and bounded (memory) — last ~1500 or ~14 days
   s.trades.sort((a, b) => a.t - b.t);
   const tradeCutoff = nowSec - 14 * 86400;
@@ -385,4 +431,4 @@ function eventsInRange(fromBlock, toBlock, limit = 1000) {
   return out.slice(0, Math.min(5000, Math.max(1, Number(limit) || 1000)));
 }
 
-module.exports = { startIndexer, getStats, getTrades, getOHLC, latestBlock, tokenState, eventsInRange };
+module.exports = { startIndexer, getStats, getTrades, getOHLC, latestBlock, tokenState, eventsInRange, bus };

@@ -139,6 +139,37 @@ server {
         expires 30d;
     }
 
+    # Real-time WebSocket feed (/api/v1/ws). Needs the HTTP upgrade headers +
+    # a long read timeout so the socket isn't dropped while idle. Longer prefix
+    # than /api/ so nginx routes this path here.
+    location /api/v1/ws {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    # Real-time SSE feed (/api/v1/stream). Disable buffering so events flush at
+    # once; long read timeout so the stream stays open between heartbeats.
+    location /api/v1/stream {
+        proxy_pass http://127.0.0.1:${PORT};
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+
     # Metadata API.
     location /api/ {
         proxy_pass http://127.0.0.1:${PORT};

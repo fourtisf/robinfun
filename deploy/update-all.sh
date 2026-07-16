@@ -95,6 +95,79 @@ else
   warn "No backend service found — run bootstrap-api.sh once if you need the backend."
 fi
 
+# ---- nginx: ensure the real-time feed's WS/SSE locations exist ----
+# bootstrap-api.sh writes these on first setup, but a plain update won't re-run
+# it, so a long-lived instance can be missing the WebSocket upgrade block. Add
+# it idempotently and SAFELY: back up, patch, `nginx -t`, revert on failure.
+patch_nginx_realtime() {
+  local CONF="${NGINX_CONF:-/etc/nginx/sites-available/robinfun.conf}"
+  [ -f "$CONF" ] || { warn "nginx conf $CONF not found — skipping real-time WS/SSE patch"; return; }
+  # Already patched? Guard on EITHER block so a partial hand-edit can't trigger a
+  # duplicate-location re-insert loop.
+  grep -qE 'location /api/v1/(ws|stream)' "$CONF" && return
+  grep -q 'location /api/ {' "$CONF" || { warn "no 'location /api/' in $CONF — skipping WS/SSE patch"; return; }
+  # Only patch a config that's currently VALID. If 'nginx -t' already fails (e.g. a
+  # broken unrelated vhost), our post-patch test would fail too and wrongly blame —
+  # and revert — this valid insert on every run. Skip until the existing error is fixed.
+  if ! nginx -t >/dev/null 2>&1; then
+    warn "nginx config already fails 'nginx -t' — skipping WS/SSE patch (fix the existing error first)."
+    return
+  fi
+  # Proxy WS/SSE to the SAME upstream port the working 'location /api/' block uses,
+  # read straight from the conf — never a hardcoded guess (an instance on a custom
+  # PORT would otherwise 502 on the feed).
+  local BPORT
+  BPORT="$(grep -oE 'proxy_pass http://127\.0\.0\.1:[0-9]+' "$CONF" | grep -oE '[0-9]+$' | head -1)"
+  [ -n "$BPORT" ] || BPORT="${PORT:-3001}"
+  local BAK INS
+  BAK="${CONF}.rf-bak"                 # fixed name → no backup pile-up on repeats
+  cp "$CONF" "$BAK" || { warn "could not back up $CONF — skipping WS/SSE patch"; return; }
+  INS="$(mktemp)"
+  cat > "$INS" <<'WSBLOCK'
+    location /api/v1/ws {
+        proxy_pass http://127.0.0.1:__PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location /api/v1/stream {
+        proxy_pass http://127.0.0.1:__PORT__;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+
+WSBLOCK
+  sed -i "s/__PORT__/${BPORT}/g" "$INS"
+  # Insert the blocks immediately before the FIRST "location /api/ {".
+  awk -v insf="$INS" '
+    BEGIN { while ((getline line < insf) > 0) ins = ins line "\n" }
+    /^[[:space:]]*location \/api\/ \{/ && !done { printf "%s", ins; done=1 }
+    { print }
+  ' "$BAK" > "$CONF"
+  rm -f "$INS"
+  if nginx -t >/dev/null 2>&1; then
+    log "nginx: added real-time WS/SSE locations (/api/v1/ws, /api/v1/stream) -> 127.0.0.1:${BPORT}"
+  else
+    cp "$BAK" "$CONF"
+    warn "real-time WS/SSE nginx patch failed 'nginx -t' — reverted. Re-run deploy/bootstrap-api.sh to add it."
+  fi
+}
+patch_nginx_realtime
+
 log "Reloading nginx"
 nginx -t 2>/dev/null && systemctl reload nginx 2>/dev/null || warn "nginx reload skipped (check 'nginx -t')."
 

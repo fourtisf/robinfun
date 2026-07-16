@@ -21,6 +21,7 @@ const store = require('./store');   // MongoDB (if MONGODB_URI) or JSON-file fal
 const stats = require('./stats');   // continuous on-chain board-stats indexer
 const apiV1 = require('./api-v1');  // public partner API (read-only token data)
 const webhooks = require('./webhooks'); // partner webhook subscriptions (token.created / graduated)
+const realtime = require('./realtime'); // live feed: SSE /api/v1/stream + WS /api/v1/ws
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -88,7 +89,7 @@ const app = express();
 app.set('trust proxy', 1);              // behind nginx → real client IP in req.ip
 app.use(express.json({ limit: '6mb' }));
 
-app.get('/api/health', (req, res) => res.json({ ok: true, tokens: store.countTokens(), backend: store.backend() }));
+app.get('/api/health', (req, res) => res.json({ ok: true, tokens: store.countTokens(), backend: store.backend(), realtime: { clients: realtime.clientCount(), ws: realtime.wsEnabled() } }));
 
 // CORS for the admin-console endpoints — the console lives on a different origin
 // (robinfun.tech) and needs to GET/POST/DELETE here. Everything else stays
@@ -209,6 +210,13 @@ app.get('/api/v1/guide', (req, res) => {
   res.type('html').send(apiV1.guideHtml(apiBase(req)));
 });
 
+// ---- Real-time feed: Server-Sent Events (SSE) ----
+// GET /api/v1/stream[?token=0x…][?types=trade,token.created,token.graduated]
+// A long-lived response streaming { type, ts, data } messages as trades happen.
+// The companion WebSocket (wss://…/api/v1/ws) carries the same messages.
+app.options('/api/v1/stream', publicCors);
+app.get('/api/v1/stream', (req, res) => realtime.sse(req, res));
+
 // ---- Aggregator (GeckoTerminal / DexScreener) endpoints ----
 app.get('/api/v1/dex/latest-block', publicCors, (req, res) => res.json(apiV1.dexLatestBlock(stats)));
 app.get('/api/v1/dex/asset', publicCors, (req, res) => {
@@ -298,8 +306,14 @@ app.post('/api/tokens', rateLimit, async (req, res) => {
       createdAt: Date.now(),
     };
     await store.addToken(rec);
-    // Notify partner webhooks (fire-and-forget) with the public token shape.
-    try { webhooks.dispatch('token.created', apiV1.toPublic(rec, stats.getStats(), apiBase(req))); } catch (_) {}
+    // Notify partner webhooks (fire-and-forget) + push to the live feed with the
+    // public token shape, so both push-subscribers and stream-subscribers learn
+    // about the new launch immediately.
+    try {
+      const pub = apiV1.toPublic(rec, stats.getStats(), apiBase(req));
+      try { webhooks.dispatch('token.created', pub); } catch (_) {}
+      try { realtime.broadcast('token.created', pub); } catch (_) {}
+    } catch (_) {}
     res.status(201).json(rec);
   } catch {
     res.status(500).json({ error: 'server error' });
@@ -343,7 +357,12 @@ if (SITE_DIR) {
 // Bootstrap: connect the store (MongoDB or JSON) BEFORE accepting requests.
 (async () => {
   await store.init({ dataDir: DATA_DIR, defaultSettings: DEFAULT_SETTINGS });
-  app.listen(PORT, HOST, () => console.log(`robinfun-api listening on ${HOST}:${PORT} [store: ${store.backend()}]`));
+  const server = app.listen(PORT, HOST, () => console.log(`robinfun-api listening on ${HOST}:${PORT} [store: ${store.backend()}]`));
+  // Real-time feed: attach the WebSocket server to the same port (/api/v1/ws)
+  // and subscribe it to the indexer's trade + graduation events. SSE is served
+  // by the /api/v1/stream route above; both carry the same messages.
+  try { realtime.attach(server); realtime.subscribe(stats); console.log(`real-time feed ready (SSE + ${realtime.wsEnabled() ? 'WS' : 'WS disabled: install ws'})`); }
+  catch (e) { console.error('realtime feed failed to start', e); }
   // Kick off the continuous board-stats indexer (reads the chain server-side so
   // GET /api/stats is instant for every browser). Disable with STATS_INDEXER=off.
   if (!/^(0|off|false|no)$/i.test(process.env.STATS_INDEXER || '')) {

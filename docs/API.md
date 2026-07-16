@@ -213,6 +213,62 @@ Also sent: `x-robinfun-event: token.created`. Respond `2xx` quickly; we don't re
 
 ---
 
+## Real-time feed (WebSocket + SSE)
+
+For **live trades** don't poll — subscribe and get pushed the instant a swap
+lands. No auth, no API key. Two transports carry the **identical** JSON message,
+so pick whichever your stack prefers:
+
+| transport | URL | consume with |
+|-----------|-----|--------------|
+| **Server-Sent Events** | `GET https://robinfun.io/api/v1/stream` | `new EventSource(url)` (built into browsers) |
+| **WebSocket** | `wss://robinfun.io/api/v1/ws` | browser `WebSocket`, or Node `npm i ws` |
+
+**Message envelope** (every message, both transports):
+```json
+{ "type": "trade", "ts": 1752600000000, "data": { /* see below */ } }
+```
+`type` is one of:
+- `hello` — sent once on connect (handshake; `data` echoes your filters + `heartbeatMs`)
+- `ping` — SSE heartbeat only, delivered as an SSE comment (`: ping`), never surfaces as a message; WS uses protocol-level ping/pong
+- `trade` — a buy/sell was just indexed:
+  ```json
+  { "chainId": 4663, "address": "0x…", "symbol": "TDOGE", "name": "Test Doge",
+    "side": "buy", "priceEth": 6.5e-10, "priceUsd": 0.00000123,
+    "volumeEth": 0.0048, "volumeUsd": 9.1, "block": 123456,
+    "txnId": "123456-0", "ts": 1752600000000 }
+  ```
+- `token.created` — a new token launched (`data` = the full **Token object**)
+- `token.graduated` — a token listed on Uniswap (`data` = `{chainId,address,symbol,name,status,graduated,priceUsd,marketCapUsd}`)
+
+`trade`'s `priceUsd`/`volumeUsd` are `null` until the ETH/USD rate has been fetched (the `*Eth` fields are always present).
+
+**Optional filters** (query string, both transports):
+| param | effect |
+|-------|--------|
+| `?token=0x…` | only `trade` messages for that contract |
+| `?types=trade,token.created` | only these message types (comma-separated) |
+
+```js
+// SSE — browser, no library
+const es = new EventSource('https://robinfun.io/api/v1/stream');
+es.onmessage = (e) => {
+  const m = JSON.parse(e.data);
+  if (m.type === 'trade') console.log(m.data.symbol, m.data.side, '$' + m.data.volumeUsd);
+};
+
+// WebSocket — Node (npm i ws) or browser
+const ws = new WebSocket('wss://robinfun.io/api/v1/ws?token=0xYourToken');
+ws.on('message', (buf) => { const m = JSON.parse(buf); /* { type, ts, data } */ });
+```
+
+The feed is **live-only**: it carries events from the moment you connect. For
+trades that happened before you subscribed, page `/tokens/{ca}/trades`. A common
+pattern is to load `/tokens/{ca}/trades` once for history, then keep the view live
+off the stream.
+
+---
+
 ## Examples
 
 ```bash

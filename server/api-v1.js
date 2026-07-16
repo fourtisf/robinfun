@@ -136,8 +136,16 @@ function index(apiBase) {
         pair: `${apiBase}/dex/pair?id={pairAddress}`,
         events: `${apiBase}/dex/events?fromBlock=&toBlock=`,
       },
+      // Real-time push feed — same messages over two transports. Optional
+      // filters: ?token=0x… (trades for one token) · ?types=trade,token.created
+      realtime: {
+        sse: `${apiBase}/stream`,
+        websocket: `${apiBase.replace(/^http/i, 'ws')}/ws`,
+        events: ['trade', 'token.created', 'token.graduated'],
+        message: '{ type, ts, data }',
+      },
     },
-    notes: 'Read-only. CORS open. Data refreshes continuously from chain. Field names are stable within v1. Webhooks (token.created / token.graduated) available to partners on request.',
+    notes: 'Read-only. CORS open. Data refreshes continuously from chain. Field names are stable within v1. For live trades subscribe to the realtime feed (SSE /stream or WS /ws) instead of polling; historical trades are at /tokens/{ca}/trades. Webhooks (token.created / token.graduated) available to partners on request.',
   };
 }
 
@@ -273,12 +281,12 @@ function openapi(apiBase) {
     info: {
       title: 'Robinfun Public API',
       version: '1.0.0',
-      description: 'Read-only market data for memecoins launched on Robinfun (Robinhood Chain, chainId 4663). Use it to auto-list tokens, power aggregators/trackers, or feed wallets and bots. No auth, CORS open, cached ~15s.',
+      description: 'Read-only market data for memecoins launched on Robinfun (Robinhood Chain, chainId 4663). Use it to auto-list tokens, power aggregators/trackers, or feed wallets and bots. No auth, CORS open, cached ~15s.\n\n**Real-time:** for live trades don\'t poll — subscribe to the push feed. Two transports carry the same `{ type, ts, data }` messages (type = `trade` | `token.created` | `token.graduated`): Server-Sent Events at `GET /stream` (documented below) and WebSocket at `wss://robinfun.io/api/v1/ws`. Both accept `?token=0x…` and `?types=trade,token.created` filters. Historical trades stay at `/tokens/{contractAddress}/trades`.',
       contact: { name: 'Robinfun', url: SITE },
     },
     servers: [{ url: base, description: 'Robinfun API v1' }],
     tags: [
-      { name: 'Discovery' }, { name: 'Tokens' }, { name: 'Market' }, { name: 'Platform' }, { name: 'Aggregator' },
+      { name: 'Discovery' }, { name: 'Tokens' }, { name: 'Market' }, { name: 'Realtime' }, { name: 'Platform' }, { name: 'Aggregator' },
     ],
     paths: {
       '/': { get: { tags: ['Discovery'], summary: 'API index', operationId: 'getIndex', responses: ok({ type: 'object' }) } },
@@ -315,6 +323,19 @@ function openapi(apiBase) {
       '/dex/asset': { get: { tags: ['Aggregator'], summary: 'Asset (token) by id', operationId: 'dexAsset', parameters: [{ name: 'id', in: 'query', required: true, schema: { type: 'string' }, description: 'Token address, or "ETH" for the native asset' }], responses: okAnd404({ type: 'object' }) } },
       '/dex/pair': { get: { tags: ['Aggregator'], summary: 'Pair by id', operationId: 'dexPair', parameters: [{ name: 'id', in: 'query', required: true, schema: { type: 'string' }, description: 'Pair/curve/token address' }], responses: okAnd404({ type: 'object' }) } },
       '/dex/events': { get: { tags: ['Aggregator'], summary: 'Swap events in a block range', operationId: 'dexEvents', parameters: [{ name: 'fromBlock', in: 'query', schema: { type: 'integer' } }, { name: 'toBlock', in: 'query', schema: { type: 'integer' } }, { name: 'limit', in: 'query', schema: { type: 'integer', default: 1000, maximum: 5000 } }], responses: ok({ type: 'object' }) } },
+      '/stream': {
+        get: {
+          tags: ['Realtime'],
+          summary: 'Real-time event stream (Server-Sent Events)',
+          description: 'A long-lived `text/event-stream` response. Each SSE message\'s `data:` line is a JSON `{ type, ts, data }` envelope — type is `hello`, `ping` (heartbeat comment, no event), `trade`, `token.created` or `token.graduated`. Consume with `new EventSource(url).onmessage`. A WebSocket with identical messages is at `wss://robinfun.io/api/v1/ws`.',
+          operationId: 'stream',
+          parameters: [
+            { name: 'token', in: 'query', schema: { type: 'string' }, description: 'Restrict trade messages to one contract address (0x…)' },
+            { name: 'types', in: 'query', schema: { type: 'string' }, description: 'Comma-separated subset of trade,token.created,token.graduated' },
+          ],
+          responses: { '200': { description: 'Event stream', content: { 'text/event-stream': { schema: { $ref: '#/components/schemas/StreamMessage' } } } } },
+        },
+      },
     },
     components: {
       schemas: {
@@ -368,6 +389,18 @@ function openapi(apiBase) {
           properties: {
             chainId: { type: 'integer' }, chain: { type: 'string' }, updatedAt: { type: 'integer' }, ethUsd: { type: 'number' },
             tokensTracked: { type: 'integer' }, volume24hUsd: { type: 'number' }, volumeTotalUsd: { type: 'number' }, paidToCreatorsUsd: { type: 'number' },
+          },
+        },
+        StreamMessage: {
+          type: 'object',
+          description: 'One real-time message (SSE data: line, or a WS frame).',
+          properties: {
+            type: { type: 'string', enum: ['hello', 'ping', 'trade', 'token.created', 'token.graduated'] },
+            ts: { type: 'integer', description: 'ms epoch' },
+            data: {
+              type: 'object', nullable: true,
+              description: 'type=trade: { chainId, address, symbol, name, side(buy|sell), priceEth, priceUsd, volumeEth, volumeUsd, block, txnId, ts } (priceUsd/volumeUsd may be null until the ETH/USD rate is known). type=token.created: the full Token object. type=token.graduated: { chainId, address, symbol, name, status, graduated, priceUsd, marketCapUsd }.',
+            },
           },
         },
       },
@@ -505,6 +538,7 @@ function docsHtml(apiBase) {
 // ============================================================================
 function guideHtml(apiBase) {
   const base = (apiBase || (SITE + '/api/v1')).replace(/\/+$/, '');
+  const wsBase = base.replace(/^http/i, 'ws');   // https→wss, http→ws for the WebSocket URL
   const refUrl = base + '/docs';
   const specUrl = base + '/openapi.json';
   const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -568,6 +602,41 @@ function guideHtml(apiBase) {
     "const { candles } = await (await fetch(url)).json();",
     "// candles: [{ time(unix s), open, high, low, close, volumeUsd }]",
     "drawChart(candles);",
+  ].join("\n");
+
+  const cTrades = [
+    "// Recent trades (swaps) for one token — newest first.",
+    "const ca = '0xd48A1Eed09696E389A3CC32E519224d6Bf4ffeEd';",
+    "const { trades } = await (await fetch(`" + base + "/tokens/${ca}/trades?limit=100`)).json();",
+    "// trades: [{ ts(ms), side:'buy'|'sell', priceUsd, priceEth, volumeUsd, volumeEth }]",
+    "trades.forEach(t => console.log(t.side, '$' + t.volumeUsd, '@ $' + t.priceUsd));",
+  ].join("\n");
+
+  const cStream = [
+    "// LIVE trades with zero polling — Server-Sent Events (built into browsers).",
+    "const es = new EventSource('" + base + "/stream');",
+    "es.onmessage = (e) => {",
+    "  const msg = JSON.parse(e.data);              // { type, ts, data }",
+    "  if (msg.type === 'trade')           onTrade(msg.data);",
+    "  if (msg.type === 'token.created')   onNewToken(msg.data);",
+    "  if (msg.type === 'token.graduated') onGraduated(msg.data);",
+    "};",
+    "// Filter: '" + base + "/stream?token=0xYourToken'  or  '?types=trade,token.created'",
+  ].join("\n");
+
+  const cWs = [
+    "// Same messages over WebSocket. Browser: WebSocket is built-in. Node: npm i ws",
+    "const WebSocket = require('ws');",
+    "const ws = new WebSocket('" + wsBase + "/ws');",
+    "ws.on('open',    () => console.log('connected'));",
+    "ws.on('message', (buf) => {",
+    "  const msg = JSON.parse(buf);                 // { type, ts, data }",
+    "  if (msg.type === 'trade') {",
+    "    const t = msg.data;",
+    "    console.log(t.symbol, t.side, '$' + t.volumeUsd, '@ $' + t.priceUsd);",
+    "  }",
+    "});",
+    "// One token only:  new WebSocket('" + wsBase + "/ws?token=0xYourToken')",
   ].join("\n");
 
   const cHookReg = [
@@ -679,6 +748,7 @@ function guideHtml(apiBase) {
 '    <div class="feat"><div class="e">🔓</div><b>No key, no auth</b><span>Public &amp; read-only. Start immediately.</span></div>\n' +
 '    <div class="feat"><div class="e">🌐</div><b>CORS open</b><span>Call it straight from a browser.</span></div>\n' +
 '    <div class="feat"><div class="e">⚡</div><b>Live data</b><span>Indexed from chain, cached ~15s.</span></div>\n' +
+'    <div class="feat"><div class="e">📡</div><b>Real-time</b><span>Live trades over <a href="#realtime">WebSocket / SSE</a>.</span></div>\n' +
 '    <div class="feat"><div class="e">🔔</div><b>Webhooks</b><span>Get pushed on new &amp; graduated tokens.</span></div>\n' +
 '  </div>\n' +
 '  <div class="step"><div class="num">1</div><div class="body"><h2>Try it — no code</h2><p class="lead">Paste into a terminal. Every response is JSON.</p>' + codeBlock('try', cTry) + '<div class="note">Fields you\'ll use most: <b>address</b> (unique id), <b>symbol</b>, <b>name</b>, <b>priceUsd</b>, <b>marketCapUsd</b>, <b>status</b> (<code>bonding</code>=on curve, <code>listed</code>=on Uniswap), <b>pairAddress</b>, <b>logoURI</b>.</div></div></div>\n' +
@@ -688,6 +758,12 @@ function guideHtml(apiBase) {
 '  <p class="lead">The simplest way to stay in sync: poll on an interval and diff by <code style="font-family:var(--fm);color:var(--lime2)">address</code>.</p>' + codeBlock('poll', cPoll) +
 '  <h3>Draw a price chart</h3>\n' +
 '  <p class="lead">OHLC candles, ready for TradingView / lightweight-charts / Chart.js.</p>' + codeBlock('chart', cChart) +
+'  <h3>Recent trades (swaps)</h3>\n' +
+'  <p class="lead">Every buy/sell for a token, newest first — build a trade feed, tape, or fill history.</p>' + codeBlock('trades', cTrades) +
+'  <h3 id="realtime">Real-time — live trades &amp; launches (WebSocket + SSE)</h3>\n' +
+'  <p class="lead">Don\'t poll for trades — <b>subscribe</b> and get pushed the instant a swap lands. Two transports carry the <b>identical</b> <code style="font-family:var(--fm);color:var(--lime2)">{ type, ts, data }</code> message (<code style="font-family:var(--fm);color:var(--lime2)">type</code> = <code>trade</code> · <code>token.created</code> · <code>token.graduated</code>). Server-Sent Events needs no library and works in any browser:</p>' + codeBlock('stream', cStream) +
+'  <p class="lead" style="margin-top:16px">Prefer a raw WebSocket? Same messages, same filters, over <code style="font-family:var(--fm);color:var(--lime2)">wss://</code>:</p>' + codeBlock('ws', cWs) +
+'  <div class="note"><b>Filters</b> (both transports): <code style="font-family:var(--fm);color:var(--lime2)">?token=0x…</code> for one token\'s trades, <code style="font-family:var(--fm);color:var(--lime2)">?types=trade,token.created</code> to subset events. A <b>hello</b> message greets you on connect and a heartbeat keeps the connection open. The feed is live-only — for trades from before you connected, page <code style="font-family:var(--fm);color:var(--lime2)">/tokens/{ca}/trades</code>.</div>\n' +
 '  <h3>Get pushed instead of polling (webhooks)</h3>\n' +
 '  <p class="lead">Prefer push? Register a URL and Robinfun POSTs to it the instant a token is <b>created</b> or <b>graduates</b> to Uniswap. Registration is operator-managed — send us your URL, or if you run the instance:</p>' + codeBlock('hookreg', cHookReg) +
 '  <p class="lead" style="margin-top:16px">Then verify the signature on your side so you know it\'s really from Robinfun:</p>' + codeBlock('hookrecv', cHookRecv) +
