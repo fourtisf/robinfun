@@ -9,6 +9,7 @@
 const { ethers } = require('ethers');
 const core = require('./core');
 const watchers = require('./watchers');
+const goplus = require('./goplus');
 
 const API = `https://api.telegram.org/bot${core.CFG.tgToken}`;
 const pending = new Map();      // chatId -> { action, ..., ts }
@@ -45,7 +46,7 @@ function mainMenu() {
   return rows(
     [btn('💼 Wallet', 'wal'), btn('📊 Portfolio', 'pos')],
     [btn('🌐 Chain', 'chain'), btn('🎯 Snipe', 'snipe'), btn('📋 Orders', 'orders')],
-    [btn('🎁 Referrals', 'ref'), btn('❔ Help', 'help')],
+    [btn('🎁 Referrals', 'ref'), btn('⚙️ Settings', 'set'), btn('❔ Help', 'help')],
   );
 }
 async function walletScreen(chatId) {
@@ -131,11 +132,14 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   // Encode the card's chain AND wallet index in every action, so a tap on a stale
   // card trades on the chain+wallet it was rendered for — never on whatever chain
   // or wallet merely happens to be active now.
+  const bp = core.buyPresets(u);   // user's quick-buy amounts (Settings)
+  const lastRow = [btn('🔄 Refresh', `tok:${chainKey}:${wi}:${ca}`), btn('« Menu', 'menu')];
+  if (goplus.supported(chainKey)) lastRow.unshift(btn('🛡 Safety', `sec:${chainKey}:${ca}`));   // GoPlus only on supported chains
   const kb = rows(
-    [btn(`Buy 0.01`, `b:${chainKey}:${wi}:${ca}:0.01`), btn('Buy 0.05', `b:${chainKey}:${wi}:${ca}:0.05`), btn('Buy 0.1', `b:${chainKey}:${wi}:${ca}:0.1`)],
-    [btn('Buy X', `bx:${chainKey}:${wi}:${ca}`), btn('Sell 50%', `s:${chainKey}:${wi}:${ca}:50`), btn('Sell 100%', `s:${chainKey}:${wi}:${ca}:100`)],
-    [btn('🎯 TP', `tp:${chainKey}:${wi}:${ca}`), btn('🛑 SL', `sl:${chainKey}:${wi}:${ca}`), btn('⏳ Limit buy', `lb:${chainKey}:${wi}:${ca}`)],
-    [btn('🔄 Refresh', `tok:${chainKey}:${wi}:${ca}`), btn('« Menu', 'menu')],
+    [btn(`Buy ${bp[0]}`, `b:${chainKey}:${wi}:${ca}:${bp[0]}`), btn(`Buy ${bp[1]}`, `b:${chainKey}:${wi}:${ca}:${bp[1]}`), btn(`Buy ${bp[2]}`, `b:${chainKey}:${wi}:${ca}:${bp[2]}`), btn('Buy X', `bx:${chainKey}:${wi}:${ca}`)],
+    [btn('Sell 25%', `s:${chainKey}:${wi}:${ca}:25`), btn('Sell 50%', `s:${chainKey}:${wi}:${ca}:50`), btn('Sell 75%', `s:${chainKey}:${wi}:${ca}:75`), btn('Sell 100%', `s:${chainKey}:${wi}:${ca}:100`)],
+    [btn('Sell X%', `sx:${chainKey}:${wi}:${ca}`), btn('🎯 TP', `tp:${chainKey}:${wi}:${ca}`), btn('🛑 SL', `sl:${chainKey}:${wi}:${ca}`), btn('⏳ Limit', `lb:${chainKey}:${wi}:${ca}`)],
+    lastRow,
   );
   return { text, kb };
 }
@@ -188,6 +192,51 @@ function referralScreen(chatId) {
   return {
     text: `🎁 <b>Referrals</b>\n\nShare your link — you earn <b>${(core.CFG.refShareBps / 100).toFixed(0)}%</b> of the bot fee on every trade your referrals make.\n\n<code>${link}</code>\n\nEarned so far: <b>${earned}</b>`,
     kb: rows([btn('« Menu', 'menu')]),
+  };
+}
+
+function settingsScreen(chatId) {
+  const u = core.ensureUser(chatId);
+  const s = u.settings;
+  const slip = s.slippage > 0 ? s.slippage + '%' : 'default (5%)';
+  const bp = core.buyPresets(u).join(' · ');
+  return {
+    text: `⚙️ <b>Settings</b>\n\n` +
+      `Slippage: <b>${esc(String(slip))}</b>\n` +
+      `Quick-buy buttons: <b>${esc(bp)}</b>\n` +
+      `Auto-buy on paste: <b>${s.autoBuy ? '🟢 ON · ' + esc(s.autoBuyAmount) : '⚪ OFF'}</b>\n\n` +
+      `<i>Auto-buy: paste a contract address and it buys instantly with your active wallet on the active chain — no card, no extra tap.</i>`,
+    kb: rows(
+      [btn('📉 Slippage', 'setslip'), btn('⚡ Buy presets', 'setbp')],
+      [btn(s.autoBuy ? '🔴 Auto-buy OFF' : '🟢 Auto-buy ON', 'abtog'), btn('✏️ Auto-buy amount', 'abamt')],
+      [btn('« Menu', 'menu')],
+    ),
+  };
+}
+async function safetyScreen(chatId, ca, chainKey) {
+  const ch = core.chainOf(chainKey) || core.chainOf(core.userChain(core.ensureUser(chatId)));
+  const back = rows([btn('« Menu', 'menu')]);
+  if (!goplus.supported(chainKey)) {
+    return { text: `🛡 <b>Token safety</b> — not available on ${ch.emoji} ${esc(ch.name)}.\n\nRobinfun-native tokens on Robinhood Chain are fair-launch by design: fixed supply, no tax, and LP is 100% burned at graduation.`, kb: back };
+  }
+  const s = await goplus.tokenSecurity(chainKey, ca).catch(() => null);
+  if (!s) return { text: `🛡 <b>Token safety</b>\n\nCouldn't fetch security data right now (or the token isn't indexed yet). Trade carefully.`, kb: rows([btn('🔄 Retry', `sec:${chainKey}:${ca}`), btn('« Menu', 'menu')]) };
+  const v = goplus.verdict(s);
+  const banner = v.level === 'danger' ? '🚨 <b>HIGH RISK</b>' : v.level === 'warn' ? '⚠️ <b>CAUTION</b>' : '✅ <b>No major red flags</b>';
+  const tax = (t) => (t == null ? '?' : (Math.round(t * 10) / 10) + '%');
+  const yn = (bad) => (bad ? '🔴' : '🟢');
+  let body =
+    `${yn((s.buyTaxPct || 0) > 10)} Buy tax: <b>${tax(s.buyTaxPct)}</b>  ·  ${yn((s.sellTaxPct || 0) > 10)} Sell tax: <b>${tax(s.sellTaxPct)}</b>\n` +
+    `${yn(s.honeypot)} Honeypot: <b>${s.honeypot ? 'YES' : 'no'}</b>  ·  ${yn(s.cannotSellAll)} Can sell all: <b>${s.cannotSellAll ? 'NO' : 'yes'}</b>\n` +
+    `${yn(s.mintable)} Mintable: <b>${s.mintable ? 'yes' : 'no'}</b>  ·  ${yn(s.ownerChangeBalance)} Owner edits balances: <b>${s.ownerChangeBalance ? 'yes' : 'no'}</b>\n` +
+    `${yn(s.openSource === false)} Open-source: <b>${s.openSource === false ? 'no' : 'yes'}</b>  ·  ${yn(s.proxy)} Proxy: <b>${s.proxy ? 'yes' : 'no'}</b>\n`;
+  if (s.lpLockedPct != null) body += `${yn(s.lpLockedPct < 50)} LP locked/burned: <b>${Math.round(s.lpLockedPct)}%</b>\n`;
+  if (s.holders != null) body += `Holders: <b>${s.holders}</b>\n`;
+  if (v.red.length) body += `\n🔴 <b>${v.red.join(', ')}</b>`;
+  else if (v.warn.length) body += `\n⚠️ ${v.warn.join(', ')}`;
+  return {
+    text: `🛡 <b>Token safety</b> · ${ch.emoji} ${esc(ch.name)}  ${s.symbol ? '· $' + esc(s.symbol) : ''}\n${banner}\n\n${body}\n\n<i>Source: GoPlus. Not financial advice — always DYOR.</i>`,
+    kb: rows([btn('🔄 Recheck', `sec:${chainKey}:${ca}`), btn('« Menu', 'menu')]),
   };
 }
 
@@ -254,6 +303,7 @@ async function onMessage(m) {
   if (text === '/snipe') { const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/orders') { const s = ordersScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/referral' || text === '/refer') { const s = referralScreen(chatId); return send(chatId, s.text, s.kb); }
+  if (text === '/settings') { const s = settingsScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/withdraw') { setPending(chatId, { action: 'wd_addr' }); return send(chatId, '📤 Send the <b>destination address</b> to withdraw to:'); }
   if (text === '/export') return askExport(chatId);
   if (text === '/admin') return adminScreen(chatId);
@@ -261,7 +311,16 @@ async function onMessage(m) {
   if (text.startsWith('/buy')) { const [, ca, amt] = text.split(/\s+/); if (isCa(ca) && amt) return doBuy(chatId, ca, amt); return send(chatId, 'Usage: <code>/buy &lt;contract&gt; &lt;amount&gt;</code> — or paste a contract address.'); }
   if (text.startsWith('/sell')) { const [, ca, pct] = text.split(/\s+/); if (isCa(ca) && pct) return doSell(chatId, ca, Number(pct)); return send(chatId, 'Usage: <code>/sell &lt;contract&gt; &lt;pct&gt;</code>'); }
 
-  if (isCa(text)) { core.ensureUser(chatId); const c = await tokenCard(chatId, text); return send(chatId, c.text, c.kb); }
+  if (isCa(text)) {
+    const u = core.ensureUser(chatId);
+    // Auto-buy on paste (Settings): buy instantly with the active wallet/chain.
+    if (u.settings && u.settings.autoBuy) {
+      const amt = u.settings.autoBuyAmount || '0.01';
+      await send(chatId, `⚡ <b>Auto-buy</b> ${esc(amt)} of <code>${short(text)}</code>… <i>(toggle in ⚙️ Settings)</i>`);
+      return doBuy(chatId, text, amt, core.userChain(u));
+    }
+    const c = await tokenCard(chatId, text); return send(chatId, c.text, c.kb);
+  }
   return send(chatId, 'Paste a <b>token contract address</b> to trade, or tap a button.', mainMenu());
 }
 
@@ -288,6 +347,12 @@ async function onCallback(q) {
   if (data === 'snipe') { const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'orders') { const s = ordersScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'ref') { const s = referralScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'set') { const s = settingsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'setslip') { setPending(chatId, { action: 'slip_val' }); return send(chatId, 'Send your <b>slippage %</b> (e.g. <code>5</code>). <code>0</code> = default (5%). Max 50.'); }
+  if (data === 'setbp') { setPending(chatId, { action: 'bp_val' }); return send(chatId, 'Send <b>3 quick-buy amounts</b> separated by spaces, e.g. <code>0.01 0.05 0.1</code>:'); }
+  if (data === 'abtog') { const u = core.ensureUser(chatId); try { core.setAutoBuy(chatId, !u.settings.autoBuy); } catch (_) {} const s = settingsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'abamt') { setPending(chatId, { action: 'ab_amt' }); return send(chatId, 'Send the <b>auto-buy amount</b> to spend per paste (e.g. <code>0.02</code>):'); }
+  if (k === 'sec') { const parts = data.split(':'); const s = await safetyScreen(chatId, parts[2], parts[1]); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'dep') { const u = core.ensureUser(chatId); const ch = core.chainOf(core.userChain(u)); return edit(chatId, mid, `📥 <b>Deposit ${ch.native}</b> on ${ch.emoji} ${esc(ch.name)}\n\n<code>${core.activeAddress(u)}</code>\n\nThis is your <b>active</b> wallet. Same address on every chain — then paste a token contract to buy.`, rows([btn('🔄 Refresh balance', 'wal'), btn('🌐 Chain', 'chain'), btn('« Menu', 'menu')])); }
   if (data === 'wallets') { const s = await walletsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (k === 'sw') { try { core.switchWallet(chatId, ca); } catch (_) {} const s = await walletsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
@@ -310,7 +375,7 @@ async function onCallback(q) {
   if (data === 'snamt') { setPending(chatId, { action: 'snipe_amt' }); return send(chatId, 'Send the ETH amount to buy per snipe (e.g. <code>0.01</code>):'); }
 
   // Trade actions encode the CARD's chain: k:chain:ca[:arg]
-  if (k === 'tok' || k === 'b' || k === 's' || k === 'bx' || k === 'tp' || k === 'sl' || k === 'lb') {
+  if (k === 'tok' || k === 'b' || k === 's' || k === 'bx' || k === 'sx' || k === 'tp' || k === 'sl' || k === 'lb') {
     const parts = data.split(':'); const ch = parts[1], wi = parts[2], tca = parts[3], a = parts[4];
     const wobj = core.walletList(core.ensureUser(chatId))[Number(wi) - 1];
     const wid = wobj ? wobj.id : undefined;   // stale/removed index → fall back to the active wallet
@@ -318,6 +383,7 @@ async function onCallback(q) {
     if (k === 'b') return doBuy(chatId, tca, a, ch, wid);
     if (k === 's') return doSell(chatId, tca, Number(a), ch, wid);
     if (k === 'bx') { setPending(chatId, { action: 'buy_amt', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Send the amount to buy of <code>${short(tca)}</code>:`); }
+    if (k === 'sx') { setPending(chatId, { action: 'sell_pct', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Sell what % of your <code>${short(tca)}</code> bag? Send a number 1–100:`); }
     if (k === 'tp') { setPending(chatId, { action: 'tp_price', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Take-profit: send the target <b>USD price</b> to sell 100% at:`); }
     if (k === 'sl') { setPending(chatId, { action: 'sl_price', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Stop-loss: send the target <b>USD price</b> to sell 100% at:`); }
     if (k === 'lb') { setPending(chatId, { action: 'lb_price', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Limit buy: send <b>&lt;usd_price&gt; &lt;amount&gt;</b> (e.g. <code>0.002 0.05</code>) — buy when price drops to that:`); }
@@ -334,6 +400,10 @@ async function resolvePending(chatId, p, text, m) {
       catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e)) + '\n\n(Your message was deleted for safety — try Import again.)'); }
     }
     if (p.action === 'buy_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); return doBuy(chatId, p.ca, t, p.chain, p.walletId); }
+    if (p.action === 'sell_pct') { const pct = Number(t); if (!(pct > 0 && pct <= 100)) return send(chatId, 'Send a number 1–100.'); return doSell(chatId, p.ca, pct, p.chain, p.walletId); }
+    if (p.action === 'slip_val') { const n = core.setSlippage(chatId, t); const s = settingsScreen(chatId); return send(chatId, `✅ Slippage set to <b>${n > 0 ? n + '%' : 'default (5%)'}</b>.`, s.kb); }
+    if (p.action === 'bp_val') { const arr = core.setBuyPresets(chatId, t); return send(chatId, `✅ Quick-buy buttons: <b>${arr.join(' · ')}</b>.`, settingsScreen(chatId).kb); }
+    if (p.action === 'ab_amt') { const r = core.setAutoBuy(chatId, undefined, t); return send(chatId, `✅ Auto-buy amount: <b>${esc(r.autoBuyAmount)}</b>.`, settingsScreen(chatId).kb); }
     if (p.action === 'snipe_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); const u = core.ensureUser(chatId); u.snipe.ethAmount = String(Number(t)); core.saveStore(); const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
     if (p.action === 'wd_addr') { if (!isCa(t)) return send(chatId, '❌ Not a valid address. Try /withdraw again.'); setPending(chatId, { action: 'wd_amt', to: t }); return send(chatId, `Amount to send to <code>${short(t)}</code> — a number, or <code>max</code>:`); }
     if (p.action === 'wd_amt') {
@@ -383,6 +453,8 @@ function helpText() {
     `• <b>/snipe</b> — auto-buy every new Robinfun launch\n` +
     `• <b>/orders</b> — take-profit / stop-loss / limit buys\n` +
     `• <b>/referral</b> — earn ${(core.CFG.refShareBps / 100).toFixed(0)}% of the bot fee from invites\n` +
+    `• <b>/settings</b> — slippage, quick-buy amounts, auto-buy on paste\n` +
+    `• 🛡 <b>Safety</b> — on a token card (Ethereum/Base/BNB/Arbitrum): honeypot, tax, mint, LP checks\n` +
     `• <b>/buy &lt;ca&gt; &lt;amt&gt;</b>, <b>/sell &lt;ca&gt; &lt;pct&gt;</b>, <b>/cancel</b>\n\n` +
     `Bot fee: <b>${(core.CFG.feeBps / 100).toFixed(2)}%</b> per trade. Only deposit what you can afford to lose.`
   );

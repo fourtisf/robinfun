@@ -161,6 +161,7 @@ function userChain(u) { return (u && u.activeChain && chainOf(u.activeChain) && 
 // wallet never mixes one wallet's bags/orders with another's. Legacy single-wallet
 // records are migrated transparently on first touch (see _migrateLegacy).
 const WALLET_CAP = Math.max(1, Number(process.env.MAX_WALLETS_PER_USER || 10));
+const DEFAULT_BUY_PRESETS = [0.01, 0.05, 0.1];   // the three quick-buy amounts on a token card
 function _refCode() { let c; do { c = crypto.randomBytes(4).toString('hex'); } while (DB.refByCode[c]); return c; }
 function _walletId() { return crypto.randomBytes(5).toString('hex'); }
 function walletFromSecret(secret) {
@@ -231,7 +232,12 @@ function ensureUser(chatId, referredBy) {
     }
     if (!u.activeWalletId || !walletById(u, u.activeWalletId)) { u.activeWalletId = u.wallets[0].id; ch = true; }
     if (!u.snipe || typeof u.snipe !== 'object') { u.snipe = { on: false, ethAmount: '0.01' }; ch = true; }
-    if (!u.settings || typeof u.settings !== 'object') { u.settings = { slippage: 0 }; ch = true; }
+    if (!u.settings || typeof u.settings !== 'object') { u.settings = {}; ch = true; }
+    { const s = u.settings;
+      if (typeof s.slippage !== 'number') { s.slippage = 0; ch = true; }                                   // 0 → 5% default
+      if (!Array.isArray(s.buyPresets) || s.buyPresets.length !== 3 || !s.buyPresets.every((x) => x > 0)) { s.buyPresets = DEFAULT_BUY_PRESETS.slice(); ch = true; }
+      if (typeof s.autoBuy !== 'boolean') { s.autoBuy = false; ch = true; }
+      if (typeof s.autoBuyAmount !== 'string' || !(Number(s.autoBuyAmount) > 0)) { s.autoBuyAmount = '0.01'; ch = true; } }
     // Write THROUGH if we just minted a key in the backfill (durability), else debounce.
     if (minted) saveStoreNow(); else if (ch) saveStore();
     return u;
@@ -246,7 +252,7 @@ function ensureUser(chatId, referredBy) {
     wallets: [w], activeWalletId: w.id,   // each wallet: { id, address, enc, positions, orders }
     snipe: { on: false, ethAmount: '0.01' },
     refEarnedEth: 0,
-    settings: { slippage: 0 },
+    settings: { slippage: 0, buyPresets: DEFAULT_BUY_PRESETS.slice(), autoBuy: false, autoBuyAmount: '0.01' },
   };
   DB.users[id] = u; DB.refByCode[code] = id;
   saveStoreNow();   // write-through: the encrypted key must be durable before we return the address
@@ -316,6 +322,36 @@ function setChain(chatId, key) {
   if (!isEnabled(key)) throw new Error('chain not enabled');
   u.activeChain = key; saveStore();
   return chainOf(key);
+}
+
+// ---------------------------------------------------------------- settings
+function buyPresets(u) {
+  const s = (u && u.settings) || {};
+  return (Array.isArray(s.buyPresets) && s.buyPresets.length === 3 && s.buyPresets.every((x) => x > 0)) ? s.buyPresets : DEFAULT_BUY_PRESETS;
+}
+function setSlippage(chatId, pct) {
+  const u = ensureUser(chatId);
+  const n = Number(pct);
+  if (!(n >= 0) || n > 50) throw new Error('slippage must be a number 0–50 (%)');
+  u.settings.slippage = n; saveStore();
+  return n;
+}
+function setBuyPresets(chatId, input) {
+  const u = ensureUser(chatId);
+  const nums = String(input).trim().split(/[\s,]+/).map(Number).filter((x) => x > 0 && Number.isFinite(x));
+  if (nums.length !== 3) throw new Error('give exactly 3 positive amounts, e.g. "0.01 0.05 0.1"');
+  // Each amount is embedded in a Telegram callback (≤64 bytes) alongside a 42-char
+  // address, so keep the printed form short. 100 cap + ≤6 chars is plenty for ETH.
+  if (nums.some((n) => n > 100 || String(n).length > 6)) throw new Error('keep each amount short and ≤ 100 (e.g. 0.01 0.05 0.1)');
+  u.settings.buyPresets = nums; saveStore();
+  return nums;
+}
+function setAutoBuy(chatId, on, amount) {
+  const u = ensureUser(chatId);
+  if (on !== undefined && on !== null) u.settings.autoBuy = !!on;
+  if (amount !== undefined && amount !== null) { const a = Number(amount); if (!(a > 0)) throw new Error('amount must be > 0'); u.settings.autoBuyAmount = String(a); }
+  saveStore();
+  return { autoBuy: u.settings.autoBuy, autoBuyAmount: u.settings.autoBuyAmount };
 }
 
 // ---------------------------------------------------------------- chain reads
@@ -613,6 +649,7 @@ module.exports = {
   CFG, chains, chainOf, userChain, providerFor, FACTORY_ABI, CURVE_ABI, ERC20_ABI,
   loadStore, saveStore, saveStoreNow, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, setChain,
   walletList, walletById, activeWallet, activeAddress, addWallet, switchWallet, removeWallet, listWallets, WALLET_CAP,
+  buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS,
   resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, ethUsd, gasOverrides,
   buy, sell, withdraw, portfolio, DB,
 };
