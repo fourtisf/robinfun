@@ -121,15 +121,23 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   chainKey = (chainKey && core.chainOf(chainKey)) ? chainKey : core.userChain(u);
   const ch = core.chainOf(chainKey);
   const list = core.walletList(u);
-  const w = (walletId && core.walletById(u, walletId)) || core.activeWallet(u);
-  const wi = list.findIndex((x) => x.id === w.id) + 1;   // 1-based wallet index, encoded in every action
+  const explicit = (walletId && core.walletById(u, walletId)) || null;
   // Rich scan: on-chain price/mcap + liquidity + Robinfun API (vol/socials) + GoPlus
   // (tax/honeypot/holders/LP) — all best-effort, never throws (tokeninfo swallows).
   const info = await tokeninfo.enrich(ca, chainKey).catch(() => null);
   if (!info) return { text: `❌ Couldn't price <code>${short(ca)}</code> on ${ch.emoji} ${esc(ch.name)} — no pool/curve found here. Switch chain if it trades elsewhere.`, kb: rows([btn('🌐 Switch chain', 'chain'), btn('« Menu', 'menu')]) };
   const meta = await core.tokenMeta(ca, chainKey);
-  const balRaw = await core.tokenBalance(ca, w.address, chainKey);
-  const bal = Number(ethers.formatUnits(balRaw, meta.decimals));
+  // Maestro-style: this token's balance across EVERY wallet (live on-chain). Bind the
+  // card to the wallet that actually HOLDS the token so Buy/Sell act on the right one —
+  // this is what fixes "Sell failed: token balance is 0" when the bag sits on another
+  // wallet than the active one. Explicitly-opened cards keep their wallet.
+  const across = await core.tokenAcrossWallets(chatId, ca, chainKey, meta.decimals);
+  const w = explicit || (across.holderId && core.walletById(u, across.holderId)) || core.activeWallet(u);
+  const wi = list.findIndex((x) => x.id === w.id) + 1;   // 1-based wallet index, encoded in every action
+  const myRow = across.rows.find((r) => r.id === w.id);
+  const autoSwitched = !explicit && !!myRow && !myRow.active && (myRow.tokens > 1e-9);
+  const balRaw = myRow ? myRow.raw : await core.tokenBalance(ca, w.address, chainKey);
+  const bal = myRow ? myRow.tokens : Number(ethers.formatUnits(balRaw, meta.decimals));
   const pos = (w.positions || {})[chainKey + ':' + ca.toLowerCase()];
   const nat = ch.native;
   const api = info.api, sec = info.security;
@@ -161,9 +169,23 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   if (created) L.push(`⏱ Age: <b>${fmtAge(created)}</b>`);
   if (api && api.links) { const lk = []; if (api.links.website) lk.push(`<a href="${esc(api.links.website)}">Web</a>`); if (api.links.twitter) lk.push(`<a href="${esc(api.links.twitter)}">X</a>`); if (api.links.telegram) lk.push(`<a href="${esc(api.links.telegram)}">TG</a>`); if (lk.length) L.push('🔗 ' + lk.join(' · ')); }
   const valueEth = bal * px;
-  if (pos && pos.ethIn > 0) { const unreal = valueEth - (pos.ethIn - pos.ethOut); L.push(''); L.push(`💼 Your bag: ${fmt(bal)} $${esc(sym)} · ${usd(valueEth, nat)} · PnL <b>${unreal >= 0 ? '+' : ''}${unreal.toFixed(4)} ${nat}</b>`); }
-  else if (bal > 0) { L.push(''); L.push(`💼 Your bag: ${fmt(bal)} $${esc(sym)} · ${usd(valueEth, nat)}`); }
-  if (list.length > 1) L.push(`<i>Trading with ${esc(core.walletLabel(w, wi))}</i>`);
+  if (list.length > 1) {
+    // Per-wallet balance table (Maestro "Balance" panel): shows which wallet holds the bag.
+    L.push('');
+    L.push(`👛 <b>Balance across wallets</b> (${esc(sym)} · ${nat})`);
+    const held = across.rows.filter((r) => r.tokens > 1e-9 || r.eth > 1e-5);
+    const show = (held.length ? held : across.rows).slice(0, 10);
+    for (const r of show) {
+      const mark = r.id === w.id ? '✅' : (r.active ? '▫️' : '▪️');
+      const pctStr = r.pctSupply >= 0.01 ? ` (${r.pctSupply.toFixed(2)}%)` : '';
+      L.push(`${mark} ${esc(r.label)} · <b>${fmt(r.tokens)}</b>${pctStr} · ${r.eth.toFixed(4)} ${nat}`);
+    }
+    if (pos && pos.ethIn > 0) { const unreal = valueEth - (pos.ethIn - pos.ethOut); L.push(`PnL (${esc(core.walletLabel(w, wi))}): <b>${unreal >= 0 ? '+' : ''}${unreal.toFixed(4)} ${nat}</b>`); }
+    L.push(`<i>Trading with <b>${esc(core.walletLabel(w, wi))}</b>${autoSwitched ? ' — the wallet holding this token' : ''}. Tap 👛 Wallets to switch.</i>`);
+  } else {
+    if (pos && pos.ethIn > 0) { const unreal = valueEth - (pos.ethIn - pos.ethOut); L.push(''); L.push(`💼 Your bag: ${fmt(bal)} $${esc(sym)} · ${usd(valueEth, nat)} · PnL <b>${unreal >= 0 ? '+' : ''}${unreal.toFixed(4)} ${nat}</b>`); }
+    else if (bal > 0) { L.push(''); L.push(`💼 Your bag: ${fmt(bal)} $${esc(sym)} · ${usd(valueEth, nat)}`); }
+  }
   const text = L.join('\n');
   // Encode the card's chain AND wallet index in every action, so a tap on a stale
   // card trades on the chain+wallet it was rendered for — never on whatever chain
@@ -183,15 +205,16 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   return { text, kb };
 }
 async function portfolioScreen(chatId) {
-  const pf = await core.portfolio(chatId);
+  const pf = await core.portfolioAll(chatId);   // aggregated across ALL wallets (Maestro style)
   const nat = pf.native || 'ETH';
-  if (!pf.rows.length) return { text: `📊 <b>Portfolio</b> · ${pf.chain ? pf.chain.emoji + ' ' + esc(pf.chain.name) : ''}\n\nNo open positions on this chain. Paste a token contract to buy, or switch chain.`, kb: rows([btn('🌐 Chain', 'chain'), btn('« Menu', 'menu')]) };
+  if (!pf.rows.length) return { text: `📊 <b>Portfolio</b> · ${pf.chain ? pf.chain.emoji + ' ' + esc(pf.chain.name) : ''}\n\nNo holdings on this chain across your wallets. Paste a token contract to buy, or switch chain.`, kb: rows([btn('🌐 Chain', 'chain'), btn('« Menu', 'menu')]) };
   let body = '', totalUnreal = 0;
   for (const r of pf.rows) {
     totalUnreal += r.unrealizedEth;
-    body += `<b>$${esc(r.sym)}</b> ${fmt(r.tokens)} · ${usd(r.valueEth, nat)}\n   in ${r.ethIn.toFixed(4)} / out ${r.ethOut.toFixed(4)} ${nat} · PnL ${r.unrealizedEth >= 0 ? '+' : ''}${r.unrealizedEth.toFixed(4)}\n   <code>${r.ca}</code>\n`;
+    const who = (r.holders && r.holders.length) ? r.holders.map((h) => `${esc(h.label)} ${fmt(h.tokens)}`).join(', ') : '—';
+    body += `<b>$${esc(r.sym)}</b> ${fmt(r.tokens)} · ${usd(r.valueEth, nat)}\n   in ${r.ethIn.toFixed(4)} / out ${r.ethOut.toFixed(4)} ${nat} · PnL ${r.unrealizedEth >= 0 ? '+' : ''}${r.unrealizedEth.toFixed(4)}\n   held by: ${who}\n   <code>${r.ca}</code>\n`;
   }
-  const text = `📊 <b>Portfolio</b> · ${pf.chain.emoji} ${esc(pf.chain.name)} · value ${usd(pf.totalValueEth, nat)}\n\n${body}\nUnrealized PnL: <b>${totalUnreal >= 0 ? '+' : ''}${totalUnreal.toFixed(4)} ${nat}</b>`;
+  const text = `📊 <b>Portfolio</b> · ${pf.chain.emoji} ${esc(pf.chain.name)} · all wallets · value ${usd(pf.totalValueEth, nat)}\n\n${body}\nUnrealized PnL: <b>${totalUnreal >= 0 ? '+' : ''}${totalUnreal.toFixed(4)} ${nat}</b>`;
   return { text, kb: rows([btn('🔄 Refresh', 'pos'), btn('🌐 Chain', 'chain'), btn('« Menu', 'menu')]) };
 }
 function historyScreen(chatId) {

@@ -568,6 +568,27 @@ async function tokenMeta(ca, chainKey) {
 }
 async function ethBalance(addr, chainKey) { try { return await providerFor(chainKey).getBalance(addr); } catch (_) { return 0n; } }
 async function tokenBalance(ca, addr, chainKey) { try { return await new ethers.Contract(ca, ERC20_ABI, providerFor(chainKey)).balanceOf(addr); } catch (_) { return 0n; } }
+// Maestro-style: this token's balance (+ native) across EVERY one of the user's
+// wallets, read LIVE on-chain (so tokens acquired outside the bot — e.g. a token
+// you launched on the site — still show up). Best-effort: a failed read is 0, never
+// throws. Returns rows in wallet order + `holderId` = the wallet holding the MOST of
+// this token (used to auto-bind the card to the wallet that can actually sell it).
+async function tokenAcrossWallets(chatId, ca, chainKey, decimals) {
+  const u = getUser(chatId); if (!u) return { rows: [], holderId: null, supply: 0n };
+  chainKey = chainKey || userChain(u);
+  const list = walletList(u);
+  const dec = Number.isFinite(decimals) ? decimals : 18;
+  let supply = 0n;
+  try { supply = await new ethers.Contract(ca, ERC20_ABI, providerFor(chainKey)).totalSupply(); } catch (_) {}
+  const rows = await Promise.all(list.map(async (w, i) => {
+    const [tb, eb] = await Promise.all([tokenBalance(ca, w.address, chainKey), ethBalance(w.address, chainKey)]);
+    const pct = supply > 0n ? (Number(tb) / Number(supply)) * 100 : 0;   // ratio only — display precision is fine
+    return { id: w.id, index: i + 1, label: walletLabel(w, i + 1), address: w.address, active: w.id === u.activeWalletId, raw: tb, tokens: Number(ethers.formatUnits(tb, dec)), pctSupply: pct, eth: Number(ethers.formatEther(eb)) };
+  }));
+  let holderId = null, max = 0n;
+  for (const r of rows) { if (r.raw > max) { max = r.raw; holderId = r.id; } }
+  return { rows, holderId, supply };
+}
 async function ethUsd(chainKey) {
   // Robinhood + ETH-native chains price in ETH; BSC prices in BNB.
   const sym = (chainOf(chainKey) || {}).native === 'BNB' ? 'BNB' : 'ETH';
@@ -902,6 +923,46 @@ async function portfolio(chatId, walletId) {
   rows.sort((a, b) => b.valueEth - a.valueEth);
   return { rows, totalValueEth, address: wal.address, chain, native: chain.native };
 }
+// Maestro-style aggregate portfolio: every token any wallet has a position in on the
+// active chain, summed across ALL wallets (live balances) with a per-wallet breakdown.
+// This is what makes a token you bought on Wallet 1 still show when Wallet 4 is active.
+async function portfolioAll(chatId) {
+  const u = getUser(chatId); if (!u) return { rows: [], totalValueEth: 0, chain: null };
+  const chainKey = userChain(u);
+  const chain = chainOf(chainKey);
+  const list = walletList(u);
+  // Union of every CA seen in any wallet's positions on this chain.
+  const cas = new Map();   // caLower -> { ca, name, sym, dec, ethIn, ethOut }
+  for (const wal of list) {
+    for (const key of Object.keys(wal.positions || {})) {
+      const p = wal.positions[key];
+      if (p.chain !== chainKey) continue;
+      const k = p.ca.toLowerCase();
+      const agg = cas.get(k) || { ca: p.ca, name: p.name, sym: p.sym, dec: p.dec || 18, ethIn: 0, ethOut: 0 };
+      agg.ethIn += p.ethIn || 0; agg.ethOut += p.ethOut || 0;
+      cas.set(k, agg);
+    }
+  }
+  const rows = [];
+  let totalValueEth = 0;
+  for (const agg of cas.values()) {
+    // Live balance summed across every wallet + which wallets hold it.
+    let totalTokens = 0; const holders = [];
+    for (const wal of list) {
+      const balRaw = await tokenBalance(agg.ca, wal.address, chainKey);
+      const bal = Number(ethers.formatUnits(balRaw, agg.dec));
+      if (bal > 1e-9) { totalTokens += bal; holders.push({ index: list.indexOf(wal) + 1, label: walletLabel(wal, list.indexOf(wal) + 1), tokens: bal }); }
+    }
+    if (totalTokens <= 1e-9 && !(agg.ethIn > 0)) continue;
+    const snap = await tokenSnapshot(agg.ca, chainKey).catch(() => null);
+    const priceEth = snap ? snap.priceEth : 0;
+    const valueEth = totalTokens * priceEth;
+    totalValueEth += valueEth;
+    rows.push({ ca: agg.ca, name: agg.name, sym: agg.sym, tokens: totalTokens, valueEth, ethIn: agg.ethIn, ethOut: agg.ethOut, unrealizedEth: valueEth - (agg.ethIn - agg.ethOut), holders });
+  }
+  rows.sort((a, b) => b.valueEth - a.valueEth);
+  return { rows, totalValueEth, chain, native: chain.native };
+}
 
 // Trade history (newest first) + realized PnL for a wallet.
 function getHistory(chatId, walletId) {
@@ -931,6 +992,6 @@ module.exports = {
   setConfirmBuy, setExpert, setNotify, notifyOn, NOTIFY_TYPES,
   addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
   feePayoutEnabled, payFromFeeWallet,
-  resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, ethUsd, gasOverrides,
-  buy, sell, withdraw, portfolio, DB,
+  resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, tokenAcrossWallets, ethUsd, gasOverrides,
+  buy, sell, withdraw, portfolio, portfolioAll, DB,
 };
