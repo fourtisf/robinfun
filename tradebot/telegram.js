@@ -27,6 +27,11 @@ function send(chatId, text, kb) { return tg('sendMessage', { chat_id: chatId, te
 function edit(chatId, mid, text, kb) { return tg('editMessageText', { chat_id: chatId, message_id: mid, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(kb ? { reply_markup: kb } : {}) }); }
 function answer(id, text) { return tg('answerCallbackQuery', { callback_query_id: id, ...(text ? { text } : {}) }); }
 function del(chatId, mid) { return tg('deleteMessage', { chat_id: chatId, message_id: mid }).catch(() => {}); }
+function sendPhoto(chatId, photo, caption, kb) { return tg('sendPhoto', { chat_id: chatId, photo, ...(caption ? { caption, parse_mode: 'HTML' } : {}), ...(kb ? { reply_markup: kb } : {}) }); }
+// Deposit QR image (Telegram fetches the URL server-side; the address is public, so no
+// secret leaves the bot). Configurable / disable-able via QR_API. Returns '' if disabled.
+const QR_API = (process.env.QR_API === undefined ? 'https://api.qrserver.com/v1/create-qr-code' : process.env.QR_API).replace(/\/+$/, '');
+const qrUrl = (data) => QR_API ? `${QR_API}/?size=320x320&margin=10&data=${encodeURIComponent(data)}` : '';
 const rows = (...r) => ({ inline_keyboard: r });
 const btn = (text, data) => ({ text, callback_data: data });
 
@@ -63,6 +68,7 @@ async function walletScreen(chatId) {
   const list = core.walletList(u);
   const w = core.activeWallet(u);
   const idx = list.findIndex((x) => x.id === w.id) + 1;
+  const label = core.walletLabel(w, idx);
   const bal = await core.ethBalance(w.address, ch.key);
   const ethStr = fmtEth(bal);
   const empty = bal <= 0n;
@@ -76,8 +82,8 @@ async function walletScreen(chatId) {
     : `Same address works on every chain. Deposit ${ch.native} here on <b>${esc(ch.name)}</b>, then paste a token contract to trade.`;
   return {
     text:
-      `💼 <b>Your Wallet</b>  ·  ${ch.emoji} ${esc(ch.name)}\n\n` +
-      `Active: <b>Wallet ${idx}</b> of ${list.length}\n` +
+      `💼 <b>${esc(label)}</b>  ·  ${ch.emoji} ${esc(ch.name)}\n` +
+      `<i>Wallet ${idx} of ${list.length}</i>\n` +
       `<code>${w.address}</code>\n\n` +
       `Balance: <b>${ethStr} ${ch.native}</b> (${usd(ethStr, ch.native)})${empty ? '  —  empty' : ''}\n\n` +
       guide,
@@ -85,11 +91,24 @@ async function walletScreen(chatId) {
       empty
         ? [btn(`📥 How to deposit`, 'dep'), btn('🔄 Refresh', 'wal')]
         : [btn('🔄 Refresh', 'wal'), btn('📥 Deposit', 'dep')],
-      empty ? [btn('🌐 Switch chain', 'chain'), btn('📤 Withdraw', 'wd')] : [btn('📤 Withdraw', 'wd'), btn('🌐 Switch chain', 'chain')],
+      [btn('✏️ Rename', 'rnw:' + w.id), btn('🌐 Switch chain', 'chain'), btn('📤 Withdraw', 'wd')],
       [btn('🔑 Export key', 'exp'), btn(`👛 Wallets (${list.length}/${core.WALLET_CAP})`, 'wallets')],
       [btn('« Menu', 'menu')],
     ),
   };
+}
+// Maestro-style deposit: a QR of the address + the address text. Works for any wallet
+// (not just the active one). Degrades to a plain text address if QR is disabled/fails.
+async function depositScreen(chatId, w) {
+  const u = core.ensureUser(chatId);
+  const ch = core.chainOf(core.userChain(u));
+  const idx = core.walletList(u).findIndex((x) => x.id === w.id) + 1;
+  const label = core.walletLabel(w, idx);
+  const caption = `📥 <b>Deposit ${ch.native}</b> · ${esc(label)}\n${ch.emoji} <b>${esc(ch.name)}</b>\n\n<code>${w.address}</code>\n\nScan the QR or copy the address. Same address on every chain — switch with 🌐 to deposit elsewhere. Then paste a token contract to buy.`;
+  const kb = rows([btn('🔄 Refresh balance', 'wal'), btn('🌐 Chain', 'chain')], [btn('👛 Wallets', 'wallets'), btn('« Menu', 'menu')]);
+  const url = qrUrl(w.address);
+  if (url) { const r = await sendPhoto(chatId, url, caption, kb).catch(() => null); if (r && r.ok) return r; }
+  return send(chatId, caption, kb);   // QR disabled/failed → text address (still fully usable)
 }
 async function walletsScreen(chatId) {
   const u = core.ensureUser(chatId);
@@ -100,17 +119,18 @@ async function walletsScreen(chatId) {
   const kbRows = [];
   list.forEach((w, i) => {
     const active = w.id === u.activeWalletId;
+    const label = core.walletLabel(w, i + 1);
     const nOrders = (w.orders && w.orders.length) || 0;
-    body += `${active ? '✅' : '▫️'} <b>Wallet ${i + 1}</b> · <code>${short(w.address)}</code> · ${fmtEth(bals[i])} ${ch.native}${nOrders ? ' · ' + nOrders + ' order' + (nOrders > 1 ? 's' : '') : ''}\n`;
-    const row = [btn(`${active ? '✓ ' : ''}Wallet ${i + 1} · ${short(w.address)}`, active ? 'wal' : 'sw:' + w.id)];
-    row.push(btn('🔑', 'expw:' + w.id));
+    body += `${active ? '✅' : '▫️'} <b>${esc(label)}</b> · ${fmtEth(bals[i])} ${ch.native}${nOrders ? ' · ' + nOrders + ' order' + (nOrders > 1 ? 's' : '') : ''}\n<code>${w.address}</code>\n`;
+    // button text is PLAIN (no HTML) → no esc; keep it short so the row stays balanced
+    const row = [btn(`${active ? '✓ ' : '⚪ '}${label}`.slice(0, 28), active ? 'wal' : 'sw:' + w.id), btn('✏️', 'rnw:' + w.id), btn('📥', 'qrw:' + w.id)];
     if (list.length > 1) row.push(btn('🗑', 'rmw:' + w.id));
     kbRows.push(row);
   });
   if (list.length < core.WALLET_CAP) kbRows.push([btn('➕ Generate', 'neww'), btn('📩 Import', 'imp')]);
   kbRows.push([btn('« Wallet', 'wal'), btn('« Menu', 'menu')]);
   return {
-    text: `👛 <b>Your wallets</b> (${list.length}/${core.WALLET_CAP}) · ${ch.emoji} ${esc(ch.name)}\n\n${body}\nTap a wallet to make it active. Balances, positions &amp; orders are per-wallet.`,
+    text: `👛 <b>Your wallets</b> (${list.length}/${core.WALLET_CAP}) · ${ch.emoji} ${esc(ch.name)}\n\n${body}\nTap a name to switch · ✏️ rename · 📥 deposit QR · 🗑 remove. Balances shown for ${esc(ch.name)}; positions &amp; orders are per-wallet.`,
     kb: { inline_keyboard: kbRows },
   };
 }
@@ -168,12 +188,15 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   const valueEth = bal * px;
   if (pos && pos.ethIn > 0) { const unreal = valueEth - (pos.ethIn - pos.ethOut); L.push(''); L.push(`💼 Your bag: ${fmt(bal)} $${esc(sym)} · ${usd(valueEth, nat)} · PnL <b>${unreal >= 0 ? '+' : ''}${unreal.toFixed(4)} ${nat}</b>`); }
   else if (bal > 0) { L.push(''); L.push(`💼 Your bag: ${fmt(bal)} $${esc(sym)} · ${usd(valueEth, nat)}`); }
-  if (list.length > 1) L.push(`<i>Trading with Wallet ${wi}</i>`);
+  if (list.length > 1) L.push(`<i>Trading with ${esc(core.walletLabel(w, wi))}</i>`);
   const text = L.join('\n');
   // Encode the card's chain AND wallet index in every action, so a tap on a stale
   // card trades on the chain+wallet it was rendered for — never on whatever chain
   // or wallet merely happens to be active now.
   const bp = core.buyPresets(u, chainKey);   // per-chain (or global) quick-buy amounts (Settings)
+  // NOTE: the buy callback below `b:${chainKey}:${wi}:${ca}:${amt}` must stay ≤64 bytes
+  // (Telegram limit). Worst case ≈ 64 with chain "robinhood", wi≤99, 42-char ca, and a
+  // 6-char preset (capped in setBuyPresets). Keep those caps if you touch this.
   const lastRow = [btn('🔔 Alert', `alt:${chainKey}:${wi}:${ca}`), btn('🔄 Refresh', `tok:${chainKey}:${wi}:${ca}`), btn('« Menu', 'menu')];
   if (goplus.supported(chainKey)) lastRow.unshift(btn('🛡 Safety', `sec:${chainKey}:${ca}`));   // GoPlus only on supported chains
   const kb = rows(
@@ -294,7 +317,7 @@ function settingsScreen(chatId) {
   const ch = core.chainOf(core.userChain(u));
   const slip = s.slippage > 0 ? s.slippage + '%' : 'default (5%)';
   const bp = core.buyPresets(u, ch.key).join(' · ');
-  const perChain = s.presetsByChain && s.presetsByChain[ch.key] ? ' <i>(set for this chain)</i>' : '';
+  const perChain = core.hasChainPresets(u, ch.key) ? ' <i>(set for this chain)</i>' : '';
   const onoff = (b) => b ? '🟢 ON' : '⚪ OFF';
   return {
     text: `⚙️ <b>Settings</b>\n\n` +
@@ -304,7 +327,7 @@ function settingsScreen(chatId) {
       `Confirm before buy: <b>${onoff(s.confirmBuy)}</b>\n` +
       `Fast mode: <b>${onoff(s.expert)}</b>\n` +
       `Auto-buy on paste: <b>${s.autoBuy ? '🟢 ON · ' + esc(s.autoBuyAmount) + ' ' + ch.native : '⚪ OFF'}</b>\n\n` +
-      `<i>Quick-buy amounts are per-chain (0.01 ETH ≠ 0.01 BNB) — this sets them for ${esc(ch.name)}. Confirm-before-buy adds a Yes/No step. Fast mode skips the "buying…" messages. Auto-buy buys instantly on paste (skips the safety card).</i>`,
+      `<i>Quick-buy amounts are per-chain (0.01 ETH ≠ 0.01 BNB) — this sets them for ${esc(ch.name)}. Confirm-before-buy adds a Yes/No step. Fast mode skips the "buying…" messages. Auto-buy buys instantly on paste (skips both the safety card AND the confirm step).</i>`,
     kb: rows(
       [btn('🌐 Chain', 'chain'), btn('📉 Slippage', 'setslip'), btn(`⚡ Buy amounts`, 'setbp')],
       [btn(`${s.confirmBuy ? '🔴 Confirm buy OFF' : '🟢 Confirm buy ON'}`, 'cbtog'), btn(`${s.expert ? '🔴 Fast mode OFF' : '🟢 Fast mode ON'}`, 'extog')],
@@ -368,23 +391,37 @@ function walletIndex(chatId, walletId) {
 // Entry point for a buy from a tap/command. If the user enabled "Confirm before buy",
 // show a Yes/No confirmation first; otherwise execute immediately. (Auto-buy-on-paste
 // is deliberately instant and bypasses this.)
+let _confirmSeq = 0;
 async function requestBuy(chatId, ca, amt, chain, walletId) {
   const u = core.ensureUser(chatId);
   if (u.settings && u.settings.confirmBuy) {
     const ch = core.chainOf(chain) || core.chainOf(core.userChain(u));
-    setPending(chatId, { action: 'confirm_buy', ca, amt: String(amt), chain, walletId });
-    return send(chatId, `🟢 <b>Confirm buy</b>\n\nBuy <b>${esc(String(amt))} ${ch.native}</b> of <code>${short(ca)}</code> on ${ch.emoji} ${esc(ch.name)}?`, rows([btn('✅ Confirm', 'bcok'), btn('✖ Cancel', 'bccancel')]));
+    // Bind the confirm to a fresh id so tapping a STALE confirm card (whose pending
+    // was overwritten by a newer buy) can't execute the wrong token/amount/wallet.
+    const cid = (_confirmSeq = (_confirmSeq + 1) % 1000000).toString(36);
+    setPending(chatId, { action: 'confirm_buy', ca, amt: String(amt), chain, walletId, confirmId: cid });
+    return send(chatId, `🟢 <b>Confirm buy</b>\n\nBuy <b>${esc(String(amt))} ${ch.native}</b> of <code>${short(ca)}</code> on ${ch.emoji} ${esc(ch.name)}?`, rows([btn('✅ Confirm', 'bcok:' + cid), btn('✖ Cancel', 'bccancel:' + cid)]));
   }
   return doBuy(chatId, ca, amt, chain, walletId);
 }
+// Blocks a CONCURRENT buy of the SAME (user, chain, token) — a rapid double-tap (or
+// double-paste) fires two handlers; the second sees the key in-flight and is dropped,
+// so one intended tap can't spend twice. A deliberate second buy after the first lands
+// is fine (the key is released on completion).
+const _inflightBuy = new Set();
 async function doBuy(chatId, ca, amt, chain, walletId) {
-  const expert = core.ensureUser(chatId).settings.expert;
+  const u = core.ensureUser(chatId);
+  const key = chatId + ':' + (chain || core.userChain(u)) + ':' + String(ca).toLowerCase();
+  if (_inflightBuy.has(key)) return send(chatId, '⏳ Already buying that token — wait for the result before buying again.');
+  _inflightBuy.add(key);
+  const expert = u.settings.expert;
   try {
     if (!expert) await send(chatId, `⏳ Buying ${esc(amt)} of <code>${short(ca)}</code>…`);
     const r = await core.buy(chatId, ca, amt, chain, walletId);
     const wi = walletIndex(chatId, walletId);
     await send(chatId, `✅ <b>Bought</b> ${fmt(r.gotTokens)} $${esc(r.sym)}\nSpent ${r.spentEth} ${r.native} · fee ${r.feeEth.toFixed(5)} · ${r.venue}\n${txLink(r.chain, r.hash)}`, rows([btn('🔄 Card', `tok:${r.chain}:${wi}:${ca}`), btn('📊 Portfolio', 'pos')]));
   } catch (e) { await send(chatId, `❌ Buy failed: ${esc(e.message || String(e))}`); }
+  finally { _inflightBuy.delete(key); }
 }
 async function doSell(chatId, ca, pct, chain, walletId) {
   const expert = core.ensureUser(chatId).settings.expert;
@@ -486,10 +523,14 @@ async function onCallback(q) {
   const [k, ca, arg] = data.split(':');
   if (k !== 'oc' && k !== 'al') await answer(q.id);   // 'oc'/'al' answer with text in their handlers
 
-  if (data === 'bccancel') { pending.delete(chatId); return edit(chatId, mid, 'Buy cancelled.', mainMenu()); }
-  if (data === 'bcok') {
-    const pp = pending.get(chatId); pending.delete(chatId);
-    if (!pp || pp.action !== 'confirm_buy' || Date.now() - (pp.ts || 0) > PENDING_TTL) return send(chatId, 'Confirmation expired — tap Buy again.');
+  if (k === 'bccancel') { const pp = pending.get(chatId); if (pp && pp.action === 'confirm_buy' && pp.confirmId === ca) pending.delete(chatId); return edit(chatId, mid, 'Buy cancelled.', mainMenu()); }
+  if (k === 'bcok') {
+    // get→validate→delete is one synchronous block (no await between) so two rapid
+    // taps can't both consume it. The confirmId must match the CURRENT pending, so a
+    // stale card (superseded by a newer buy) is rejected and can't buy the wrong token.
+    const pp = pending.get(chatId);
+    if (!pp || pp.action !== 'confirm_buy' || pp.confirmId !== ca || Date.now() - (pp.ts || 0) > PENDING_TTL) return send(chatId, 'That confirmation is no longer valid — tap Buy again.');
+    pending.delete(chatId);
     return doBuy(chatId, pp.ca, pp.amt, pp.chain, pp.walletId);
   }
   if (data === 'wdcancel') { pending.delete(chatId); return send(chatId, 'Withdrawal cancelled.', mainMenu()); }
@@ -519,7 +560,14 @@ async function onCallback(q) {
   if (data === 'abtog') { const u = core.ensureUser(chatId); try { core.setAutoBuy(chatId, !u.settings.autoBuy); } catch (_) {} const s = settingsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'abamt') { setPending(chatId, { action: 'ab_amt' }); return send(chatId, 'Send the <b>auto-buy amount</b> to spend per paste (e.g. <code>0.02</code>):'); }
   if (k === 'sec') { const parts = data.split(':'); const s = await safetyScreen(chatId, parts[2], parts[1]); return edit(chatId, mid, s.text, s.kb); }
-  if (data === 'dep') { const u = core.ensureUser(chatId); const ch = core.chainOf(core.userChain(u)); return edit(chatId, mid, `📥 <b>Deposit ${ch.native}</b> on ${ch.emoji} ${esc(ch.name)}\n\n<code>${core.activeAddress(u)}</code>\n\nThis is your <b>active</b> wallet. Same address on every chain — then paste a token contract to buy.`, rows([btn('🔄 Refresh balance', 'wal'), btn('🌐 Chain', 'chain'), btn('« Menu', 'menu')])); }
+  if (data === 'dep') { const u = core.ensureUser(chatId); return depositScreen(chatId, core.activeWallet(u)); }
+  if (k === 'qrw') { const u = core.ensureUser(chatId); const w = core.walletById(u, ca); if (w) return depositScreen(chatId, w); const s = await walletsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (k === 'rnw') {
+    const u = core.ensureUser(chatId); const w = core.walletById(u, ca); if (!w) { const s = await walletsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+    const i = core.walletList(u).findIndex((x) => x.id === ca) + 1;
+    setPending(chatId, { action: 'rename_wallet', id: ca });
+    return send(chatId, `✏️ <b>Rename ${esc(core.walletLabel(w, i))}</b>\n\nSend a new name (up to 24 chars), or <code>-</code> to reset to "Wallet ${i}".`);
+  }
   if (data === 'wallets') { const s = await walletsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (k === 'sw') { try { core.switchWallet(chatId, ca); } catch (_) {} const s = await walletsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (k === 'rmw') {
@@ -571,7 +619,8 @@ async function resolvePending(chatId, p, text, m) {
       try { const nw = core.addWallet(chatId, t); return send(chatId, `✅ <b>Wallet imported</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now active and your secret message was deleted. Trade as normal.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); }
       catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e)) + '\n\n(Your message was deleted for safety — try Import again.)'); }
     }
-    if (p.action === 'confirm_buy') { setPending(chatId, p); return send(chatId, 'Tap ✅ Confirm or ✖ Cancel above, or /cancel.'); }   // confirm is button-driven, not text
+    if (p.action === 'rename_wallet') { const raw = String(t).trim(); const name = core.renameWallet(chatId, p.id, raw === '-' ? '' : raw); await send(chatId, name ? `✅ Renamed to <b>${esc(name)}</b>.` : '✅ Name reset to default.'); const s = await walletsScreen(chatId); return send(chatId, s.text, s.kb); }
+    if (p.action === 'confirm_buy') { pending.set(chatId, p); return send(chatId, 'Tap ✅ Confirm or ✖ Cancel above, or /cancel.'); }   // confirm is button-driven; keep original ts (don't refresh TTL)
     if (p.action === 'buy_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); return requestBuy(chatId, p.ca, t, p.chain, p.walletId); }
     if (p.action === 'sell_pct') { const pct = Number(t); if (!(pct > 0 && pct <= 100)) return send(chatId, 'Send a number 1–100.'); return doSell(chatId, p.ca, pct, p.chain, p.walletId); }
     if (p.action === 'slip_val') { const n = core.setSlippage(chatId, t); const s = settingsScreen(chatId); return send(chatId, `✅ Slippage set to <b>${n > 0 ? n + '%' : 'default (5%)'}</b>.`, s.kb); }

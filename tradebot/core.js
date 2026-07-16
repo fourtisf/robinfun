@@ -176,7 +176,17 @@ function walletFromSecret(secret) {
 }
 function _newWallet(secret) {
   const w = secret ? walletFromSecret(secret) : ethers.Wallet.createRandom();
-  return { id: _walletId(), address: w.address, enc: encrypt(w.privateKey), createdAt: Date.now(), positions: {}, orders: [], history: [] };
+  return { id: _walletId(), name: '', address: w.address, enc: encrypt(w.privateKey), createdAt: Date.now(), positions: {}, orders: [], history: [] };
+}
+// Display label for a wallet: its custom name, else "Wallet N" (1-based index).
+function walletLabel(w, index) { const n = (w && typeof w.name === 'string') ? w.name.trim() : ''; return n || ('Wallet ' + index); }
+// Rename (Maestro-style). Empty/blank clears back to the default "Wallet N".
+function renameWallet(chatId, walletId, name) {
+  const u = ensureUser(chatId);
+  const w = walletById(u, walletId); if (!w) throw new Error('wallet not found');
+  const clean2 = String(name == null ? '' : name).replace(/[ -]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+  w.name = clean2; saveStore();
+  return clean2;
 }
 function walletList(u) { return (u && Array.isArray(u.wallets)) ? u.wallets : []; }
 function walletById(u, id) { return walletList(u).find((w) => w.id === id) || null; }
@@ -329,8 +339,10 @@ async function removeWallet(chatId, walletId) {
 }
 function listWallets(chatId) {
   const u = ensureUser(chatId);
-  return u.wallets.map((w, i) => ({ id: w.id, index: i + 1, address: w.address, active: w.id === u.activeWalletId, orders: (w.orders || []).length }));
+  return u.wallets.map((w, i) => ({ id: w.id, index: i + 1, name: w.name || '', label: walletLabel(w, i + 1), address: w.address, active: w.id === u.activeWalletId, orders: (w.orders || []).length }));
 }
+// True only if a VALID custom per-chain preset is set (for accurate UI labels).
+function hasChainPresets(u, chainKey) { const s = (u && u.settings) || {}; return !!(chainKey && s.presetsByChain && _presetsOk(s.presetsByChain[chainKey])); }
 function setChain(chatId, key) {
   const u = ensureUser(chatId);
   if (!isEnabled(key)) throw new Error('chain not enabled');
@@ -442,8 +454,10 @@ function setAutoBuy(chatId, on, amount) {
 function setConfirmBuy(chatId, on) { const u = ensureUser(chatId); u.settings.confirmBuy = !!on; saveStore(); return u.settings.confirmBuy; }
 // Expert/fast mode: skip the intermediate "⏳ Buying…" progress messages.
 function setExpert(chatId, on) { const u = ensureUser(chatId); u.settings.expert = !!on; saveStore(); return u.settings.expert; }
-// Per-type notification toggles (snipe / copy / alerts). Orders always notify.
-const NOTIFY_TYPES = ['snipe', 'copy', 'alerts'];
+// Per-type notification toggles for PASSIVE bot actions (snipe / copy). User-created
+// signals — price alerts and your own limit/TP/SL fills — always notify (muting a
+// one-shot alert would silently delete the very signal you asked for).
+const NOTIFY_TYPES = ['snipe', 'copy'];
 function setNotify(chatId, type, on) {
   const u = ensureUser(chatId);
   if (!NOTIFY_TYPES.includes(type)) throw new Error('unknown notify type');
@@ -832,6 +846,7 @@ module.exports = {
   getHistory, realizedEth,
   loadStore, saveStore, saveStoreNow, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, setChain,
   walletList, walletById, activeWallet, activeAddress, addWallet, switchWallet, removeWallet, listWallets, WALLET_CAP,
+  renameWallet, walletLabel, hasChainPresets,
   buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
   setConfirmBuy, setExpert, setNotify, notifyOn, NOTIFY_TYPES,
   addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
