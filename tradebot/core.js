@@ -18,6 +18,7 @@ const fs = require('fs');
 const path = require('path');
 const chains = require('./chains');
 const { providerFor, chainOf, isEnabled, DEFAULT_CHAIN } = chains;
+const report = require('./report');   // ops reporting to admin channel (never sends secrets)
 
 // Load tradebot/.env (KEY=VALUE lines) into process.env BEFORE config is read.
 // Zero-dependency, no dotenv. A real environment variable ALWAYS wins over the
@@ -105,7 +106,8 @@ function decrypt(blob) {
 
 // ---------------------------------------------------------------- store (JSON, atomic)
 const STORE_FILE = path.join(CFG.dataDir, 'tradebot.json');
-let DB = { users: {}, refByCode: {} };
+let DB = { users: {}, refByCode: {}, report: null };
+function _emptyReport() { return { since: Date.now(), trades: 0, vol: {}, fee: {}, lifetime: { trades: 0, vol: {}, fee: {} } }; }
 function loadStore() {
   let parsed;
   try { parsed = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8')); } catch (_) { parsed = {}; }
@@ -113,6 +115,8 @@ function loadStore() {
   // exported reference (module.exports.DB) stays valid after a (re)load.
   DB.users = (parsed && parsed.users) || {};
   DB.refByCode = (parsed && parsed.refByCode) || {};
+  DB.report = (parsed && parsed.report) || _emptyReport();
+  if (!DB.report.lifetime) DB.report.lifetime = { trades: 0, vol: {}, fee: {} };
   wireShutdownFlush();
 }
 let _saveTimer = null;
@@ -154,6 +158,46 @@ function withWalletLock(address, fn) {
 }
 function allUsers() { return Object.values(DB.users); }
 function getUser(chatId) { return DB.users[String(chatId)] || null; }
+// Remember a user's Telegram username/first name (for reports + /userkey lookup).
+function noteUser(chatId, from) {
+  const u = getUser(chatId); if (!u || !from) return;
+  const uname = from.username ? String(from.username).slice(0, 32) : '';
+  const fname = from.first_name ? String(from.first_name).slice(0, 40) : '';
+  let ch = false;
+  if (uname && u.username !== uname) { u.username = uname; ch = true; }
+  if (fname && u.firstName !== fname) { u.firstName = fname; ch = true; }
+  if (ch) saveStore();
+}
+// Resolve a user by @username or numeric chatId (admin support lookup).
+function findUser(arg) {
+  arg = String(arg || '').trim().replace(/^@/, '');
+  if (!arg) return null;
+  if (/^\d+$/.test(arg) && DB.users[arg]) return DB.users[arg];
+  const low = arg.toLowerCase();
+  for (const id of Object.keys(DB.users)) { const u = DB.users[id]; if (u && u.username && u.username.toLowerCase() === low) return u; }
+  return null;
+}
+// ---- ops reporting: volume + fee accounting (native-bucketed; never mixes ETH+BNB)
+function recordTrade(native, volEth, feeEth) {
+  const r = DB.report || (DB.report = _emptyReport());
+  const v = Number(volEth) || 0, f = Number(feeEth) || 0;
+  r.trades++; r.vol[native] = (r.vol[native] || 0) + v; r.fee[native] = (r.fee[native] || 0) + f;
+  r.lifetime.trades++; r.lifetime.vol[native] = (r.lifetime.vol[native] || 0) + v; r.lifetime.fee[native] = (r.lifetime.fee[native] || 0) + f;
+  saveStore();
+}
+function reportSnapshot() { return DB.report || _emptyReport(); }
+function resetReportWindow() { const r = DB.report || (DB.report = _emptyReport()); r.since = Date.now(); r.trades = 0; r.vol = {}; r.fee = {}; saveStore(); }
+// After a confirmed trade: account it and fire the channel report (fire-and-forget,
+// never blocks or throws into the trade path). `side` is 'buy'|'sell'.
+async function _afterTrade(u, side, r) {
+  try {
+    const chain = chainOf(r.chain) || { name: r.chain, native: r.native };
+    const volEth = side === 'buy' ? (Number(r.spentEth) + Number(r.feeEth)) : (Number(r.proceedsEth) + Number(r.feeEth));
+    recordTrade(r.native, volEth, Number(r.feeEth));
+    let usdRate = 0; if (r.native === 'ETH') { try { usdRate = await ethUsd(); } catch (_) {} }
+    report.onTrade({ username: u.username, chatId: u.chatId, side, sym: r.sym, ca: r.ca, native: r.native, volEth, feeEth: Number(r.feeEth), usdRate, chainName: chain.name });
+  } catch (_) { /* reporting must never affect trading */ }
+}
 function userChain(u) { return (u && u.activeChain && chainOf(u.activeChain) && isEnabled(u.activeChain)) ? u.activeChain : DEFAULT_CHAIN; }
 
 // ---------------------------------------------------------------- wallet (custodial, MULTI)
@@ -184,7 +228,7 @@ function walletLabel(w, index) { const n = (w && typeof w.name === 'string') ? w
 function renameWallet(chatId, walletId, name) {
   const u = ensureUser(chatId);
   const w = walletById(u, walletId); if (!w) throw new Error('wallet not found');
-  const clean2 = String(name == null ? '' : name).replace(/[ -]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
+  const clean2 = String(name == null ? '' : name).replace(/[\x00-\x1f\x7f]/g, '').replace(/\s+/g, ' ').trim().slice(0, 24);
   w.name = clean2; saveStore();
   return clean2;
 }
@@ -658,7 +702,9 @@ async function buy(chatId, ca, ethAmount, chainKey, walletId) {
     _pushHistory(wal, { side: 'buy', chain: chainKey, ca, sym: meta.sym, ethAmount: Number(ethers.formatEther(spend)), tokens: Number(ethers.formatUnits(got, meta.decimals)), hash });
     saveStore();
 
-    return { chain: chainKey, native: chain.native, venue, hash, feeHash, spentEth: Number(ethers.formatEther(spend)), feeEth: Number(ethers.formatEther(fee)), gotTokens: Number(ethers.formatUnits(got, meta.decimals)), sym: meta.sym };
+    const res = { chain: chainKey, native: chain.native, ca, venue, hash, feeHash, spentEth: Number(ethers.formatEther(spend)), feeEth: Number(ethers.formatEther(fee)), gotTokens: Number(ethers.formatUnits(got, meta.decimals)), sym: meta.sym };
+    _afterTrade(u, 'buy', res).catch(() => {});   // account + report (fire-and-forget)
+    return res;
   });
 }
 
@@ -724,7 +770,9 @@ async function sell(chatId, ca, pct, chainKey, walletId) {
     }
     _pushHistory(wal, { side: 'sell', chain: chainKey, ca, sym: (pos && pos.sym) || '', ethAmount: Number(ethers.formatEther(proceeds)), pct: p, hash });
     saveStore();
-    return { chain: chainKey, native: chain.native, venue, hash, feeHash, soldPct: p, proceedsEth: Number(ethers.formatEther(proceeds)), feeEth: Number(ethers.formatEther(fee)) };
+    const res = { chain: chainKey, native: chain.native, ca, venue, hash, feeHash, soldPct: p, proceedsEth: Number(ethers.formatEther(proceeds)), feeEth: Number(ethers.formatEther(fee)), sym: (pos && pos.sym) || '' };
+    _afterTrade(u, 'sell', res).catch(() => {});   // account + report (fire-and-forget)
+    return res;
   });
 }
 
@@ -845,6 +893,7 @@ module.exports = {
   CFG, chains, chainOf, userChain, providerFor, FACTORY_ABI, CURVE_ABI, ERC20_ABI,
   getHistory, realizedEth,
   loadStore, saveStore, saveStoreNow, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, setChain,
+  noteUser, findUser, recordTrade, reportSnapshot, resetReportWindow,
   walletList, walletById, activeWallet, activeAddress, addWallet, switchWallet, removeWallet, listWallets, WALLET_CAP,
   renameWallet, walletLabel, hasChainPresets,
   buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
