@@ -80,11 +80,15 @@ if command -v pm2 >/dev/null 2>&1; then
   # First-time only: start the trade bot under pm2 if it isn't registered yet.
   # Requires TRADEBOT_TOKEN + WALLET_SECRET + FEE_WALLET in the environment/.env.
   if [ -d "$SRC_DIR/tradebot" ] && ! pm2 describe robinfun-tradebot >/dev/null 2>&1; then
-    if [ -n "${TRADEBOT_TOKEN:-}" ] && [ -n "${WALLET_SECRET:-}" ]; then
+    # Ready if the secrets are in the shell env OR in tradebot/.env (the bot loads
+    # .env itself now — see core.js). Either way pm2 --update-env carries them in.
+    TB_ENV="$SRC_DIR/tradebot/.env"
+    if { [ -n "${TRADEBOT_TOKEN:-}" ] && [ -n "${WALLET_SECRET:-}" ]; } \
+       || { [ -f "$TB_ENV" ] && grep -qE '^[[:space:]]*TRADEBOT_TOKEN=.+' "$TB_ENV" && grep -qE '^[[:space:]]*WALLET_SECRET=.+' "$TB_ENV"; }; then
       ( cd "$SRC_DIR/tradebot" && pm2 start index.js --name robinfun-tradebot --update-env ) && pm2 save >/dev/null 2>&1 || true
       log "robinfun-tradebot started"
     else
-      warn "tradebot present but not started — set TRADEBOT_TOKEN + WALLET_SECRET + FEE_WALLET, then: cd $SRC_DIR/tradebot && pm2 start index.js --name robinfun-tradebot"
+      warn "tradebot present but not started — create $TB_ENV with TRADEBOT_TOKEN + WALLET_SECRET + FEE_WALLET, then re-run this script (or: cd $SRC_DIR/tradebot && pm2 start index.js --name robinfun-tradebot --update-env)"
     fi
   fi
 elif systemctl list-unit-files 2>/dev/null | grep -q '^robinfun-api\.service'; then
