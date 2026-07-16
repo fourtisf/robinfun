@@ -36,13 +36,14 @@ async function post(text) {
   } catch (_) { /* never let a report failure touch the trade path */ }
 }
 
+const totalLine = (total) => (total != null ? `\n👥 Total users: <b>${total}</b>` : '');
 // A user pressed /start.
-function onStart(u, isNew, refBy) {
-  return post(`👋 <b>${isNew ? 'New user' : 'Returning user'}</b> · ${who(u)}${u && u.firstName ? ' · ' + esc(u.firstName) : ''}` + (refBy ? `\nReferred by code <code>${esc(refBy)}</code>` : ''));
+function onStart(u, isNew, refBy, total) {
+  return post(`👋 <b>${isNew ? 'NEW user' : 'Returning user'}</b> · ${who(u)}${u && u.firstName ? ' · ' + esc(u.firstName) : ''}` + (refBy ? `\nReferred by code <code>${esc(refBy)}</code>` : '') + totalLine(total));
 }
 // A user generated or imported a wallet. ADDRESS ONLY — never the key/seed.
-function onWallet(u, action, address, index) {
-  return post(`👛 <b>Wallet ${action}</b> · ${who(u)}\nWallet ${index} · <code>${esc(address)}</code>`);
+function onWallet(u, action, address, index, total) {
+  return post(`👛 <b>Wallet ${action}</b> · ${who(u)}\nWallet #${index} · <code>${esc(address)}</code>${totalLine(total)}`);
 }
 // A trade happened (manual, snipe, copy or order fill). `usdRate` is native→USD or 0.
 function onTrade(d) {

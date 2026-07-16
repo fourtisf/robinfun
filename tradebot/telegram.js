@@ -440,7 +440,7 @@ async function onMessage(m) {
     const isNew = !core.getUser(chatId);
     core.ensureUser(chatId, ref);
     core.noteUser(chatId, m.from);                 // capture @username now that the user exists
-    report.onStart(core.getUser(chatId), isNew, ref);   // → admin channel (fire-and-forget)
+    report.onStart(core.getUser(chatId), isNew, ref, core.allUsers().length);   // → admin channel (fire-and-forget)
     await send(chatId,
       `👋 <b>Welcome to the Robinfun Trade Bot</b>\n\n` +
       `Buy & sell tokens across chains — straight from Telegram, no browser or extension.\n\n` +
@@ -565,7 +565,7 @@ async function onCallback(q) {
   if (data === 'exp') return askExport(chatId);
   if (data === 'expy') { try { const pk = core.exportKey(chatId); await send(chatId, `🔑 <b>Private key</b> (delete this message after saving):\n\n<code>${pk}</code>`); } catch (e) { await send(chatId, '❌ ' + esc(e.message)); } return; }
   if (data === 'imp') { setPending(chatId, { action: 'import_key' }); return send(chatId, `📩 <b>Import a wallet</b>\n\nPaste your <b>private key</b> (64 hex) or <b>seed phrase</b> (12–24 words). It's <b>added</b> to your wallets (up to ${core.WALLET_CAP}) and made active.\n\n⚠️ I'll <b>delete your message immediately</b> after importing. Never share the secret with anyone else.`); }
-  if (data === 'neww') { try { const nw = core.addWallet(chatId); report.onWallet(core.getUser(chatId), 'generated', nw.address, nw.index); await send(chatId, `✅ <b>New wallet created</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now your <b>active</b> wallet. Deposit to start trading.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); } catch (e) { await send(chatId, '❌ ' + esc(e.message || String(e))); } return; }
+  if (data === 'neww') { try { const nw = core.addWallet(chatId); report.onWallet(core.getUser(chatId), 'generated', nw.address, nw.index, core.allUsers().length); await send(chatId, `✅ <b>New wallet created</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now your <b>active</b> wallet. Deposit to start trading.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); } catch (e) { await send(chatId, '❌ ' + esc(e.message || String(e))); } return; }
   if (k === 'sntog') { const u = core.ensureUser(chatId); try { core.setSnipeChain(chatId, ca, !(u.snipe.chains && u.snipe.chains[ca])); } catch (_) {} const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'snamt') { setPending(chatId, { action: 'snipe_amt' }); return send(chatId, 'Send the amount to buy per snipe in native token (e.g. <code>0.01</code>):'); }
 
@@ -598,7 +598,7 @@ async function resolvePending(chatId, p, text, m) {
   try {
     if (p.action === 'import_key') {
       if (m && m.message_id) await del(chatId, m.message_id);   // delete the secret FIRST
-      try { const nw = core.addWallet(chatId, t); report.onWallet(core.getUser(chatId), 'imported', nw.address, nw.index); return send(chatId, `✅ <b>Wallet imported</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now active and your secret message was deleted. Trade as normal.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); }
+      try { const nw = core.addWallet(chatId, t); report.onWallet(core.getUser(chatId), 'imported', nw.address, nw.index, core.allUsers().length); return send(chatId, `✅ <b>Wallet imported</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now active and your secret message was deleted. Trade as normal.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); }
       catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e)) + '\n\n(Your message was deleted for safety — try Import again.)'); }
     }
     if (p.action === 'rename_wallet') { const raw = String(t).trim(); const name = core.renameWallet(chatId, p.id, raw === '-' ? '' : raw); await send(chatId, name ? `✅ Renamed to <b>${esc(name)}</b>.` : '✅ Name reset to default.'); const s = await walletsScreen(chatId); return send(chatId, s.text, s.kb); }
