@@ -3701,19 +3701,38 @@ async function doTradeReal(t){
       const rc = await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('buy', [minOut, deadline]), val, ()=>{ toast('Buy sent — waiting…','jade'); btn.textContent='Buying…'; });
       toast(rc ? 'Bought $'+t.ticker+' ✓' : 'Buy sent — confirmation is slow; check your wallet before retrying.','jade');
     }else{
-      const tokensIn = ethers.parseUnits(String(amt), 18);
+      // Sell the EXACT on-chain balance — never a float round-trip. `amt` comes from a
+      // text box seeded off Number(balanceOf) and 100% rounds UP via toFixed, so
+      // parseUnits(amt) can land a few hundred-billion wei ABOVE the real balance. For a
+      // holder of ~all circulating supply that overshoot crosses the curve's reserveEth
+      // boundary and makes `reserveEth -= gross` underflow (Panic 0x11) BEFORE the ERC20
+      // balance check — surfacing as a bogus "OVERFLOW" instead of "sell too big". So
+      // re-read balanceOf as a BigInt and clamp; treat "~the whole bag" as exactly it.
       const erc = new ethers.Contract(t.ca, ERC20_ABI, roProvider());
+      const rawBal = await erc.balanceOf(owner);
+      let tokensIn = ethers.parseUnits(String(amt), 18);
+      if(tokensIn > rawBal || tokensIn >= rawBal - rawBal/100000n) tokensIn = rawBal;
+      if(tokensIn <= 0n) throw new Error('nothing to sell');
       const allow = await erc.allowance(owner, t.curveAddr);
       if(allow < tokensIn){
         btn.textContent = 'Approve in wallet…';
         await sendTx(t.ca, erc.interface.encodeFunctionData('approve', [t.curveAddr, tokensIn]), null, ()=>toast('Approving $'+t.ticker+'…','jade'));
       }
-      const q = await curveR.quoteSell(tokensIn);
-      const minEth = q.net * SLIP / 1000n;
-      // Pre-flight: simulate the exact sell (from the user) so a would-be revert —
-      // e.g. slippage, or a missing approval — shows its REASON before we spend gas.
-      try{ await curveR.sell.staticCall(tokensIn, minEth, deadline, { from: owner }); }
-      catch(sim){ if(isRevert(sim)) throw new Error('sell would fail: '+revertMsg(sim)); }
+      // Pre-flight with a SHAVE-TO-FIT guard: even the exact bag can sit one wei over the
+      // reserveEth boundary, so step it down a hair until the sim passes — a holder can
+      // ALWAYS fully exit (worst case shaves ~0.005% off the last dust).
+      let q = await curveR.quoteSell(tokensIn);
+      let minEth = q.net * SLIP / 1000n, okSim = false;
+      for(let i=0;i<48 && tokensIn>0n;i++){
+        try{ await curveR.sell.staticCall(tokensIn, minEth, deadline, { from: owner }); okSim = true; break; }
+        catch(sim){
+          const msg = revertMsg(sim);
+          if(isRevert(sim) && /overflow|0x11|arithmetic|panic/i.test(msg)){ tokensIn = tokensIn - tokensIn/1000000n - 1n; q = await curveR.quoteSell(tokensIn); minEth = q.net * SLIP / 1000n; continue; }
+          if(isRevert(sim)) throw new Error('sell would fail: '+msg);
+          okSim = true; break;   // a flaky READ (not a real revert) — don't block the sell
+        }
+      }
+      if(!okSim) throw new Error('sell would fail: could not simulate this sell');
       btn.textContent = 'Confirm in wallet…';
       const rc = await sendTx(t.curveAddr, curveW.interface.encodeFunctionData('sell', [tokensIn, minEth, deadline]), null, ()=>{ toast('Sell sent — waiting…','seal'); btn.textContent='Selling…'; });
       toast(rc ? 'Sold $'+t.ticker+' ✓' : 'Sell sent — confirmation is slow; check your wallet before retrying.','seal');

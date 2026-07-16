@@ -811,10 +811,25 @@ async function sell(chatId, ca, pct, chainKey, walletId) {
     let venue, hash, trc;
     if (onCurve) {
       const cc = new ethers.Contract(curve, CURVE_ABI, wallet);
-      let minEth;
-      try { const exp = await cc.sell.staticCall(amount, 0n, deadline); minEth = exp * (10000n - slip) / 10000n; }
-      catch (e) { throw new Error('could not quote this sell (try again): ' + (e.shortMessage || e.message || e)); }
-      const tx = await cc.sell(amount, minEth, deadline, gas);
+      // Quote with a SHAVE-TO-FIT guard. A holder of ~all circulating supply can sit
+      // exactly on the curve's reserveEth boundary where selling the full bag makes the
+      // curve's `reserveEth -= gross` underflow (Solidity Panic 0x11) — so a naive 100%
+      // sell reverts. Step the amount down a hair until the sell simulates cleanly, so a
+      // full exit ALWAYS lands (worst case shaves ~0.005% off the very last dust).
+      let sellAmt = amount, minEth = 0n, ok = false;
+      for (let i = 0; i < 48 && sellAmt > 0n; i++) {
+        try { const exp = await cc.sell.staticCall(sellAmt, 0n, deadline); minEth = exp * (10000n - slip) / 10000n; ok = true; break; }
+        catch (e) {
+          const m = (e && (e.shortMessage || e.message)) || String(e);
+          if (/overflow|0x11|arithmetic|panic|missing revert/i.test(m)) { sellAmt = sellAmt - sellAmt / 1000000n - 1n; continue; }
+          throw new Error('could not quote this sell (try again): ' + m);
+        }
+      }
+      if (!ok) throw new Error('could not quote this sell (try again)');
+      // Pass an explicit gasLimit so ethers never calls the Robinhood node's flaky
+      // eth_estimateGas on the send (it can return empty data → "missing revert data").
+      let gasLimit; try { gasLimit = (await cc.sell.estimateGas(sellAmt, minEth, deadline)) * 12n / 10n; } catch (_) { gasLimit = 600000n; }
+      const tx = await cc.sell(sellAmt, minEth, deadline, { ...gas, gasLimit });
       venue = 'curve'; hash = tx.hash; trc = await waitBounded(tx);
     } else {
       const router = new ethers.Contract(chain.router, ROUTER_ABI, wallet);
