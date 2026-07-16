@@ -99,6 +99,9 @@ const usdOf = (wei, usd) => { if (!usd) return ''; const v = Number(ethers.forma
 async function send(chatId, text, extra) { return tg('sendMessage', { chat_id: chatId, text, parse_mode: 'HTML', disable_web_page_preview: true, ...(extra || {}) }); }
 async function broadcast(text, extra) { for (const id of state.admins) { await send(id, text, extra); } }
 async function answerCb(id, text) { return tg('answerCallbackQuery', { callback_query_id: id, ...(text ? { text } : {}) }); }
+
+// Detailed, chunked sale report (own module so it's unit-testable without booting the bot).
+const { renderSaleReport } = require('./salereport');
 const isAdmin = (id) => state.admins.map(String).includes(String(id));
 function menu() {
   return { reply_markup: { inline_keyboard: [
@@ -404,6 +407,7 @@ async function doSell(chatId, args) {
         const r = await botSell(w, provider, ca, pct);
         if (r.skip) continue;
         if (r.ok) { done++; await send(chatId, `✅ ${w.address.slice(0, 10)}… jual di ${r.venue === 'curve' ? 'curve' : 'Uniswap'}${r.pending ? ' (terkirim)' : ''}\ntx <code>${r.hash}</code>`); }
+        else if (r.error) { await send(chatId, `❌ ${w.address.slice(0, 10)}…: ${esc(r.error)}${r.retryable ? ' (coba lagi)' : ''}`); }   // botSell now RETURNS errors (no throw) — surface them
       } catch (e) { await send(chatId, `❌ ${w.address.slice(0, 10)}…: ${esc(e.shortMessage || e.reason || e.message)}`); }
     }
     if (!done) await send(chatId, 'Nggak ada wallet yang pegang token ini.');
@@ -461,10 +465,13 @@ async function doDumpAll(chatId, args) {
   try {
     await send(chatId, `🔻 DUMP ALL ${pct}% · ${cas.length} token · dari semua wallet…`);
     const res = await sellAllHoldings(provider, wallets, cas, pct);
-    const ok = res.filter((r) => r.ok).length, err = res.filter((r) => r.error).length;
-    await send(chatId, ok || err
-      ? `✅ Dump selesai: <b>${ok}</b> posisi terjual${err ? `, ⚠️ ${err} error` : ''} (${cas.length} token dicek).`
-      : `Nggak ada wallet yang pegang token ini (semua saldo 0).`);
+    const usd = await ethUsd().catch(() => 0);
+    const rep = renderSaleReport(res, usd, { title: `🔻 Dump ${pct}%` });
+    if (!rep.sold && !rep.errors) {
+      await send(chatId, `Nggak ada wallet yang pegang token ini (semua saldo 0)${rep.skipped ? ` · 💤 ${rep.skipped} dilewati` : ''}${rep.retry ? ` · 🔁 ${rep.retry} retry` : ''}. (${cas.length} token dicek)`);
+    } else {
+      for (const m of rep.messages) await send(chatId, m);
+    }
   } catch (e) { await send(chatId, `❌ Dump gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
   finally { trading = false; }
 }
@@ -851,8 +858,9 @@ async function autoSaleLoop() {
       trading = true;
       try {
         const res = await sellAllHoldings(provider, wallets, cas, CFG.autoSalePct);
-        const ok = res.filter((r) => r.ok).length, err = res.filter((r) => r.error).length;
-        if (ok > 0) await broadcast(`🔻 Auto-sale — jual <b>${CFG.autoSalePct}%</b> di <b>${ok}</b> posisi${err ? ` (⚠️ ${err} error)` : ''} · ${cas.length} token dicek.`);
+        const usd = await ethUsd().catch(() => 0);
+        const rep = renderSaleReport(res, usd, { title: `🔻 Auto-sale ${CFG.autoSalePct}%` });
+        if (rep.sold > 0) { for (const m of rep.messages) await broadcast(m); }   // only broadcast when it actually sold (no idle-cycle spam)
       } catch (_) {} finally { trading = false; }
     }
     await sleep(CFG.autoSaleEverySec * 1000);

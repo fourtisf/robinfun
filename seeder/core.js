@@ -136,12 +136,16 @@ const CURVE_ABI = [
 const ROUTER_ABI = [
   'function swapExactETHForTokensSupportingFeeOnTransferTokens(uint256 amountOutMin, address[] path, address to, uint256 deadline) payable',
   'function swapExactTokensForETHSupportingFeeOnTransferTokens(uint256 amountIn, uint256 amountOutMin, address[] path, address to, uint256 deadline)',
+  'function getAmountsOut(uint256 amountIn, address[] path) view returns (uint256[] amounts)',   // quote a sell before sending
 ];
 
 const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
   'function approve(address spender, uint256 amount) returns (bool)',
   'function allowance(address owner, address spender) view returns (uint256)',
+  'function name() view returns (string)',
+  'function symbol() view returns (string)',
+  'function decimals() view returns (uint8)',
 ];
 
 const FEEROUTER_ABI = [
@@ -392,8 +396,9 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
       trade.boughtEth = CFG.autoBuyEth;
     }
     if (ca && CFG.autoSellPct > 0) {
-      await botSell(wallet, provider, ca, CFG.autoSellPct);
-      trade.soldPct = CFG.autoSellPct;
+      const sr = await botSell(wallet, provider, ca, CFG.autoSellPct);   // returns {ok|skip|error} — doesn't throw
+      if (sr.ok) trade.soldPct = CFG.autoSellPct;
+      else if (sr.error) trade.error = sr.error;
     }
   } catch (e) { trade.error = e.shortMessage || e.message; }
 
@@ -422,6 +427,34 @@ async function resolveCurve(provider, ca) {
 async function isGraduated(provider, curveAddr) {
   try { return await new ethers.Contract(curveAddr, CURVE_ABI, provider).graduated(); } catch (_) { return false; }
 }
+// Token name/symbol/decimals, cached forever (immutable). Never throws.
+const _metaCache = new Map();
+async function tokenMeta(provider, ca) {
+  const k = String(ca).toLowerCase();
+  if (_metaCache.has(k)) return _metaCache.get(k);
+  const erc = new ethers.Contract(ca, ERC20_ABI, provider);
+  const [name, symbol, decimals] = await Promise.all([
+    erc.name().catch(() => ''), erc.symbol().catch(() => ''), erc.decimals().then((d) => Number(d)).catch(() => 18),
+  ]);
+  const meta = { name: name || '', symbol: symbol || '', decimals: Number.isFinite(decimals) ? decimals : 18 };
+  if (name || symbol) _metaCache.set(k, meta);   // only cache a real read (a transient miss shouldn't stick)
+  return meta;
+}
+// Resolve how to trade a token (curve while bonding, DEX once graduated) with a light
+// retry so a transient RPC blip doesn't MIS-route (which used to send a bonding sell
+// to the DEX → revert). Returns { curve, graduated } or null when genuinely
+// unreadable — the caller should retry later, NOT count it as a sale failure.
+async function resolveRoute(provider, ca) {
+  for (let i = 0; i < 2; i++) {
+    try {
+      const curve = await new ethers.Contract(CFG.factory, FACTORY_ABI, provider).curveOf(ca);
+      if (!curve || curve === ethers.ZeroAddress) return { curve: '', graduated: true };   // not a Robinfun curve token → plain DEX
+      const graduated = await new ethers.Contract(curve, CURVE_ABI, provider).graduated();
+      return { curve, graduated: !!graduated };
+    } catch (_) { await sleep(300); }
+  }
+  return null;
+}
 async function waitBounded(tx) { // never hang the bot on a stuck tx
   try { return await tx.wait(1, 180000); } catch (e) { if (e && e.code === 'TIMEOUT') return null; throw e; }
 }
@@ -447,7 +480,7 @@ async function gasOverrides(provider) {
 async function ensureApprove(wallet, ca, spender, amount) {
   const erc = new ethers.Contract(ca, ERC20_ABI, wallet);
   const cur = await erc.allowance(wallet.address, spender).catch(() => 0n);
-  if (cur < amount) { const gas = await gasOverrides(wallet.provider || null); const tx = await erc.approve(spender, ethers.MaxUint256, gas); await tx.wait(); }
+  if (cur < amount) { const gas = await gasOverrides(wallet.provider || null); const tx = await erc.approve(spender, ethers.MaxUint256, gas); await waitBounded(tx); }   // bounded: a stuck approve must not hang the sale loop
 }
 
 // Buy `ethAmount` ETH of token `ca` from `wallet`. Curve buy while bonding,
@@ -470,26 +503,70 @@ async function botBuy(wallet, provider, ca, ethAmount) {
   return { ok: true, venue: 'dex', hash: tx.hash, pending: !(await waitBounded(tx)) };
 }
 
-// Sell `pct`% (1-100) of the wallet's balance of token `ca`. Auto-routes.
-async function botSell(wallet, provider, ca, pct) {
+// Sell `pct`% (1-100) of the wallet's balance of token `ca`. Auto-routes and — the
+// important part — SIMULATES the sell before sending, then falls back to the other
+// venue, so a position that simply CAN'T be sold right now (no liquidity yet, curve
+// rejects, dust) is reported as a quiet SKIP instead of burning gas and surfacing as
+// a scary "error". `route` (from resolveRoute) can be passed to avoid re-resolving
+// per wallet. Returns rich data for the report:
+//   { ok, venue, hash, pending, tokensSold, expEthWei, proceedsWei, remaining }
+//   | { skip, reason }              (nothing to sell / can't sell now — NORMAL)
+//   | { error, retryable }          (approve/RPC/race — soft, don't alarm)
+async function botSell(wallet, provider, ca, pct, route) {
   const erc = new ethers.Contract(ca, ERC20_ABI, wallet);
-  const bal = await erc.balanceOf(wallet.address);
+  let bal;
+  try { bal = await erc.balanceOf(wallet.address); } catch (e) { return { error: e.shortMessage || e.message, retryable: true }; }
   const p = Math.max(1, Math.min(100, Math.round(Number(pct) || 0)));
   const amount = (bal * BigInt(p)) / 100n;
   if (amount <= 0n) return { skip: true, reason: 'saldo token 0' };
+
+  if (route === undefined) route = await resolveRoute(provider, ca);
+  if (!route) return { error: 'route tak terbaca (RPC)', retryable: true };
+
   const deadline = Math.floor(Date.now() / 1000) + 600;
   const gas = await gasOverrides(provider);
-  const curveAddr = await resolveCurve(provider, ca);
-  const grad = curveAddr ? await isGraduated(provider, curveAddr) : true;
-  if (curveAddr && !grad) {
-    await ensureApprove(wallet, ca, curveAddr, amount);
-    const tx = await new ethers.Contract(curveAddr, CURVE_ABI, wallet).sell(amount, 0n, deadline, gas);
-    return { ok: true, venue: 'curve', sold: amount, hash: tx.hash, pending: !(await waitBounded(tx)) };
+  const onCurve = !!(route.curve && !route.graduated);
+  const candidates = onCurve ? ['curve', 'dex'] : ['dex'];   // bonding → curve first (dex fallback); graduated → dex only
+  const ethBefore = await provider.getBalance(wallet.address).catch(() => null);
+
+  let lastErr = null, hardRevert = false;
+  for (const venue of candidates) {
+    const spender = venue === 'curve' ? route.curve : CFG.dexRouter;
+    let expOut = 0n;
+    if (venue === 'dex') {
+      // DEX quote (getAmountsOut) is a pure VIEW — no allowance needed. Quote FIRST
+      // so a token with no pool is skipped cheaply, without wasting an approve tx.
+      try { const a = await new ethers.Contract(CFG.dexRouter, ROUTER_ABI, provider).getAmountsOut(amount, [ca, CFG.weth]); expOut = a[a.length - 1]; }
+      catch (e) { lastErr = e.shortMessage || e.reason || e.message; hardRevert = true; continue; }
+      if (!(expOut > 0n)) { lastErr = 'quote 0 (tanpa likuiditas)'; hardRevert = true; continue; }
+      try { await ensureApprove(wallet, ca, spender, amount); }
+      catch (e) { lastErr = 'approve gagal: ' + (e.shortMessage || e.message); continue; }
+    } else {
+      // curve.sell pulls tokens via transferFrom → allowance required even to
+      // staticCall, so approve FIRST, then simulate.
+      try { await ensureApprove(wallet, ca, spender, amount); }
+      catch (e) { lastErr = 'approve gagal: ' + (e.shortMessage || e.message); continue; }
+      try { expOut = await new ethers.Contract(route.curve, CURVE_ABI, wallet).sell.staticCall(amount, 0n, deadline); }
+      catch (e) { lastErr = e.shortMessage || e.reason || e.message; hardRevert = true; continue; }
+      if (!(expOut > 0n)) { lastErr = 'quote 0'; hardRevert = true; continue; }
+    }
+    // 10% floor from a FRESH sim (was 0n = drainable). Sequential loop → sim≈send.
+    const minOut = (expOut * 90n) / 100n;
+    let tx;
+    try {
+      if (venue === 'curve') tx = await new ethers.Contract(route.curve, CURVE_ABI, wallet).sell(amount, minOut, deadline, gas);
+      else tx = await new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet).swapExactTokensForETHSupportingFeeOnTransferTokens(amount, minOut, [ca, CFG.weth], wallet.address, deadline, gas);
+    } catch (e) { lastErr = e.shortMessage || e.reason || e.message; continue; }   // send-time race → try the other venue
+    const pending = !(await waitBounded(tx));
+    let proceedsWei = 0n, remaining = 0n;
+    try { const after = await provider.getBalance(wallet.address); if (ethBefore != null && after > ethBefore) proceedsWei = after - ethBefore; } catch (_) {}
+    try { remaining = await erc.balanceOf(wallet.address); } catch (_) {}
+    return { ok: true, venue, hash: tx.hash, pending, tokensSold: amount, expEthWei: expOut, proceedsWei, remaining };
   }
-  await ensureApprove(wallet, ca, CFG.dexRouter, amount);
-  const tx = await new ethers.Contract(CFG.dexRouter, ROUTER_ABI, wallet)
-    .swapExactTokensForETHSupportingFeeOnTransferTokens(amount, 0n, [ca, CFG.weth], wallet.address, deadline, gas);
-  return { ok: true, venue: 'dex', sold: amount, hash: tx.hash, pending: !(await waitBounded(tx)) };
+  // Nothing filled. A pure sim-revert ("can't sell now") is a SKIP; an approve/RPC
+  // problem is a soft retryable error. Never a scary hard error unless truly stuck.
+  if (lastErr && /approve|rpc|route|timeout|network|rate|nonce|fund/i.test(lastErr)) return { error: lastErr, retryable: true };
+  return { skip: true, reason: hardRevert ? 'tak bisa dijual sekarang (tanpa likuiditas / curve tolak)' : (lastErr || 'tak bisa dijual') };
 }
 
 // A random ETH amount in [min, max] as a 6-dp string (min==max → fixed). Returns
@@ -516,26 +593,34 @@ async function seedVolume(provider, buyers, ca, minEth, maxEth) {
   }
   return out;
 }
-// Each of `sellers` sells `pct`% of its `ca` balance (for scheduled dumps).
+// Each of `sellers` sells `pct`% of its `ca` balance (for scheduled dumps). Resolves
+// the route + token metadata ONCE (not per wallet) and returns rich rows.
 async function sellHoldings(provider, sellers, ca, pct) {
+  const route = await resolveRoute(provider, ca);
+  const meta = await tokenMeta(provider, ca).catch(() => ({ name: '', symbol: '', decimals: 18 }));
   const out = [];
   for (const w of sellers) {
-    try { const r = await botSell(w, provider, ca, pct); out.push({ address: w.address, ok: !r.skip, skip: !!r.skip }); }
-    catch (e) { out.push({ address: w.address, ok: false, error: e.shortMessage || e.message }); }
+    if (!route) { out.push({ ca, ...meta, address: w.address, error: 'route tak terbaca (RPC)', retryable: true }); continue; }
+    const r = await botSell(w, provider, ca, pct, route);
+    out.push({ ca, ...meta, address: w.address, ...r });
   }
   return out;
 }
-// Sell `pct`% of EVERY wallet's balance across ALL token CAs in `cas`. botSell
-// reads the balance first and skips wallets holding nothing, so idle positions
-// cost only a cheap balanceOf. Used by the continuous auto-sale loop and /dumpall.
-// Returns [{ ca, address, ok|skip|error }].
+// Sell `pct`% of EVERY wallet's balance across ALL token CAs in `cas`. botSell reads
+// the balance first (cheap) and skips wallets holding nothing; the route + metadata
+// are resolved ONCE per token (not per wallet) to cut RPC load. Used by the auto-sale
+// loop and /dumpall. Returns rich rows: { ca, name, symbol, decimals, address,
+// ok|skip|error, venue, hash, tokensSold, proceedsWei, remaining, ... }.
 async function sellAllHoldings(provider, wallets, cas, pct) {
   const out = [];
   for (const ca of cas) {
     if (!ca || !ethers.isAddress(ca)) continue;
+    const route = await resolveRoute(provider, ca);
+    const meta = await tokenMeta(provider, ca).catch(() => ({ name: '', symbol: '', decimals: 18 }));
+    if (!route) { out.push({ ca, ...meta, tokenSkip: true, error: 'route tak terbaca (RPC)', retryable: true }); continue; }
     for (const w of wallets) {
-      try { const r = await botSell(w, provider, ca, pct); out.push({ ca, address: w.address, ok: !r.skip, skip: !!r.skip }); }
-      catch (e) { out.push({ ca, address: w.address, ok: false, error: e.shortMessage || e.message }); }
+      const r = await botSell(w, provider, ca, pct, route);
+      out.push({ ca, ...meta, address: w.address, ...r });
     }
   }
   return out;
@@ -592,7 +677,10 @@ async function reactToBuys(provider, wallets, st) {
     if (!best || bestBal <= 0n) continue;
     try {
       const r = await botSell(best, provider, ca, CFG.reactSellPct);
-      if (!r.skip) { rec.hits += 1; actions.push({ ca, wallet: best.address, pct: CFG.reactSellPct, realUsd, hits: rec.hits, hash: r.hash }); }
+      // Only a REAL sale burns a react "hit" — a skip/soft-error must not exhaust the
+      // capped budget (else the bot stops reacting to genuine buyers after a few RPC blips).
+      if (r.ok) { rec.hits += 1; actions.push({ ca, wallet: best.address, pct: CFG.reactSellPct, realUsd, hits: rec.hits, hash: r.hash }); }
+      else if (r.error && !r.retryable) actions.push({ ca, error: r.error });
     } catch (e) { actions.push({ ca, error: e.shortMessage || e.message }); }
   }
   return { actions, scanned: owned.length };
@@ -862,7 +950,7 @@ module.exports = {
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep,
   ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne,
-  resolveCurve, isGraduated, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
+  resolveCurve, isGraduated, resolveRoute, tokenMeta, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
   mapLimit, ownedTokens, creatorOwedTotal, tokenPnl, reactToBuys, gasOverrides, capGuard,
 };
