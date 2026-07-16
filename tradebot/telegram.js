@@ -56,46 +56,41 @@ function activeChain(chatId) { return core.chainOf(core.userChain(core.ensureUse
 // ------------------------------------------------------------ screens
 function mainMenu() {
   return rows(
-    [btn('💼 Wallet', 'wal'), btn('📊 Portfolio', 'pos'), btn('🧾 History', 'hist')],
+    [btn('💼 Wallets', 'wal'), btn('📊 Portfolio', 'pos'), btn('🧾 History', 'hist')],
     [btn('🌐 Chain', 'chain'), btn('🎯 Snipe', 'snipe'), btn('📋 Orders', 'orders')],
     [btn('🔔 Alerts', 'alerts'), btn('👥 Copy', 'copy'), btn('🎁 Referrals', 'ref')],
     [btn('⚙️ Settings', 'set'), btn('❔ Help', 'help')],
   );
 }
+// The Wallet menu is an ALL-WALLETS dashboard (Maestro-style): every wallet with its
+// name, live balance and full address on one screen — tap a name to switch, ✏️ rename,
+// 📥 deposit QR, 🗑 remove. Export/Withdraw act on the ✅ active wallet.
 async function walletScreen(chatId) {
   const u = core.ensureUser(chatId);
   const ch = core.chainOf(core.userChain(u));
   const list = core.walletList(u);
-  const w = core.activeWallet(u);
-  const idx = list.findIndex((x) => x.id === w.id) + 1;
-  const label = core.walletLabel(w, idx);
-  const bal = await core.ethBalance(w.address, ch.key);
-  const ethStr = fmtEth(bal);
-  const empty = bal <= 0n;
-  // Brand-new / unfunded wallet: don't just show "0.00000" — walk them through it.
-  const guide = empty
-    ? `\n<b>Start in 3 steps 👇</b>\n` +
-      `1️⃣ <b>Send ${ch.native}</b> to the address above (from any exchange/wallet, on ${esc(ch.name)}).\n` +
-      `2️⃣ Tap <b>🔄 Refresh</b> to see it land.\n` +
-      `3️⃣ <b>Paste any token contract</b> here → get a live card → one-tap buy.\n\n` +
-      `<i>Tip: same address works on every chain — switch with 🌐. Keep balances small; this is beta.</i>`
-    : `Same address works on every chain. Deposit ${ch.native} here on <b>${esc(ch.name)}</b>, then paste a token contract to trade.`;
-  return {
-    text:
-      `💼 <b>${esc(label)}</b>  ·  ${ch.emoji} ${esc(ch.name)}\n` +
-      `<i>Wallet ${idx} of ${list.length}</i>\n` +
-      `<code>${w.address}</code>\n\n` +
-      `Balance: <b>${ethStr} ${ch.native}</b> (${usd(ethStr, ch.native)})${empty ? '  —  empty' : ''}\n\n` +
-      guide,
-    kb: rows(
-      empty
-        ? [btn(`📥 How to deposit`, 'dep'), btn('🔄 Refresh', 'wal')]
-        : [btn('🔄 Refresh', 'wal'), btn('📥 Deposit', 'dep')],
-      [btn('✏️ Rename', 'rnw:' + w.id), btn('🌐 Switch chain', 'chain'), btn('📤 Withdraw', 'wd')],
-      [btn('🔑 Export key', 'exp'), btn(`👛 Wallets (${list.length}/${core.WALLET_CAP})`, 'wallets')],
-      [btn('« Menu', 'menu')],
-    ),
-  };
+  const bals = await Promise.all(list.map((w) => core.ethBalance(w.address, ch.key).catch(() => 0n)));
+  const total = bals.reduce((a, b) => a + b, 0n);
+  const allEmpty = total <= 0n;
+  let body = '';
+  const kbRows = [];
+  list.forEach((w, i) => {
+    const active = w.id === u.activeWalletId;
+    const label = core.walletLabel(w, i + 1);
+    const nOrders = (w.orders && w.orders.length) || 0;
+    body += `${active ? '✅' : '▫️'} <b>${esc(label)}</b>${active ? ' <i>· active</i>' : ''} · <b>${fmtEth(bals[i])} ${ch.native}</b> (${usd(fmtEth(bals[i]), ch.native)})${nOrders ? ' · ' + nOrders + ' order' + (nOrders > 1 ? 's' : '') : ''}\n<code>${w.address}</code>\n\n`;
+    const row = [btn(`${active ? '✓ ' : '⚪ '}${label}`.slice(0, 26), active ? 'wal' : 'sw:' + w.id), btn('✏️', 'rnw:' + w.id), btn('📥', 'qrw:' + w.id)];
+    if (list.length > 1) row.push(btn('🗑', 'rmw:' + w.id));
+    kbRows.push(row);
+  });
+  if (list.length < core.WALLET_CAP) kbRows.push([btn('➕ Generate wallet', 'neww'), btn('📩 Import', 'imp')]);
+  kbRows.push([btn('🔑 Export (active)', 'exp'), btn('📤 Withdraw (active)', 'wd')]);
+  kbRows.push([btn('🌐 Chain', 'chain'), btn('🔄 Refresh', 'wal'), btn('« Menu', 'menu')]);
+  const head = `💼 <b>Your Wallets</b> · ${ch.emoji} ${esc(ch.name)}\n${list.length}/${core.WALLET_CAP} wallets · total <b>${fmtEth(total)} ${ch.native}</b> (${usd(fmtEth(total), ch.native)})\n\n`;
+  const guide = allEmpty
+    ? `<b>Start in 3 steps 👇</b>\n1️⃣ Deposit ${ch.native} to a wallet — tap <b>📥</b> on it for the address/QR.\n2️⃣ Tap <b>🔄 Refresh</b> to see it land.\n3️⃣ Paste any token contract → live card → one-tap buy.\n\n<i>Tap a name to switch · ✏️ rename · 📥 deposit · 🗑 remove. Same address on every chain (switch with 🌐).</i>`
+    : `<i>Tap a name to switch the active wallet · ✏️ rename · 📥 deposit QR · 🗑 remove. Export/Withdraw act on the ✅ active wallet. Balances shown for ${esc(ch.name)}; positions &amp; orders are per-wallet.</i>`;
+  return { text: head + body + guide, kb: { inline_keyboard: kbRows } };
 }
 // Maestro-style deposit: a QR of the address + the address text. Works for any wallet
 // (not just the active one). Degrades to a plain text address if QR is disabled/fails.
@@ -110,30 +105,8 @@ async function depositScreen(chatId, w) {
   if (url) { const r = await sendPhoto(chatId, url, caption, kb).catch(() => null); if (r && r.ok) return r; }
   return send(chatId, caption, kb);   // QR disabled/failed → text address (still fully usable)
 }
-async function walletsScreen(chatId) {
-  const u = core.ensureUser(chatId);
-  const ch = core.chainOf(core.userChain(u));
-  const list = core.walletList(u);
-  const bals = await Promise.all(list.map((w) => core.ethBalance(w.address, ch.key).catch(() => 0n)));
-  let body = '';
-  const kbRows = [];
-  list.forEach((w, i) => {
-    const active = w.id === u.activeWalletId;
-    const label = core.walletLabel(w, i + 1);
-    const nOrders = (w.orders && w.orders.length) || 0;
-    body += `${active ? '✅' : '▫️'} <b>${esc(label)}</b> · ${fmtEth(bals[i])} ${ch.native}${nOrders ? ' · ' + nOrders + ' order' + (nOrders > 1 ? 's' : '') : ''}\n<code>${w.address}</code>\n`;
-    // button text is PLAIN (no HTML) → no esc; keep it short so the row stays balanced
-    const row = [btn(`${active ? '✓ ' : '⚪ '}${label}`.slice(0, 28), active ? 'wal' : 'sw:' + w.id), btn('✏️', 'rnw:' + w.id), btn('📥', 'qrw:' + w.id)];
-    if (list.length > 1) row.push(btn('🗑', 'rmw:' + w.id));
-    kbRows.push(row);
-  });
-  if (list.length < core.WALLET_CAP) kbRows.push([btn('➕ Generate', 'neww'), btn('📩 Import', 'imp')]);
-  kbRows.push([btn('« Wallet', 'wal'), btn('« Menu', 'menu')]);
-  return {
-    text: `👛 <b>Your wallets</b> (${list.length}/${core.WALLET_CAP}) · ${ch.emoji} ${esc(ch.name)}\n\n${body}\nTap a name to switch · ✏️ rename · 📥 deposit QR · 🗑 remove. Balances shown for ${esc(ch.name)}; positions &amp; orders are per-wallet.`,
-    kb: { inline_keyboard: kbRows },
-  };
-}
+// 'Wallets' and 'Wallet' now open the SAME all-wallets dashboard.
+async function walletsScreen(chatId) { return walletScreen(chatId); }
 function chainScreen(chatId) {
   const cur = core.userChain(core.ensureUser(chatId));
   const list = core.chains.enabledChains();
@@ -737,5 +710,5 @@ async function start() {
   }
 }
 
-module.exports = { start };
+module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen } };
 if (require.main === module) start();
