@@ -534,7 +534,7 @@ async function botBuy(wallet, provider, ca, ethAmount) {
 async function botSell(wallet, provider, ca, pct, route) {
   const erc = new ethers.Contract(ca, ERC20_ABI, wallet);
   let bal;
-  try { bal = await erc.balanceOf(wallet.address); } catch (e) { return { error: e.shortMessage || e.message, retryable: true }; }
+  try { bal = await retry(() => erc.balanceOf(wallet.address), 3); } catch (e) { return { error: e.shortMessage || e.message, retryable: true }; }   // retry: a flaky 0/throw must not falsely skip a real bag
   const p = Math.max(1, Math.min(100, Math.round(Number(pct) || 0)));
   const amount = (bal * BigInt(p)) / 100n;
   if (amount <= 0n) return { skip: true, reason: 'saldo token 0' };
@@ -771,7 +771,9 @@ async function creatorEarnings(provider, cas) {
 // or another of our wallets' launches — so /dumpall can actually sell them.
 // Returns [{ ca, holders:[address…] }]. Best-effort; falls back to [] if the
 // explorer is down (callers union this with ownedTokens so nothing is lost).
-async function heldTokens(wallets) {
+async function heldTokens(provider, wallets) {
+  // Tolerate a legacy (wallets)-only call: skip on-chain verification, use explorer.
+  if (Array.isArray(provider) && !wallets) { wallets = provider; provider = null; }
   const api = (process.env.EXPLORER_API || 'https://robinhoodchain.blockscout.com/api').replace(/\/+$/, '');
   const byCa = new Map();
   await mapLimit(wallets, 5, async (w) => {
@@ -786,11 +788,27 @@ async function heldTokens(wallets) {
         if (!byCa.has(k)) byCa.set(k, { ca, symbol: t.symbol || '', name: t.name || '', decimals: Number(t.decimals || 18), holders: [], totalRaw: 0n });
         const e = byCa.get(k);
         e.holders.push({ address: w.address, balanceRaw: bal });
-        e.totalRaw += bal;
       }
     } catch (_) {}
   });
-  return [...byCa.values()];
+  // VERIFY on-chain (retry): the explorer index LAGS — it can still list a token
+  // that was already sold (balance now 0), and a flaky read must not drop a real
+  // one. Trust the live balance; if the read genuinely fails, keep the explorer's.
+  const rows = [...byCa.values()];
+  if (provider) {
+    await mapLimit(rows, 6, async (t) => {
+      const erc = new ethers.Contract(t.ca, ERC20_ABI, provider);
+      const verified = []; let total = 0n;
+      for (const h of t.holders) {
+        let live; try { live = await retry(() => erc.balanceOf(h.address), 3); } catch (_) { live = h.balanceRaw; }   // read failed → trust explorer
+        if (live > 0n) { verified.push({ address: h.address, balanceRaw: live }); total += live; }
+      }
+      t.holders = verified; t.totalRaw = total;
+    });
+    return rows.filter((t) => t.totalRaw > 0n);   // drop phantom (already-sold) tokens
+  }
+  for (const t of rows) t.totalRaw = t.holders.reduce((s, h) => s + h.balanceRaw, 0n);
+  return rows;
 }
 
 // Auto-detect total ETH DEPOSITED into the wallets, read from chain history via

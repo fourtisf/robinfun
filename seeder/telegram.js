@@ -499,7 +499,7 @@ async function doClaim(chatId) {
 // ---- /porto: FAST view of tokens the wallets still HOLD (explorer, no chain scan) ----
 async function doPorto(chatId) {
   await send(chatId, '📊 Baca token yang masih dipegang…');
-  const held = await heldTokens(wallets).catch(() => []);
+  const held = await heldTokens(provider, wallets).catch(() => []);
   if (!held.length) { await send(chatId, '✅ Bersih — nggak ada token tersisa di wallet manapun (semua saldo 0).'); return; }
   const idx = {}; wallets.forEach((w, i) => { idx[w.address.toLowerCase()] = i + 1; });
   held.sort((a, b) => (b.totalRaw > a.totalRaw ? 1 : b.totalRaw < a.totalRaw ? -1 : 0));
@@ -523,7 +523,7 @@ async function doDumpAll(chatId, args) {
   // tokens on-chain (which is what made this crawl). Fall back to the full
   // created-token scan only if the explorer returns nothing (down / lagging).
   let scanNote = '';
-  const held = await heldTokens(wallets).catch(() => []);
+  const held = await heldTokens(provider, wallets).catch(() => []);
   let cas = held.map((h) => h.ca).filter((ca) => ca && ethers.isAddress(ca));
   if (!cas.length) {
     const owned = await ownedCached();
