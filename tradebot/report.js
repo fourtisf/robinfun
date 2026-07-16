@@ -11,23 +11,28 @@
  * hiccup can't affect a user's trade. Configure REPORT_CHANNEL_ID (the channel the
  * bot is an admin of); empty disables all reporting.
  */
-const TOKEN = (process.env.TRADEBOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '').trim();
-const CHANNEL = (process.env.REPORT_CHANNEL_ID || '-1004448963090').trim();   // override/disable via env
-const API = TOKEN ? `https://api.telegram.org/bot${TOKEN}` : '';
+// Read config LAZILY (at call time), not at module load — this module is required from
+// inside core.js BEFORE core's .env loader runs, so capturing env at load time would
+// read an empty token and silently disable all reporting.
+const _token = () => (process.env.TRADEBOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '').trim();
+const _channel = () => (process.env.REPORT_CHANNEL_ID || '-1004448963090').trim();
 
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 const who = (u) => (u && u.username) ? '@' + esc(u.username) : ('id ' + (u && u.chatId != null ? u.chatId : '?'));
 const money = (native, amt, usd) => `<b>${amt} ${esc(native)}</b>${(usd != null && usd > 0) ? ` ($${usd >= 1 ? usd.toFixed(2) : usd.toFixed(4)})` : ''}`;
 
-function enabled() { return !!(API && CHANNEL); }
+function enabled() { return !!(_token() && _channel()); }
 async function post(text) {
-  if (!enabled()) return;
+  const token = _token(), channel = _channel();
+  if (!token || !channel) return;
   try {
-    await fetch(`${API}/sendMessage`, {
+    const r = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
       method: 'POST', headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ chat_id: CHANNEL, text, parse_mode: 'HTML', disable_web_page_preview: true }),
+      body: JSON.stringify({ chat_id: channel, text, parse_mode: 'HTML', disable_web_page_preview: true }),
       signal: AbortSignal.timeout(15000),
     });
+    const j = await r.json().catch(() => null);
+    if (j && j.ok === false) console.error('report post failed:', j.description, '(is the bot an admin of the channel with Post Messages?)');
   } catch (_) { /* never let a report failure touch the trade path */ }
 }
 

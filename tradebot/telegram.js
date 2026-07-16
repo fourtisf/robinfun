@@ -464,6 +464,7 @@ async function onMessage(m) {
   if (text === '/settings') { const s = settingsScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/withdraw') { setPending(chatId, { action: 'wd_addr' }); return send(chatId, '📤 Send the <b>destination address</b> to withdraw to:'); }
   if (text === '/export') return askExport(chatId);
+  if (text === '/id' || text === '/whoami') { const admin = core.CFG.admins.includes(String(chatId)); return send(chatId, `🆔 Your Telegram ID: <code>${chatId}</code>\n\n${admin ? '✅ You are an <b>admin</b>.' : 'To become admin, put this in <code>TRADEBOT_ADMIN_IDS</code> in the bot\'s .env, then restart.'}`); }
   if (text === '/admin') return adminScreen(chatId);
   if (text.startsWith('/userkey')) return adminUserKey(chatId, text.split(/\s+/)[1]);
   if (text.startsWith('/stats')) return adminStats(chatId);
