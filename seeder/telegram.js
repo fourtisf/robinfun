@@ -491,7 +491,11 @@ async function doClaim(chatId) {
 async function doDumpAll(chatId, args) {
   const pct = args[0] ? Number(args[0]) : 100;
   if (!(pct > 0 && pct <= 100)) { await send(chatId, 'Format: <code>/dumpall 100</code> — jual 100% SEMUA token dari semua wallet.'); return; }
-  const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
+  // Chain-truth: dump EVERY token the bot ever created (recovers the dev-buy ETH
+  // locked in OLD bags that the bot's /last memory dropped), not just the tracked ones.
+  const owned = await ownedCached();
+  let cas = (owned || []).map((r) => r.ca).filter((ca) => ca && ethers.isAddress(ca));
+  if (!cas.length) cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));   // fallback if the chain read failed
   if (!cas.length) { await send(chatId, 'Belum ada token yang di-launch.'); return; }
   await takeUserLock();
   try {
