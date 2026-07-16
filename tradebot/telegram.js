@@ -761,9 +761,22 @@ async function start() {
   // Periodic volume/fee recap to the admin channel (default every 24h). Posts only when
   // there were trades, then resets the window. Never touches the trade path.
   if (report.enabled()) {
-    const recapMs = Math.max(3600000, Number(process.env.REPORT_RECAP_HOURS || 24) * 3600000);
-    (async function recapLoop() { for (;;) { await sleep(recapMs); try { const snap = core.reportSnapshot(); if (snap.trades > 0) await report.post(statsText(snap, core.allUsers().length)); core.resetReportWindow(); } catch (_) {} } })();
-    console.log(`ops reporting ENABLED → channel`);
+    // DAILY recap: once per UTC day at/after REPORT_RECAP_HOUR (default 0 UTC = 07:00
+    // WIB). Sent every day even with 0 trades; survives restarts (persisted date).
+    const recapHour = Math.min(23, Math.max(0, Number(process.env.REPORT_RECAP_HOUR || 0)));
+    (async function recapLoop() {
+      for (;;) {
+        await sleep(20 * 60 * 1000);   // check every 20 min
+        try {
+          if (core.recapDue(recapHour)) {
+            await report.post('🗓 <b>Daily report</b>\n\n' + statsText(core.reportSnapshot(), core.allUsers().length));
+            core.markRecap();
+            core.resetReportWindow();
+          }
+        } catch (_) {}
+      }
+    })();
+    console.log(`ops reporting ENABLED → channel (daily recap ~${recapHour}:00 UTC)`);
   }
   console.log(`Robinfun Trade Bot up as @${BOT_USERNAME || '?'} — chains: ${core.chains.ENABLED.join(', ')}`);
 

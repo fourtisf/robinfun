@@ -110,7 +110,16 @@ function decrypt(blob) {
 // ---------------------------------------------------------------- store (JSON, atomic)
 const STORE_FILE = path.join(CFG.dataDir, 'tradebot.json');
 let DB = { users: {}, refByCode: {}, report: null };
-function _emptyReport() { return { since: Date.now(), trades: 0, vol: {}, fee: {}, lifetime: { trades: 0, vol: {}, fee: {} } }; }
+function _emptyReport() { return { since: Date.now(), trades: 0, vol: {}, fee: {}, lifetime: { trades: 0, vol: {}, fee: {} }, lastRecapDate: null }; }
+function _todayUTC() { const d = new Date(); return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0') + '-' + String(d.getUTCDate()).padStart(2, '0'); }
+// True once per UTC day, at/after `hourUtc` — a stable DAILY trigger that survives
+// restarts (the last-recap date is persisted) and never double-fires the same day.
+function recapDue(hourUtc) {
+  const r = DB.report || (DB.report = _emptyReport());
+  if (r.lastRecapDate === _todayUTC()) return false;
+  return new Date().getUTCHours() >= (Number(hourUtc) || 0);
+}
+function markRecap() { const r = DB.report || (DB.report = _emptyReport()); r.lastRecapDate = _todayUTC(); saveStore(); }
 function loadStore() {
   let parsed;
   try { parsed = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8')); } catch (_) { parsed = {}; }
@@ -120,6 +129,7 @@ function loadStore() {
   DB.refByCode = (parsed && parsed.refByCode) || {};
   DB.report = (parsed && parsed.report) || _emptyReport();
   if (!DB.report.lifetime) DB.report.lifetime = { trades: 0, vol: {}, fee: {} };
+  if (!DB.report.lastRecapDate) DB.report.lastRecapDate = _todayUTC();   // first run: baseline today (first daily recap fires tomorrow)
   wireShutdownFlush();
 }
 let _saveTimer = null;
@@ -897,7 +907,7 @@ module.exports = {
   CFG, chains, chainOf, userChain, providerFor, FACTORY_ABI, CURVE_ABI, ERC20_ABI,
   getHistory, realizedEth,
   loadStore, saveStore, saveStoreNow, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, setChain,
-  noteUser, findUser, recordTrade, reportSnapshot, resetReportWindow,
+  noteUser, findUser, recordTrade, reportSnapshot, resetReportWindow, recapDue, markRecap,
   walletList, walletById, activeWallet, activeAddress, addWallet, switchWallet, removeWallet, listWallets, WALLET_CAP,
   renameWallet, walletLabel, hasChainPresets,
   buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
