@@ -14,6 +14,7 @@
  */
 const { ethers } = require('ethers');
 const core = require('./core');
+const goplus = require('./goplus');
 
 let _notify = () => {};
 function setNotifier(fn) { if (typeof fn === 'function') _notify = fn; }
@@ -38,7 +39,7 @@ async function snipeCycle() {
   let head;
   try { head = await prov.getBlockNumber(); } catch (_) { return; }
   if (!_lastSnipeBlock || head < _lastSnipeBlock) _lastSnipeBlock = head;   // pin cursor near head always
-  const armed = core.allUsers().filter((u) => u.snipe && u.snipe.on && Number(u.snipe.ethAmount) > 0);
+  const armed = core.allUsers().filter((u) => u.snipe && u.snipe.chains && u.snipe.chains.robinhood && Number(u.snipe.ethAmount) > 0);
   if (!armed.length) { _lastSnipeBlock = head; return; }
   const factory = new ethers.Contract(core.chainOf(SNIPE_CHAIN).factory, core.FACTORY_ABI, prov);
   const from = Math.max(_lastSnipeBlock + 1, head - SNIPE_MAX_SPAN);
@@ -74,6 +75,69 @@ async function snipeCycle() {
   }
 }
 
+// ------------------------------------------------------------------ multi-chain snipe (new DEX pairs)
+const _dexSnipeCursor = {};   // chainKey -> last scanned block
+const _dexFactory = {};       // chainKey -> DEX pair factory (cached)
+const DEX_SNIPE_MAX_TOKENS = Math.max(1, Number(process.env.DEX_SNIPE_MAX_TOKENS || 15));   // cap tokens/chain/cycle
+const PAIR_CREATED_ABI = ['event PairCreated(address indexed token0, address indexed token1, address pair, uint256)'];
+const ROUTER_FACTORY_ABI = ['function factory() view returns (address)'];
+
+async function dexFactoryOf(chainKey) {
+  if (_dexFactory[chainKey]) return _dexFactory[chainKey];
+  try {
+    const f = await new ethers.Contract(core.chainOf(chainKey).router, ROUTER_FACTORY_ABI, core.providerFor(chainKey)).factory();
+    if (f && f !== ethers.ZeroAddress) { _dexFactory[chainKey] = f; return f; }
+  } catch (_) {}
+  return null;
+}
+// Snipe brand-new DEX pairs on ETH/Base/BNB/Arbitrum for users who opted in per
+// chain. Honeypots are skipped; each armed user's ACTIVE wallet buys the amount.
+async function dexSnipeCycle() {
+  for (const ch of core.chains.enabledChains()) {
+    if (ch.curve) continue;   // Robinhood is handled by snipeCycle
+    const armed = core.allUsers().filter((u) => u.snipe && u.snipe.chains && u.snipe.chains[ch.key] && Number(u.snipe.ethAmount) > 0);
+    if (!armed.length) continue;
+    const prov = core.providerFor(ch.key);
+    let head; try { head = await prov.getBlockNumber(); } catch (_) { continue; }
+    const cursor = _dexSnipeCursor[ch.key];
+    if (!cursor || head < cursor) { _dexSnipeCursor[ch.key] = head; continue; }   // pin near head first pass (no backfill flood)
+    const factory = await dexFactoryOf(ch.key); if (!factory) { _dexSnipeCursor[ch.key] = head; continue; }
+    const from = Math.max(cursor + 1, head - SNIPE_MAX_SPAN);
+    if (from > head) { _dexSnipeCursor[ch.key] = head; continue; }
+    let evs = [];
+    try { const fc = new ethers.Contract(factory, PAIR_CREATED_ABI, prov); evs = await fc.queryFilter(fc.filters.PairCreated(), from, head); }
+    catch (_) { continue; }   // transient RPC error → keep cursor, retry the range next cycle
+    _dexSnipeCursor[ch.key] = head;
+    const weth = ch.weth.toLowerCase();
+    let processed = 0;
+    for (const e of evs) {
+      if (processed >= DEX_SNIPE_MAX_TOKENS) break;
+      const a = e.args || {};
+      const t0 = String(a.token0 || '').toLowerCase(), t1 = String(a.token1 || '').toLowerCase();
+      let token = null;
+      if (t0 === weth) token = a.token1; else if (t1 === weth) token = a.token0; else continue;   // only native-paired launches
+      if (!token) continue;
+      processed++;
+      if (goplus.supported(ch.key)) { const s = await goplus.tokenSecurity(ch.key, token).catch(() => null); if (s && (s.honeypot || s.cannotSellAll)) continue; }   // skip traps
+      await mapLimit(armed, SNIPE_CONCURRENCY, async (u) => {
+        const addr = core.activeAddress(u); if (!addr) return;
+        try {
+          const bal = await core.ethBalance(addr, ch.key);
+          const need = ethers.parseEther(String(u.snipe.ethAmount)) + ethers.parseEther(core.CFG.gasBufferEth);
+          if (bal < need) return;
+        } catch (_) { return; }
+        try {
+          const r = await core.buy(u.chatId, token, u.snipe.ethAmount, ch.key);
+          _notify(u.chatId, `🎯 <b>Sniped $${esc(r.sym)}</b> on ${ch.emoji} ${esc(ch.name)}\nBought ${fmt(r.gotTokens)} for ${r.spentEth} ${r.native}\n<code>${token}</code>\n${txLink(ch.key, r.hash)}`);
+        } catch (err) {
+          const now = Date.now(), key = u.chatId + ':' + ch.key;
+          if (now - (_snipeFailAt.get(key) || 0) > 300000) { _snipeFailAt.set(key, now); _notify(u.chatId, `⚠️ A snipe on ${esc(ch.name)} failed: ${esc(err.message || String(err))} (muted 5 min)`); }
+        }
+      });
+    }
+  }
+}
+
 // ------------------------------------------------------------------ orders
 // Orders live ON a wallet (wallet.orders) and are tagged with walletId so a
 // TP/SL/limit set on one wallet always executes on THAT wallet, even after the
@@ -83,6 +147,24 @@ const MAX_ORDERS_PER_USER = Math.max(1, Number(process.env.MAX_ORDERS_PER_USER |
 const ORDER_MAX_READS = Math.max(20, Number(process.env.ORDER_MAX_READS || 300));
 const ORDER_CONCURRENCY = Math.max(1, Number(process.env.ORDER_CONCURRENCY || 4));
 const ORDER_READ_TIMEOUT_MS = Math.max(1000, Number(process.env.ORDER_READ_TIMEOUT_MS || 3500));
+
+// Shared bounded price reader: de-dups concurrent reads (caches the in-flight
+// Promise), caps total distinct reads per cycle, and hard-times-out each read —
+// so a hostile/unpriceable token can neither stall a cycle nor drain the RPC.
+function priceReader() {
+  const cache = new Map(); let reads = 0;
+  return (chain, ca) => {
+    const k = chain + ':' + String(ca).toLowerCase();
+    if (cache.has(k)) return cache.get(k);
+    if (reads++ >= ORDER_MAX_READS) { const p = Promise.resolve(null); cache.set(k, p); return p; }
+    const p = Promise.race([
+      core.tokenSnapshot(ca, chain).catch(() => null),
+      new Promise((r) => setTimeout(() => r(null), ORDER_READ_TIMEOUT_MS)),
+    ]).then((snap) => (snap ? snap.priceEth : null));
+    cache.set(k, p);
+    return p;
+  };
+}
 
 function addOrder(chatId, order, walletId) {
   const u = core.getUser(chatId); if (!u) throw new Error('no wallet');
@@ -122,21 +204,7 @@ async function ordersCycle() {
     }
   }
   if (!items.length) return;
-  // Bounded, timeout-guarded, de-duplicated price reads — so a hostile/unpriceable
-  // token can neither stall the loop nor drain the RPC endpoint.
-  const priceCache = new Map();   // chain:ca -> Promise<priceEth|null> — cached BEFORE await so concurrent reads coalesce
-  let reads = 0;
-  const priceOf = (chain, ca) => {
-    const k = chain + ':' + ca.toLowerCase();
-    if (priceCache.has(k)) return priceCache.get(k);
-    if (reads++ >= ORDER_MAX_READS) { const p = Promise.resolve(null); priceCache.set(k, p); return p; }   // read budget spent → defer
-    const p = Promise.race([
-      core.tokenSnapshot(ca, chain).catch(() => null),
-      new Promise((r) => setTimeout(() => r(null), ORDER_READ_TIMEOUT_MS)),   // hard per-read ceiling
-    ]).then((snap) => (snap ? snap.priceEth : null));
-    priceCache.set(k, p);   // store the PROMISE immediately → N concurrent callers = ONE RPC + ONE budget slot
-    return p;
-  };
+  const priceOf = priceReader();   // bounded, de-duped, timeout-guarded reads
   // Process concurrently (bounded) so one slow trade/user can't starve the rest.
   await mapLimit(items, ORDER_CONCURRENCY, async ({ u, w, o }) => {
     if (!Array.isArray(w.orders) || !w.orders.some((x) => x.id === o.id)) return;   // already filled/cancelled
@@ -170,17 +238,167 @@ async function ordersCycle() {
   });
 }
 
+// ------------------------------------------------------------------ price alerts (notify-only)
+let _aid = 1;
+const MAX_ALERTS_PER_USER = Math.max(1, Number(process.env.MAX_ALERTS_PER_USER || 25));
+function addAlert(chatId, alert) {
+  const u = core.getUser(chatId); if (!u) throw new Error('no wallet');
+  u.alerts = u.alerts || [];
+  if (u.alerts.length >= MAX_ALERTS_PER_USER) throw new Error(`alert limit reached (${MAX_ALERTS_PER_USER}). Cancel some first.`);
+  alert.id = 'al' + (_aid++) + Date.now().toString(36);
+  alert.createdAt = Date.now();
+  if (!alert.chain) alert.chain = core.userChain(u);
+  u.alerts.push(alert);
+  core.saveStore();
+  return alert;
+}
+function cancelAlert(chatId, id) {
+  const u = core.getUser(chatId); if (!u || !Array.isArray(u.alerts)) return false;
+  const before = u.alerts.length;
+  u.alerts = u.alerts.filter((a) => a.id !== id);
+  if (u.alerts.length !== before) { core.saveStore(); return true; }
+  return false;
+}
+async function alertsCycle() {
+  const items = [];
+  for (const u of core.allUsers()) for (const a of (u.alerts || [])) items.push({ u, a });
+  if (!items.length) return;
+  const priceOf = priceReader();
+  await mapLimit(items, ORDER_CONCURRENCY, async ({ u, a }) => {
+    if (!Array.isArray(u.alerts) || !u.alerts.some((x) => x.id === a.id)) return;   // cancelled since
+    const chain = a.chain || SNIPE_CHAIN;
+    let px; try { px = await priceOf(chain, a.ca); } catch (_) { return; }
+    if (px == null || !(px > 0)) return;
+    const hit = (a.dir === 'above' && px >= a.targetPriceEth) || (a.dir === 'below' && px <= a.targetPriceEth);
+    if (!hit) return;
+    // ONE-SHOT: remove + persist BEFORE notifying, so a crash can't double-fire.
+    u.alerts = u.alerts.filter((x) => x.id !== a.id);
+    core.saveStoreNow();
+    const c = core.chainOf(chain) || { native: 'ETH' };
+    const kb = { inline_keyboard: [[{ text: '📈 Trade', callback_data: `tok:${chain}:1:${a.ca}` }]] };
+    _notify(u.chatId, `🔔 <b>Price alert</b> — $${esc(a.sym || '')} is now <b>${a.dir === 'above' ? 'above' : 'below'}</b> your target${a.targetUsd ? ' of $' + a.targetUsd : ''} on ${c.native === 'BNB' ? 'BNB Chain' : chain}.`, kb);
+  });
+}
+
+// ------------------------------------------------------------------ copy-trading (copy-BUY only)
+// Mirror a followed wallet's BUYS: watch ERC20 Transfer logs TO the target, and
+// only mirror when the token came FROM its own WETH pair (i.e. a real swap-buy,
+// not an airdrop/transfer). Honeypots skipped. Total spend per target is HARD-
+// capped at maxEth, so worst-case loss is bounded even if it mirrors a bad token.
+// Sells are the user's job (TP/SL/manual) — we never auto-sell someone else's exit.
+const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
+const GET_PAIR_ABI = ['function getPair(address,address) view returns (address)'];
+const COPY_MAX_MIRRORS_PER_CYCLE = Math.max(1, Number(process.env.COPY_MAX_MIRRORS || 5));
+const _copyPair = {};   // chain:token -> pair (cached)
+async function pairOf(chainKey, token) {
+  const k = chainKey + ':' + String(token).toLowerCase();
+  if (k in _copyPair) return _copyPair[k];
+  const factory = await dexFactoryOf(chainKey);
+  if (!factory) { _copyPair[k] = null; return null; }
+  try {
+    const p = await new ethers.Contract(factory, GET_PAIR_ABI, core.providerFor(chainKey)).getPair(token, core.chainOf(chainKey).weth);
+    _copyPair[k] = (p && p !== ethers.ZeroAddress) ? p.toLowerCase() : null;
+  } catch (_) { _copyPair[k] = null; }
+  return _copyPair[k];
+}
+async function copyCycle() {
+  const users = core.allUsers().filter((u) => u.copy && u.copy.on && Array.isArray(u.copy.targets) && u.copy.targets.length);
+  if (!users.length) return;
+  for (const u of users) {
+    for (const t of u.copy.targets) {
+      const ch = core.chainOf(t.chain); if (!ch) continue;
+      const prov = core.providerFor(t.chain);
+      let head; try { head = await prov.getBlockNumber(); } catch (_) { continue; }
+      if (!t.cursor || head < t.cursor) { t.cursor = head; core.saveStore(); continue; }   // pin near head first pass
+      const from = Math.max(t.cursor + 1, head - SNIPE_MAX_SPAN);
+      if (from > head) { t.cursor = head; continue; }
+      let logs = [];
+      try { logs = await prov.getLogs({ fromBlock: from, toBlock: head, topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(t.address.toLowerCase(), 32)] }); }
+      catch (_) { continue; }   // transient error → keep cursor, retry
+      t.cursor = head;
+      let mirrors = 0;
+      for (const log of logs) {
+        if (mirrors >= COPY_MAX_MIRRORS_PER_CYCLE) break;
+        const token = String(log.address || '').toLowerCase();
+        const fromAddr = (log.topics && log.topics[1]) ? ('0x' + log.topics[1].slice(26)).toLowerCase() : '';
+        if (!token || !fromAddr) continue;
+        if (t.bought && t.bought[token]) continue;                         // already mirrored this token
+        if (token === ch.weth.toLowerCase()) continue;                     // ignore WETH itself
+        if (Number(t.spentEth) + Number(t.buyEth) > Number(t.maxEth) + 1e-12) continue;   // budget cap
+        const pair = await pairOf(t.chain, token);
+        if (!pair || pair !== fromAddr) continue;                          // not a swap-buy → skip (airdrop/transfer)
+        if (goplus.supported(t.chain)) { const s = await goplus.tokenSecurity(t.chain, token).catch(() => null); if (s && (s.honeypot || s.cannotSellAll)) continue; }
+        // Commit budget + dedup BEFORE spending (crash-safe: no double-mirror, budget can't be exceeded on restart).
+        t.bought = t.bought || {}; t.bought[token] = true;
+        t.spentEth = Number(t.spentEth) + Number(t.buyEth);
+        core.saveStoreNow();
+        mirrors++;
+        try {
+          const r = await core.buy(u.chatId, token, t.buyEth, t.chain);
+          _notify(u.chatId, `👥 <b>Copy-buy</b> $${esc(r.sym)} on ${ch.emoji} ${esc(ch.name)}\nFollowed <code>${short(t.address)}</code> · ${r.spentEth} ${r.native}\n<code>${token}</code>\n${txLink(t.chain, r.hash)}`);
+        } catch (err) {
+          t.spentEth = Math.max(0, Number(t.spentEth) - Number(t.buyEth));   // buy didn't spend → give the budget back
+          core.saveStore();
+          const now = Date.now(), key = u.chatId + ':copy:' + token;
+          if (now - (_snipeFailAt.get(key) || 0) > 300000) { _snipeFailAt.set(key, now); _notify(u.chatId, `⚠️ Copy-buy of ${short(token)} failed: ${esc(err.message || String(err))} (muted 5 min)`); }
+        }
+      }
+    }
+    core.saveStore();
+  }
+}
+
+// ------------------------------------------------------------------ referral auto-payout (opt-in)
+const REF_PAYOUT_MIN = Math.max(0, Number(process.env.REF_PAYOUT_MIN_ETH || 0.005));   // min owed before paying (dust/gas guard)
+async function payoutCycle() {
+  if (!core.feePayoutEnabled()) return;
+  const minWei = ethers.parseEther(String(REF_PAYOUT_MIN));
+  for (const u of core.allUsers()) {
+    const owed = u.refOwed; if (!owed || typeof owed !== 'object') continue;
+    const dest = core.activeAddress(u); if (!dest) continue;
+    for (const ck of Object.keys(owed)) {
+      const ch = core.chainOf(ck); if (!ch) continue;
+      let wei; try { wei = BigInt(owed[ck] || '0'); } catch (_) { continue; }
+      if (wei < minWei) continue;
+      // Deduct BEFORE paying so a crash can never overpay; restore only on a CLEAR
+      // failure (payFromFeeWallet throws only pre-broadcast / on revert).
+      owed[ck] = '0';
+      core.saveStoreNow();
+      try {
+        const r = await core.payFromFeeWallet(ck, dest, wei);
+        _notify(u.chatId, `💸 <b>Referral payout</b> — ${Number(ethers.formatEther(wei)).toFixed(5)} ${ch.native} sent to your wallet${r.confirmed ? '' : ' (confirming)'}.\n${txLink(ck, r.hash)}`);
+      } catch (err) {
+        owed[ck] = wei.toString();   // nothing moved → restore the debt
+        core.saveStore();
+        console.error('payout', ck, err.message || err);
+      }
+    }
+  }
+}
+
 // ------------------------------------------------------------------ loop runner
 function start() {
   const snipeMs = Math.max(4000, Number(process.env.SNIPE_POLL_MS || 6000));
   const orderMs = Math.max(8000, Number(process.env.ORDER_POLL_MS || 15000));
+  const alertMs = Math.max(8000, Number(process.env.ALERT_POLL_MS || 20000));
+  const dexSnipeMs = Math.max(5000, Number(process.env.DEX_SNIPE_POLL_MS || 8000));
   (async function snipeLoop() { for (;;) { try { await snipeCycle(); } catch (e) { console.error('snipe', e.message); } await sleep(snipeMs); } })();
+  (async function dexSnipeLoop() { for (;;) { try { await dexSnipeCycle(); } catch (e) { console.error('dexsnipe', e.message); } await sleep(dexSnipeMs); } })();
   (async function orderLoop() { for (;;) { try { await ordersCycle(); } catch (e) { console.error('orders', e.message); } await sleep(orderMs); } })();
+  (async function alertLoop() { for (;;) { try { await alertsCycle(); } catch (e) { console.error('alerts', e.message); } await sleep(alertMs); } })();
+  const copyMs = Math.max(6000, Number(process.env.COPY_POLL_MS || 10000));
+  (async function copyLoop() { for (;;) { try { await copyCycle(); } catch (e) { console.error('copy', e.message); } await sleep(copyMs); } })();
+  if (core.feePayoutEnabled()) {
+    const payoutMs = Math.max(60000, Number(process.env.REF_PAYOUT_POLL_MS || 300000));   // 5 min default
+    console.log('referral auto-payout ENABLED (fee wallet key present)');
+    (async function payoutLoop() { for (;;) { try { await payoutCycle(); } catch (e) { console.error('payout', e.message); } await sleep(payoutMs); } })();
+  }
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const fmt = (n) => { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K'; return n.toFixed(n < 1 ? 4 : 2); };
 const txLink = (chain, h) => { const c = core.chainOf(chain); return (h && c) ? `<a href="${c.explorer}/tx/${h}">tx ↗</a>` : ''; };
 
-module.exports = { setNotifier, start, addOrder, cancelOrder };
+module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert };

@@ -49,6 +49,7 @@ const CFG = {
   feeBps:      Math.min(500, Math.max(0, Number(process.env.BOT_FEE_BPS || 100))),
   refShareBps: Math.min(10000, Math.max(0, Number(process.env.REF_SHARE_BPS || 3000))),
   feeWallet:   (process.env.FEE_WALLET || '').trim(),
+  feeWalletKey: (process.env.FEE_WALLET_KEY || '').trim(),   // OPTIONAL: enables referral auto-payout (hot key)
   walletSecret: (process.env.WALLET_SECRET || '').trim(),
   dataDir:   (process.env.DATA_DIR || path.join(__dirname, 'data')).trim(),
   admins:    (process.env.TRADEBOT_ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
@@ -175,7 +176,7 @@ function walletFromSecret(secret) {
 }
 function _newWallet(secret) {
   const w = secret ? walletFromSecret(secret) : ethers.Wallet.createRandom();
-  return { id: _walletId(), address: w.address, enc: encrypt(w.privateKey), createdAt: Date.now(), positions: {}, orders: [] };
+  return { id: _walletId(), address: w.address, enc: encrypt(w.privateKey), createdAt: Date.now(), positions: {}, orders: [], history: [] };
 }
 function walletList(u) { return (u && Array.isArray(u.wallets)) ? u.wallets : []; }
 function walletById(u, id) { return walletList(u).find((w) => w.id === id) || null; }
@@ -230,10 +231,16 @@ function ensureUser(chatId, referredBy) {
       if (!w.id) { w.id = _walletId(); ch = true; }
       if (!w.positions || typeof w.positions !== 'object') { w.positions = {}; ch = true; }
       if (!Array.isArray(w.orders)) { w.orders = []; ch = true; }
+      if (!Array.isArray(w.history)) { w.history = []; ch = true; }                        // per-wallet trade log
       for (const o of w.orders) if (o && !o.walletId) { o.walletId = w.id; ch = true; }   // every order knows its wallet
     }
     if (!u.activeWalletId || !walletById(u, u.activeWalletId)) { u.activeWalletId = u.wallets[0].id; ch = true; }
-    if (!u.snipe || typeof u.snipe !== 'object') { u.snipe = { on: false, ethAmount: '0.01' }; ch = true; }
+    if (!u.snipe || typeof u.snipe !== 'object') { u.snipe = { ethAmount: '0.01' }; ch = true; }
+    if (!u.snipe.chains || typeof u.snipe.chains !== 'object') { u.snipe.chains = { robinhood: !!u.snipe.on }; delete u.snipe.on; ch = true; }   // migrate on→chains.robinhood
+    if (typeof u.snipe.ethAmount !== 'string' || !(Number(u.snipe.ethAmount) > 0)) { u.snipe.ethAmount = '0.01'; ch = true; }
+    if (!Array.isArray(u.alerts)) { u.alerts = []; ch = true; }                            // price alerts (notify-only)
+    if (!u.copy || typeof u.copy !== 'object') { u.copy = { on: false, targets: [] }; ch = true; }   // copy-trading
+    if (!Array.isArray(u.copy.targets)) { u.copy.targets = []; ch = true; }
     if (!u.settings || typeof u.settings !== 'object') { u.settings = {}; ch = true; }
     { const s = u.settings;
       if (typeof s.slippage !== 'number') { s.slippage = 0; ch = true; }                                   // 0 → 5% default
@@ -251,8 +258,9 @@ function ensureUser(chatId, referredBy) {
     referredBy: (referredBy && DB.refByCode[referredBy] && DB.refByCode[referredBy] !== id) ? referredBy : null,
     createdAt: Date.now(),
     activeChain: DEFAULT_CHAIN,
-    wallets: [w], activeWalletId: w.id,   // each wallet: { id, address, enc, positions, orders }
-    snipe: { on: false, ethAmount: '0.01' },
+    wallets: [w], activeWalletId: w.id,   // each wallet: { id, address, enc, positions, orders, history }
+    snipe: { ethAmount: '0.01', chains: { robinhood: false } },
+    alerts: [], copy: { on: false, targets: [] },
     refEarnedEth: 0,
     settings: { slippage: 0, buyPresets: DEFAULT_BUY_PRESETS.slice(), autoBuy: false, autoBuyAmount: '0.01' },
   };
@@ -324,6 +332,54 @@ function setChain(chatId, key) {
   if (!isEnabled(key)) throw new Error('chain not enabled');
   u.activeChain = key; saveStore();
   return chainOf(key);
+}
+// Per-chain snipe toggle (Robinhood = new Robinfun launches; other chains = new DEX pairs).
+function setSnipeChain(chatId, key, on) {
+  const u = ensureUser(chatId);
+  if (!isEnabled(key)) throw new Error('chain not enabled');
+  u.snipe.chains = u.snipe.chains || {};
+  u.snipe.chains[key] = !!on;
+  saveStore();
+  return u.snipe.chains;
+}
+function setSnipeAmount(chatId, amt) {
+  const u = ensureUser(chatId);
+  const a = Number(amt); if (!(a > 0)) throw new Error('amount must be > 0');
+  u.snipe.ethAmount = String(a); saveStore();
+  return u.snipe.ethAmount;
+}
+
+// ---------------------------------------------------------------- copy-trading
+const MAX_COPY_TARGETS = Math.max(1, Number(process.env.MAX_COPY_TARGETS || 5));
+function addCopyTarget(chatId, address, chain, buyEth, maxEth) {
+  const u = ensureUser(chatId);
+  address = String(address || '').trim();
+  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error('invalid wallet address');
+  if (!isEnabled(chain)) throw new Error('chain not enabled');
+  u.copy = u.copy || { on: false, targets: [] };
+  u.copy.targets = u.copy.targets || [];
+  if (u.copy.targets.length >= MAX_COPY_TARGETS) throw new Error(`copy limit (${MAX_COPY_TARGETS}) reached — remove one first`);
+  if (u.copy.targets.some((t) => t.address.toLowerCase() === address.toLowerCase() && t.chain === chain)) throw new Error('already following that wallet on this chain');
+  const be = Number(buyEth), me = Number(maxEth);
+  if (!(be > 0)) throw new Error('per-buy amount must be > 0');
+  if (!(me >= be)) throw new Error('total budget must be ≥ the per-buy amount');
+  const t = { id: 'cp' + crypto.randomBytes(4).toString('hex'), address, chain, buyEth: String(be), maxEth: String(me), spentEth: 0, bought: {}, cursor: 0, createdAt: Date.now() };
+  u.copy.targets.push(t);
+  saveStore();
+  return t;
+}
+function removeCopyTarget(chatId, id) {
+  const u = getUser(chatId); if (!u || !u.copy || !Array.isArray(u.copy.targets)) return false;
+  const before = u.copy.targets.length;
+  u.copy.targets = u.copy.targets.filter((t) => t.id !== id);
+  if (u.copy.targets.length !== before) { saveStore(); return true; }
+  return false;
+}
+function setCopyOn(chatId, on) {
+  const u = ensureUser(chatId);
+  u.copy = u.copy || { on: false, targets: [] };
+  u.copy.on = !!on; saveStore();
+  return u.copy.on;
 }
 
 // ---------------------------------------------------------------- settings
@@ -473,6 +529,13 @@ function _creditReferral(user, feeWei, chainKey) {
   saveStore();
 }
 function posKey(chainKey, ca) { return chainKey + ':' + ca.toLowerCase(); }
+// Append a trade to a wallet's history (newest last), bounded so the store can't grow forever.
+function _pushHistory(wal, entry) {
+  if (!Array.isArray(wal.history)) wal.history = [];
+  entry.ts = Date.now();
+  wal.history.push(entry);
+  if (wal.history.length > 50) wal.history = wal.history.slice(-50);
+}
 
 // ---------------------------------------------------------------- trade
 // Buy `ethAmount` (human native) of `ca` on the user's active chain (or chainKey).
@@ -537,7 +600,9 @@ async function buy(chatId, ca, ethAmount, chainKey, walletId) {
     p.ethIn += Number(ethers.formatEther(spend));
     p.tokens = after.toString();
     delete p.closed;
-    wal.positions[key] = p; saveStore();
+    wal.positions[key] = p;
+    _pushHistory(wal, { side: 'buy', chain: chainKey, ca, sym: meta.sym, ethAmount: Number(ethers.formatEther(spend)), tokens: Number(ethers.formatUnits(got, meta.decimals)), hash });
+    saveStore();
 
     return { chain: chainKey, native: chain.native, venue, hash, feeHash, spentEth: Number(ethers.formatEther(spend)), feeEth: Number(ethers.formatEther(fee)), gotTokens: Number(ethers.formatUnits(got, meta.decimals)), sym: meta.sym };
   });
@@ -602,8 +667,9 @@ async function sell(chatId, ca, pct, chainKey, walletId) {
       pos.tokens = tokAfter.toString();
       pos.realizedEth = (pos.ethOut - pos.ethIn);
       if (pos.tokens === '0') pos.closed = true;
-      saveStore();
     }
+    _pushHistory(wal, { side: 'sell', chain: chainKey, ca, sym: (pos && pos.sym) || '', ethAmount: Number(ethers.formatEther(proceeds)), pct: p, hash });
+    saveStore();
     return { chain: chainKey, native: chain.native, venue, hash, feeHash, soldPct: p, proceedsEth: Number(ethers.formatEther(proceeds)), feeEth: Number(ethers.formatEther(fee)) };
   });
 }
@@ -634,6 +700,40 @@ async function withdraw(chatId, to, amount, chainKey, walletId) {
   });
 }
 
+// ---------------------------------------------------------------- referral auto-payout (opt-in)
+// Enabled only if FEE_WALLET_KEY is set AND it derives FEE_WALLET (so a wrong key
+// can never move funds). This is a HOT key — off unless the operator opts in.
+function feePayoutEnabled() {
+  if (!CFG.feeWalletKey) return false;
+  try { return !!CFG.feeWallet && new ethers.Wallet(CFG.feeWalletKey).address.toLowerCase() === CFG.feeWallet.toLowerCase(); }
+  catch (_) { return false; }
+}
+// Pay `wei` native from the fee wallet to `to`. Nonce-serialized. Throws ONLY on a
+// clear pre-broadcast failure or an on-chain revert (safe to restore the debt);
+// once broadcast, a timeout/unknown returns { confirmed:false } so the caller never
+// double-pays.
+async function payFromFeeWallet(chainKey, to, wei) {
+  if (!feePayoutEnabled()) throw new Error('fee payout disabled');
+  if (!/^0x[0-9a-fA-F]{40}$/.test(String(to))) throw new Error('bad destination');
+  wei = BigInt(wei);
+  if (wei <= 0n) throw new Error('nothing to pay');
+  const signer = new ethers.Wallet(CFG.feeWalletKey, providerFor(chainKey));
+  return withWalletLock(signer.address, async () => {
+    const bal = await ethBalance(signer.address, chainKey);
+    const gas = await gasOverrides(chainKey);
+    let gp = gas.gasPrice;
+    if (!gp) { try { const fd = await providerFor(chainKey).getFeeData(); gp = fd.gasPrice || fd.maxFeePerGas; } catch (_) {} }
+    if (!gp || gp <= 0n) gp = ethers.parseUnits('0.1', 'gwei');
+    const gasCost = gp * 21000n * 2n;
+    if (wei + gasCost > bal) throw new Error('fee wallet balance too low for payout + gas');
+    const tx = await signer.sendTransaction({ to, value: wei, gasPrice: gp });   // pre-broadcast errors throw here → safe to restore
+    let rc = null;
+    try { rc = await waitBounded(tx); } catch (_) { rc = null; }   // once broadcast, NEVER treat as failure (no re-pay)
+    if (rc && rc.status === 0) { const e = new Error('payout reverted'); e.reverted = true; throw e; }
+    return { hash: tx.hash, confirmed: !!rc };
+  });
+}
+
 // Portfolio for the ACTIVE (or specified) wallet on its active chain: value + PnL.
 async function portfolio(chatId, walletId) {
   const u = getUser(chatId); if (!u) return { rows: [], totalValueEth: 0, address: null, chain: null };
@@ -659,11 +759,31 @@ async function portfolio(chatId, walletId) {
   return { rows, totalValueEth, address: wal.address, chain, native: chain.native };
 }
 
+// Trade history (newest first) + realized PnL for a wallet.
+function getHistory(chatId, walletId) {
+  const u = getUser(chatId); if (!u) return [];
+  const wal = walletId ? walletById(u, walletId) : activeWallet(u);
+  return (wal && Array.isArray(wal.history)) ? wal.history.slice().reverse() : [];
+}
+function realizedEth(wal, chainKey) {
+  let r = 0;
+  for (const k of Object.keys((wal && wal.positions) || {})) {
+    const p = wal.positions[k];
+    if (!p || typeof p.realizedEth !== 'number') continue;
+    if (chainKey && p.chain !== chainKey) continue;   // don't sum ETH + BNB realized together
+    r += p.realizedEth;
+  }
+  return r;
+}
+
 module.exports = {
   CFG, chains, chainOf, userChain, providerFor, FACTORY_ABI, CURVE_ABI, ERC20_ABI,
+  getHistory, realizedEth,
   loadStore, saveStore, saveStoreNow, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, setChain,
   walletList, walletById, activeWallet, activeAddress, addWallet, switchWallet, removeWallet, listWallets, WALLET_CAP,
-  buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS,
+  buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
+  addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
+  feePayoutEnabled, payFromFeeWallet,
   resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, ethUsd, gasOverrides,
   buy, sell, withdraw, portfolio, DB,
 };

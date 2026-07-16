@@ -23,12 +23,19 @@ DEX (any token, by contract address). Solana / non-EVM is a separate future modu
 - **Buy / Sell by CA** — paste a contract address → live card (price, mcap,
   graduation %, your bag & PnL) with one-tap buy/sell. Routes to the bonding curve
   while listed, and to Uniswap V2 once graduated — same path as the website.
-- **Portfolio** — open positions with live value and unrealized/realized PnL.
-- **Snipe** — auto-buy every new launch the moment its `TokenCreated` event fires.
-- **Limit / TP / SL** — set a USD target; the bot polls the curve price and
-  executes the buy/sell when crossed.
+- **Rich token scan** — paste a CA for a Maestro-style card: price, market cap,
+  liquidity/raised, 24h volume, holders, LP status, buy/sell tax, honeypot, age
+  and socials (on-chain + Robinfun API + GoPlus), with a HIGH-RISK banner.
+- **Portfolio + History** — open positions with live value and unrealized PnL, a
+  per-wallet trade log, and realized PnL.
+- **Snipe (multi-chain)** — auto-buy every new Robinfun launch, and (opt-in per
+  chain) every new Uniswap/Pancake pair on ETH/Base/BNB/Arbitrum; honeypots skipped.
+- **Limit / TP / SL + Price alerts** — set a USD target; the bot polls the price
+  and executes (orders) or just pings you (alerts, notify-only) when crossed.
+- **Copy-trading (beta)** — follow a wallet and mirror its BUYS with your active
+  wallet; honeypots skipped and total spend per target is hard-capped (bounded loss).
 - **Referrals** — share a `?start=<code>` link; referrers earn `REF_SHARE_BPS` of
-  the bot fee from everyone they invite.
+  the bot fee. Auto-paid from `FEE_WALLET` when `FEE_WALLET_KEY` is set (else manual).
 
 ## Revenue
 

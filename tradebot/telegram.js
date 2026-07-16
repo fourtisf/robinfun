@@ -51,9 +51,10 @@ function activeChain(chatId) { return core.chainOf(core.userChain(core.ensureUse
 // ------------------------------------------------------------ screens
 function mainMenu() {
   return rows(
-    [btn('💼 Wallet', 'wal'), btn('📊 Portfolio', 'pos')],
+    [btn('💼 Wallet', 'wal'), btn('📊 Portfolio', 'pos'), btn('🧾 History', 'hist')],
     [btn('🌐 Chain', 'chain'), btn('🎯 Snipe', 'snipe'), btn('📋 Orders', 'orders')],
-    [btn('🎁 Referrals', 'ref'), btn('⚙️ Settings', 'set'), btn('❔ Help', 'help')],
+    [btn('🔔 Alerts', 'alerts'), btn('👥 Copy', 'copy'), btn('🎁 Referrals', 'ref')],
+    [btn('⚙️ Settings', 'set'), btn('❔ Help', 'help')],
   );
 }
 async function walletScreen(chatId) {
@@ -162,7 +163,7 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   // card trades on the chain+wallet it was rendered for — never on whatever chain
   // or wallet merely happens to be active now.
   const bp = core.buyPresets(u);   // user's quick-buy amounts (Settings)
-  const lastRow = [btn('🔄 Refresh', `tok:${chainKey}:${wi}:${ca}`), btn('« Menu', 'menu')];
+  const lastRow = [btn('🔔 Alert', `alt:${chainKey}:${wi}:${ca}`), btn('🔄 Refresh', `tok:${chainKey}:${wi}:${ca}`), btn('« Menu', 'menu')];
   if (goplus.supported(chainKey)) lastRow.unshift(btn('🛡 Safety', `sec:${chainKey}:${ca}`));   // GoPlus only on supported chains
   const kb = rows(
     [btn(`Buy ${bp[0]}`, `b:${chainKey}:${wi}:${ca}:${bp[0]}`), btn(`Buy ${bp[1]}`, `b:${chainKey}:${wi}:${ca}:${bp[1]}`), btn(`Buy ${bp[2]}`, `b:${chainKey}:${wi}:${ca}:${bp[2]}`), btn('Buy X', `bx:${chainKey}:${wi}:${ca}`)],
@@ -184,12 +185,34 @@ async function portfolioScreen(chatId) {
   const text = `📊 <b>Portfolio</b> · ${pf.chain.emoji} ${esc(pf.chain.name)} · value ${usd(pf.totalValueEth, nat)}\n\n${body}\nUnrealized PnL: <b>${totalUnreal >= 0 ? '+' : ''}${totalUnreal.toFixed(4)} ${nat}</b>`;
   return { text, kb: rows([btn('🔄 Refresh', 'pos'), btn('🌐 Chain', 'chain'), btn('« Menu', 'menu')]) };
 }
+function historyScreen(chatId) {
+  const u = core.ensureUser(chatId);
+  const wal = core.activeWallet(u);
+  const wi = core.walletList(u).findIndex((x) => x.id === wal.id) + 1;
+  const ch = core.chainOf(core.userChain(u));
+  const h = core.getHistory(chatId);               // active wallet, newest first
+  const realized = core.realizedEth(wal, ch.key);  // active chain only
+  const rp = (realized >= 0 ? '+' : '') + realized.toFixed(4);
+  if (!h.length) return { text: `🧾 <b>History</b> · Wallet ${wi}\n\nNo trades yet. Paste a token contract and buy to start.`, kb: rows([btn('🔄 Refresh', 'hist'), btn('« Menu', 'menu')]) };
+  let body = '';
+  for (const t of h.slice(0, 20)) {
+    const c = core.chainOf(t.chain || 'robinhood') || { native: 'ETH' };
+    const when = t.ts ? fmtAge(t.ts) : '?';
+    body += t.side === 'buy'
+      ? `🟢 <b>BUY</b> $${esc(t.sym || '')} · ${Number(t.ethAmount || 0).toFixed(4)} ${c.native} · ${when} ago\n`
+      : `🔴 <b>SELL</b> $${esc(t.sym || '')} ${t.pct || 100}% · ${Number(t.ethAmount || 0).toFixed(4)} ${c.native} · ${when} ago\n`;
+  }
+  return { text: `🧾 <b>History</b> · Wallet ${wi} · ${ch.emoji} ${esc(ch.name)}\nRealized PnL (this chain): <b>${rp} ${ch.native}</b>\n\n${body}`, kb: rows([btn('🔄 Refresh', 'hist'), btn('📊 Portfolio', 'pos'), btn('« Menu', 'menu')]) };
+}
 function snipeScreen(chatId) {
   const u = core.ensureUser(chatId);
-  const on = u.snipe.on;
+  const chains = u.snipe.chains || {};
+  const kbRows = core.chains.enabledChains().map((c) => [btn(`${c.emoji} ${c.name}: ${chains[c.key] ? '🟢 ON' : '⚪ OFF'}`, `sntog:${c.key}`)]);
+  kbRows.push([btn('✏️ Set amount', 'snamt')]);
+  kbRows.push([btn('« Menu', 'menu')]);
   return {
-    text: `🎯 <b>Snipe new launches</b> (Robinhood Chain)\n\nAuto-buys <b>every new Robinfun token</b> the moment it launches, using your <b>active wallet</b>.\n\nStatus: <b>${on ? '🟢 ON' : '⚪ OFF'}</b>\nAmount per snipe: <b>${esc(u.snipe.ethAmount)} ETH</b>\n\n⚠️ Buys indiscriminately — keep the amount small.`,
-    kb: rows([btn(on ? '🔴 Turn OFF' : '🟢 Turn ON', on ? 'snoff' : 'snon')], [btn('✏️ Set amount', 'snamt')], [btn('« Menu', 'menu')]),
+    text: `🎯 <b>Snipe new launches</b>\n\n• <b>Robinhood Chain</b> — auto-buys every new Robinfun token\n• <b>Other chains</b> — auto-buys every new DEX pair (honeypots auto-skipped)\n\nAmount per snipe: <b>${esc(u.snipe.ethAmount)}</b> (native)\nBuys with your <b>active wallet</b> on each chain.\n\n⚠️ Snipes indiscriminately — keep the amount small. Non-Robinhood sniping buys brand-new pairs which are <b>mostly risky</b>; honeypots are skipped but always DYOR.\n\nToggle per chain:`,
+    kb: { inline_keyboard: kbRows },
   };
 }
 function ordersScreen(chatId) {
@@ -211,6 +234,36 @@ function ordersScreen(chatId) {
   kbRows.push([btn('« Menu', 'menu')]);
   return { text: `📋 <b>Active orders</b>\n\n${body}`, kb: { inline_keyboard: kbRows } };
 }
+function alertsScreen(chatId) {
+  const u = core.ensureUser(chatId);
+  const list = u.alerts || [];
+  if (!list.length) return { text: '🔔 <b>Price alerts</b>\n\nNo alerts. Open a token card and tap 🔔 Alert to get pinged when a token crosses a target price. (Notify-only — no trade.)', kb: rows([btn('« Menu', 'menu')]) };
+  let body = ''; const kbRows = [];
+  for (const a of list) {
+    const c = core.chainOf(a.chain || 'robinhood') || { emoji: '' };
+    body += `${c.emoji} $${esc(a.sym || '')} ${a.dir === 'above' ? '↑' : '↓'} $${esc(String(a.targetUsd != null ? a.targetUsd : a.targetPriceEth))}\n`;
+    kbRows.push([btn(`✖ Cancel $${a.sym || ''} ${a.dir === 'above' ? '↑' : '↓'}`, `al:${a.id}`)]);
+  }
+  kbRows.push([btn('« Menu', 'menu')]);
+  return { text: `🔔 <b>Active alerts</b>\n\n${body}`, kb: { inline_keyboard: kbRows } };
+}
+function copyScreen(chatId) {
+  const u = core.ensureUser(chatId);
+  const c = u.copy || { on: false, targets: [] };
+  const list = c.targets || [];
+  let body = `👥 <b>Copy-trading</b> (beta) — mirror a wallet's BUYS\n\nMaster: <b>${c.on ? '🟢 ON' : '⚪ OFF'}</b>\n\n`;
+  const kbRows = [[btn(c.on ? '🔴 Turn OFF' : '🟢 Turn ON', 'cptog')]];
+  if (!list.length) body += 'No wallets followed yet.\n';
+  else for (const t of list) {
+    const ch = core.chainOf(t.chain) || { emoji: '' };
+    body += `${ch.emoji} <code>${short(t.address)}</code> · ${esc(t.buyEth)}/buy · spent ${Number(t.spentEth).toFixed(3)}/${esc(t.maxEth)}\n`;
+    kbRows.push([btn(`✖ Unfollow ${short(t.address)}`, `cprm:${t.id}`)]);
+  }
+  if (list.length < core.MAX_COPY_TARGETS) kbRows.push([btn('➕ Follow a wallet', 'cpadd')]);
+  kbRows.push([btn('« Menu', 'menu')]);
+  body += `\n<i>Copies only BUYS the followed wallet makes from a token's own pool, using your active wallet on that token's chain. Honeypots are skipped. Total spend per wallet is capped (budget) so worst-case loss is bounded. You manage your own sells (TP/SL). ⚠️ High risk — DYOR.</i>`;
+  return { text: body, kb: { inline_keyboard: kbRows } };
+}
 function referralScreen(chatId) {
   const u = core.ensureUser(chatId);
   const link = `https://t.me/${BOT_USERNAME}?start=${u.refCode}`;
@@ -219,7 +272,7 @@ function referralScreen(chatId) {
     ? Object.entries(owed).map(([ck, wei]) => { const c = core.chainOf(ck) || { native: 'ETH' }; return `${Number(ethers.formatEther(BigInt(wei || '0'))).toFixed(5)} ${c.native}`; }).join(' · ')
     : '0';
   return {
-    text: `🎁 <b>Referrals</b>\n\nShare your link — you earn <b>${(core.CFG.refShareBps / 100).toFixed(0)}%</b> of the bot fee on every trade your referrals make.\n\n<code>${link}</code>\n\nEarned so far: <b>${earned}</b>`,
+    text: `🎁 <b>Referrals</b>\n\nShare your link — you earn <b>${(core.CFG.refShareBps / 100).toFixed(0)}%</b> of the bot fee on every trade your referrals make.\n\n<code>${link}</code>\n\nEarned so far: <b>${earned}</b>\n<i>${core.feePayoutEnabled() ? 'Auto-paid to your active wallet once it clears the minimum.' : 'Settled manually by the team.'}</i>`,
     kb: rows([btn('« Menu', 'menu')]),
   };
 }
@@ -329,8 +382,11 @@ async function onMessage(m) {
   if (text === '/wallet') { const w = await walletScreen(chatId); return send(chatId, w.text, w.kb); }
   if (text === '/chain') { const s = chainScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/portfolio' || text === '/positions') { const s = await portfolioScreen(chatId); return send(chatId, s.text, s.kb); }
+  if (text === '/history') { const s = historyScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/snipe') { const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/orders') { const s = ordersScreen(chatId); return send(chatId, s.text, s.kb); }
+  if (text === '/alerts') { const s = alertsScreen(chatId); return send(chatId, s.text, s.kb); }
+  if (text === '/copy') { const s = copyScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/referral' || text === '/refer') { const s = referralScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/settings') { const s = settingsScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/withdraw') { setPending(chatId, { action: 'wd_addr' }); return send(chatId, '📤 Send the <b>destination address</b> to withdraw to:'); }
@@ -371,7 +427,7 @@ async function onCallback(q) {
   const mid = q.message.message_id;
   const data = q.data || '';
   const [k, ca, arg] = data.split(':');
-  if (k !== 'oc') await answer(q.id);
+  if (k !== 'oc' && k !== 'al') await answer(q.id);   // 'oc'/'al' answer with text in their handlers
 
   if (data === 'wdcancel') { pending.delete(chatId); return send(chatId, 'Withdrawal cancelled.', mainMenu()); }
   if (data === 'wdok') {
@@ -386,6 +442,7 @@ async function onCallback(q) {
   if (data === 'chain') { const s = chainScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (k === 'setch') { try { core.setChain(chatId, ca); } catch (_) {} const w = await walletScreen(chatId); return edit(chatId, mid, w.text, w.kb); }
   if (data === 'pos') { const s = await portfolioScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'hist') { const s = historyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'snipe') { const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'orders') { const s = ordersScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'ref') { const s = referralScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
@@ -412,12 +469,11 @@ async function onCallback(q) {
   if (data === 'expy') { try { const pk = core.exportKey(chatId); await send(chatId, `🔑 <b>Private key</b> (delete this message after saving):\n\n<code>${pk}</code>`); } catch (e) { await send(chatId, '❌ ' + esc(e.message)); } return; }
   if (data === 'imp') { setPending(chatId, { action: 'import_key' }); return send(chatId, `📩 <b>Import a wallet</b>\n\nPaste your <b>private key</b> (64 hex) or <b>seed phrase</b> (12–24 words). It's <b>added</b> to your wallets (up to ${core.WALLET_CAP}) and made active.\n\n⚠️ I'll <b>delete your message immediately</b> after importing. Never share the secret with anyone else.`); }
   if (data === 'neww') { try { const nw = core.addWallet(chatId); await send(chatId, `✅ <b>New wallet created</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now your <b>active</b> wallet. Deposit to start trading.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); } catch (e) { await send(chatId, '❌ ' + esc(e.message || String(e))); } return; }
-  if (data === 'snon') { const u = core.ensureUser(chatId); u.snipe.on = true; core.saveStore(); const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
-  if (data === 'snoff') { const u = core.ensureUser(chatId); u.snipe.on = false; core.saveStore(); const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
-  if (data === 'snamt') { setPending(chatId, { action: 'snipe_amt' }); return send(chatId, 'Send the ETH amount to buy per snipe (e.g. <code>0.01</code>):'); }
+  if (k === 'sntog') { const u = core.ensureUser(chatId); try { core.setSnipeChain(chatId, ca, !(u.snipe.chains && u.snipe.chains[ca])); } catch (_) {} const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'snamt') { setPending(chatId, { action: 'snipe_amt' }); return send(chatId, 'Send the amount to buy per snipe in native token (e.g. <code>0.01</code>):'); }
 
   // Trade actions encode the CARD's chain: k:chain:ca[:arg]
-  if (k === 'tok' || k === 'b' || k === 's' || k === 'bx' || k === 'sx' || k === 'tp' || k === 'sl' || k === 'lb') {
+  if (k === 'tok' || k === 'b' || k === 's' || k === 'bx' || k === 'sx' || k === 'tp' || k === 'sl' || k === 'lb' || k === 'alt') {
     const parts = data.split(':'); const ch = parts[1], wi = parts[2], tca = parts[3], a = parts[4];
     const wobj = core.walletList(core.ensureUser(chatId))[Number(wi) - 1];
     const wid = wobj ? wobj.id : undefined;   // stale/removed index → fall back to the active wallet
@@ -429,7 +485,14 @@ async function onCallback(q) {
     if (k === 'tp') { setPending(chatId, { action: 'tp_price', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Take-profit: send the target <b>USD price</b> to sell 100% at:`); }
     if (k === 'sl') { setPending(chatId, { action: 'sl_price', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Stop-loss: send the target <b>USD price</b> to sell 100% at:`); }
     if (k === 'lb') { setPending(chatId, { action: 'lb_price', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Limit buy: send <b>&lt;usd_price&gt; &lt;amount&gt;</b> (e.g. <code>0.002 0.05</code>) — buy when price drops to that:`); }
+    if (k === 'alt') { setPending(chatId, { action: 'alert_price', ca: tca, chain: ch }); return send(chatId, `🔔 Alert: send the target <b>USD price</b> — I'll ping you when <code>${short(tca)}</code> crosses it:`); }
   }
+  if (data === 'alerts') { const s = alertsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (k === 'al') { const okc = watchers.cancelAlert(chatId, ca); await answer(q.id, okc ? 'Cancelled' : 'Not found'); const s = alertsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'copy') { const s = copyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'cptog') { const u = core.ensureUser(chatId); try { core.setCopyOn(chatId, !(u.copy && u.copy.on)); } catch (_) {} const s = copyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'cpadd') { setPending(chatId, { action: 'copy_add' }); const ch = activeChain(chatId); return send(chatId, `👥 <b>Follow a wallet</b> on ${ch.emoji} ${esc(ch.name)} (your active chain)\n\nSend: <code>&lt;wallet_address&gt; &lt;perBuy&gt; &lt;totalBudget&gt;</code>\ne.g. <code>0xAbc… 0.02 0.2</code>\n\nEach buy the wallet makes is mirrored with <b>perBuy</b> from your active wallet, until <b>totalBudget</b> is spent.`); }
+  if (k === 'cprm') { core.removeCopyTarget(chatId, ca); const s = copyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (k === 'oc') { const ok = watchers.cancelOrder(chatId, ca); await answer(q.id, ok ? 'Cancelled' : 'Not found'); const s = ordersScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
 }
 
@@ -471,6 +534,23 @@ async function resolvePending(chatId, p, text, m) {
       watchers.addOrder(chatId, { type: 'limitbuy', ca: p.ca, sym: meta.sym, chain: ch.key, targetPriceEth: usdPrice / nativeUsd(ch.native), ethAmount: String(amount) }, p.walletId);
       return send(chatId, `✅ Limit buy set: ${amount} ${ch.native} of $${esc(meta.sym)} when price ≤ $${usdPrice}.`, rows([btn('📋 Orders', 'orders')]));
     }
+    if (p.action === 'copy_add') {
+      const parts = t.split(/\s+/).filter(Boolean);
+      if (parts.length < 3) return send(chatId, 'Format: <code>&lt;wallet&gt; &lt;perBuy&gt; &lt;totalBudget&gt;</code>, e.g. <code>0xAbc… 0.02 0.2</code>');
+      const ch = activeChain(chatId);
+      const tg = core.addCopyTarget(chatId, parts[0], ch.key, parts[1], parts[2]);
+      return send(chatId, `✅ Following <code>${short(tg.address)}</code> on ${ch.emoji} ${esc(ch.name)} — ${esc(tg.buyEth)}/buy, budget ${esc(tg.maxEth)}. Turn the master switch ON to start copying.`, rows([btn('👥 Copy', 'copy')]));
+    }
+    if (p.action === 'alert_price') {
+      const usdPrice = Number(t); if (!(usdPrice > 0)) return send(chatId, 'Send a positive USD price.');
+      const ch = (p.chain && core.chainOf(p.chain)) || activeChain(chatId); if (!(nativeUsd(ch.native) > 0)) return send(chatId, 'Price feed unavailable — try again shortly.');
+      const meta = await core.tokenMeta(p.ca, ch.key);
+      const snap = await core.tokenSnapshot(p.ca, ch.key).catch(() => null);   // infer direction from current price
+      const curUsd = snap ? snap.priceEth * nativeUsd(ch.native) : null;
+      const dir = (curUsd != null && usdPrice < curUsd) ? 'below' : 'above';
+      watchers.addAlert(chatId, { ca: p.ca, sym: meta.sym, chain: ch.key, targetPriceEth: usdPrice / nativeUsd(ch.native), targetUsd: usdPrice, dir });
+      return send(chatId, `✅ Alert set: I'll ping you when $${esc(meta.sym)} goes <b>${dir}</b> $${usdPrice}.`, rows([btn('🔔 Alerts', 'alerts')]));
+    }
   } catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e))); }
 }
 
@@ -491,9 +571,10 @@ function helpText() {
     `• Paste a <b>contract address</b> → live card with one-tap buy/sell\n` +
     `• <b>/chain</b> — switch chain (Robinhood, Ethereum, Base, BNB, Arbitrum)\n` +
     `• <b>/wallet</b> — up to ${core.WALLET_CAP} wallets: balance, deposit/withdraw, import/export, switch\n` +
-    `• <b>/portfolio</b> — positions & PnL (active chain)\n` +
-    `• <b>/snipe</b> — auto-buy every new Robinfun launch\n` +
-    `• <b>/orders</b> — take-profit / stop-loss / limit buys\n` +
+    `• <b>/portfolio</b> — positions & PnL (active chain) · <b>/history</b> — trade log\n` +
+    `• <b>/snipe</b> — auto-buy new launches (Robinhood + new DEX pairs)\n` +
+    `• <b>/orders</b> — take-profit / stop-loss / limit buys · <b>/alerts</b> — price pings\n` +
+    `• <b>/copy</b> — mirror a wallet's buys (beta)\n` +
     `• <b>/referral</b> — earn ${(core.CFG.refShareBps / 100).toFixed(0)}% of the bot fee from invites\n` +
     `• <b>/settings</b> — slippage, quick-buy amounts, auto-buy on paste\n` +
     `• 🛡 <b>Safety</b> — on a token card (Ethereum/Base/BNB/Arbitrum): honeypot, tax, mint, LP checks\n` +
@@ -517,7 +598,7 @@ async function start() {
   await getMe();
   await refreshPrices();
   setInterval(refreshPrices, 120000);
-  watchers.setNotifier((chatId, text) => send(chatId, text).catch(() => {}));
+  watchers.setNotifier((chatId, text, kb) => send(chatId, text, kb).catch(() => {}));
   watchers.start();
   console.log(`Robinfun Trade Bot up as @${BOT_USERNAME || '?'} — chains: ${core.chains.ENABLED.join(', ')}`);
 
