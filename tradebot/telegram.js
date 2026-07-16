@@ -65,16 +65,27 @@ async function walletScreen(chatId) {
   const idx = list.findIndex((x) => x.id === w.id) + 1;
   const bal = await core.ethBalance(w.address, ch.key);
   const ethStr = fmtEth(bal);
+  const empty = bal <= 0n;
+  // Brand-new / unfunded wallet: don't just show "0.00000" — walk them through it.
+  const guide = empty
+    ? `\n<b>Start in 3 steps 👇</b>\n` +
+      `1️⃣ <b>Send ${ch.native}</b> to the address above (from any exchange/wallet, on ${esc(ch.name)}).\n` +
+      `2️⃣ Tap <b>🔄 Refresh</b> to see it land.\n` +
+      `3️⃣ <b>Paste any token contract</b> here → get a live card → one-tap buy.\n\n` +
+      `<i>Tip: same address works on every chain — switch with 🌐. Keep balances small; this is beta.</i>`
+    : `Same address works on every chain. Deposit ${ch.native} here on <b>${esc(ch.name)}</b>, then paste a token contract to trade.`;
   return {
     text:
       `💼 <b>Your Wallet</b>  ·  ${ch.emoji} ${esc(ch.name)}\n\n` +
       `Active: <b>Wallet ${idx}</b> of ${list.length}\n` +
       `<code>${w.address}</code>\n\n` +
-      `Balance: <b>${ethStr} ${ch.native}</b> (${usd(ethStr, ch.native)})\n\n` +
-      `Same address works on every chain. Deposit ${ch.native} here on <b>${esc(ch.name)}</b>, then paste a token contract to trade.`,
+      `Balance: <b>${ethStr} ${ch.native}</b> (${usd(ethStr, ch.native)})${empty ? '  —  empty' : ''}\n\n` +
+      guide,
     kb: rows(
-      [btn('🔄 Refresh', 'wal'), btn('🌐 Switch chain', 'chain')],
-      [btn('📥 Deposit', 'dep'), btn('📤 Withdraw', 'wd')],
+      empty
+        ? [btn(`📥 How to deposit`, 'dep'), btn('🔄 Refresh', 'wal')]
+        : [btn('🔄 Refresh', 'wal'), btn('📥 Deposit', 'dep')],
+      empty ? [btn('🌐 Switch chain', 'chain'), btn('📤 Withdraw', 'wd')] : [btn('📤 Withdraw', 'wd'), btn('🌐 Switch chain', 'chain')],
       [btn('🔑 Export key', 'exp'), btn(`👛 Wallets (${list.length}/${core.WALLET_CAP})`, 'wallets')],
       [btn('« Menu', 'menu')],
     ),
@@ -280,18 +291,20 @@ function referralScreen(chatId) {
 function settingsScreen(chatId) {
   const u = core.ensureUser(chatId);
   const s = u.settings;
+  const ch = core.chainOf(core.userChain(u));
   const slip = s.slippage > 0 ? s.slippage + '%' : 'default (5%)';
   const bp = core.buyPresets(u).join(' · ');
   return {
     text: `⚙️ <b>Settings</b>\n\n` +
+      `Active chain: <b>${ch.emoji} ${esc(ch.name)}</b>\n` +
       `Slippage: <b>${esc(String(slip))}</b>\n` +
-      `Quick-buy buttons: <b>${esc(bp)}</b>\n` +
-      `Auto-buy on paste: <b>${s.autoBuy ? '🟢 ON · ' + esc(s.autoBuyAmount) : '⚪ OFF'}</b>\n\n` +
-      `<i>Auto-buy: paste a contract address and it buys instantly with your active wallet on the active chain — no card, no extra tap.</i>`,
+      `Quick-buy buttons: <b>${esc(bp)} ${ch.native}</b>\n` +
+      `Auto-buy on paste: <b>${s.autoBuy ? '🟢 ON · ' + esc(s.autoBuyAmount) + ' ' + ch.native : '⚪ OFF'}</b>\n\n` +
+      `<i>Slippage: max price move you'll accept. Quick-buy: the amounts shown on every token card. Auto-buy: paste a contract and it buys instantly (no card) — fast, but skips the safety card, so use it only for tokens you already trust.</i>`,
     kb: rows(
-      [btn('📉 Slippage', 'setslip'), btn('⚡ Buy presets', 'setbp')],
+      [btn('🌐 Chain', 'chain'), btn('📉 Slippage', 'setslip'), btn('⚡ Buy presets', 'setbp')],
       [btn(s.autoBuy ? '🔴 Auto-buy OFF' : '🟢 Auto-buy ON', 'abtog'), btn('✏️ Auto-buy amount', 'abamt')],
-      [btn('« Menu', 'menu')],
+      [btn('❔ Help', 'help'), btn('« Menu', 'menu')],
     ),
   };
 }
@@ -376,7 +389,15 @@ async function onMessage(m) {
     const ref = text.split(/\s+/)[1] || null;
     const isNew = !core.getUser(chatId);
     core.ensureUser(chatId, ref);
-    await send(chatId, `👋 <b>Welcome to the Robinfun Trade Bot</b>\n\nTrade tokens across chains from Telegram — paste a contract address to start.` + (isNew ? `\n\nA fresh wallet was created for you 👇` : ''), mainMenu());
+    await send(chatId,
+      `👋 <b>Welcome to the Robinfun Trade Bot</b>\n\n` +
+      `Buy & sell tokens across chains — straight from Telegram, no browser or extension.\n\n` +
+      `<b>How it works</b>\n` +
+      `1️⃣ Fund your wallet (deposit ${core.chainOf(core.userChain(core.ensureUser(chatId))).native}).\n` +
+      `2️⃣ Paste any <b>token contract address</b> → live card (price, safety, your bag).\n` +
+      `3️⃣ One-tap <b>buy / sell</b>.\n\n` +
+      (isNew ? `A fresh custodial wallet was created for you 👇 fund it to begin.` : `Your wallet 👇`),
+      mainMenu());
     const w = await walletScreen(chatId); return send(chatId, w.text, w.kb);
   }
   if (text === '/wallet') { const w = await walletScreen(chatId); return send(chatId, w.text, w.kb); }
