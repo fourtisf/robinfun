@@ -24,9 +24,10 @@ function lpLockedPct(d) {
   if (!Array.isArray(d.lp_holders) || !d.lp_holders.length) return null;
   let locked = 0;
   for (const h of d.lp_holders) {
+    if (!h || typeof h !== 'object') continue;   // GoPlus can return sparse/null elements — never deref blindly
     const pct = Number(h.percent || 0);
     const burned = /^0x0{40}$|dead/i.test(String(h.address || ''));
-    if (yes(h.is_locked) || burned) locked += pct;
+    if (yes(h.is_locked) || burned) locked += (Number.isFinite(pct) ? pct : 0);
   }
   return Math.min(100, locked * 100);
 }

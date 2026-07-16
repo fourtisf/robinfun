@@ -160,7 +160,9 @@ function userChain(u) { return (u && u.activeChain && chainOf(u.activeChain) && 
 // live ON each wallet (they belong to a specific address), so switching the active
 // wallet never mixes one wallet's bags/orders with another's. Legacy single-wallet
 // records are migrated transparently on first touch (see _migrateLegacy).
-const WALLET_CAP = Math.max(1, Number(process.env.MAX_WALLETS_PER_USER || 10));
+// Capped at 99 so a wallet index is always ≤2 digits — keeps every token-card
+// callback (which encodes the index) under Telegram's 64-byte limit.
+const WALLET_CAP = Math.max(1, Math.min(99, Number(process.env.MAX_WALLETS_PER_USER || 10)));
 const DEFAULT_BUY_PRESETS = [0.01, 0.05, 0.1];   // the three quick-buy amounts on a token card
 function _refCode() { let c; do { c = crypto.randomBytes(4).toString('hex'); } while (DB.refByCode[c]); return c; }
 function _walletId() { return crypto.randomBytes(5).toString('hex'); }
@@ -325,9 +327,13 @@ function setChain(chatId, key) {
 }
 
 // ---------------------------------------------------------------- settings
+// Getter that RE-ASSERTS the render constraint the setter enforces (short plain
+// decimal, ≤100), so the token card can never build an invalid/oversized callback
+// even if the store was hand-edited. Falls back to the defaults if anything's off.
 function buyPresets(u) {
   const s = (u && u.settings) || {};
-  return (Array.isArray(s.buyPresets) && s.buyPresets.length === 3 && s.buyPresets.every((x) => x > 0)) ? s.buyPresets : DEFAULT_BUY_PRESETS;
+  const okOne = (x) => x > 0 && x <= 100 && String(x).length <= 6 && !/e/i.test(String(x));
+  return (Array.isArray(s.buyPresets) && s.buyPresets.length === 3 && s.buyPresets.every(okOne)) ? s.buyPresets : DEFAULT_BUY_PRESETS;
 }
 function setSlippage(chatId, pct) {
   const u = ensureUser(chatId);
@@ -338,11 +344,19 @@ function setSlippage(chatId, pct) {
 }
 function setBuyPresets(chatId, input) {
   const u = ensureUser(chatId);
-  const nums = String(input).trim().split(/[\s,]+/).map(Number).filter((x) => x > 0 && Number.isFinite(x));
-  if (nums.length !== 3) throw new Error('give exactly 3 positive amounts, e.g. "0.01 0.05 0.1"');
-  // Each amount is embedded in a Telegram callback (≤64 bytes) alongside a 42-char
-  // address, so keep the printed form short. 100 cap + ≤6 chars is plenty for ETH.
-  if (nums.some((n) => n > 100 || String(n).length > 6)) throw new Error('keep each amount short and ≤ 100 (e.g. 0.01 0.05 0.1)');
+  const toks = String(input).trim().split(/[\s,]+/).filter(Boolean);
+  if (toks.length !== 3) throw new Error('give exactly 3 positive amounts, e.g. "0.01 0.05 0.1"');
+  const nums = [];
+  for (const t of toks) {
+    // Plain decimals only — exponential like "1e-7" would pass Number() but then
+    // ethers.parseEther() rejects it at buy time, and it also encodes weirdly.
+    if (!/^\d*\.?\d+$/.test(t)) throw new Error('amounts must be plain numbers, e.g. 0.01 0.05 0.1');
+    const n = Number(t);
+    // Embedded in a Telegram callback (≤64 bytes) beside a 42-char address, so keep
+    // the printed form short + a plain decimal (no exponential from tiny values).
+    if (!(n > 0) || n > 100 || String(n).length > 6 || /e/i.test(String(n))) throw new Error('keep each amount a short plain number ≤ 100 (e.g. 0.01 0.05 0.1)');
+    nums.push(n);
+  }
   u.settings.buyPresets = nums; saveStore();
   return nums;
 }
