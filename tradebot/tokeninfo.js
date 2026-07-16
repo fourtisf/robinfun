@@ -26,8 +26,8 @@ const withTimeout = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(()
 // DEX pool liquidity in native units (WETH reserve × 2). null if no pool / error.
 async function dexLiquidityNative(ca, chainKey) {
   const chain = core.chainOf(chainKey); if (!chain || !chain.router || !chain.weth) return null;
-  const prov = core.providerFor(chainKey);
   try {
+    const prov = core.providerFor(chainKey);   // inside try: an unknown chain key would throw
     const factory = await new ethers.Contract(chain.router, ROUTER_FACTORY_ABI, prov).factory();
     if (!factory || factory === ethers.ZeroAddress) return null;
     const pair = await new ethers.Contract(factory, FACTORY_V2_ABI, prov).getPair(ca, chain.weth);

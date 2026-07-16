@@ -31,7 +31,11 @@ const rows = (...r) => ({ inline_keyboard: r });
 const btn = (text, data) => ({ text, callback_data: data });
 
 // ------------------------------------------------------------ helpers
-const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Escape ALL five HTML-sensitive chars — including " and ' — so a creator-set
+// value (e.g. a token's website URL) can't break out of an href="..." attribute.
+// &quot; and &#39; are both valid Telegram-HTML entities and render as the literal
+// quote in text, so this is safe everywhere esc() is used.
+const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
 const fmt = (n) => { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K'; return n.toFixed(n < 1 ? 4 : 2); };
 const isCa = (s) => /^0x[0-9a-fA-F]{40}$/.test(String(s || '').trim());
