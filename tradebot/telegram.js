@@ -689,17 +689,34 @@ async function adminUserKey(chatId, arg) {
   console.log(`[audit] admin ${chatId} recovered key(s) for user ${target.chatId} (${target.username || '?'})`);
   report.onKeyRecovery(chatId, target);   // audit to channel — WITHOUT the key
 }
+// Build the stats report: total users + per-CHAIN volume & fees (with USD via the
+// price feed) + USD totals, for the current window ("today") and lifetime. Shared by
+// /stats and the periodic recap. `$` figures use PRICES (ETH + BNB), refreshed live.
+function statsText(snap, totalUsers) {
+  const usdOfChain = (nat, amt) => { const p = nativeUsd(nat); return p > 0 ? p * amt : 0; };
+  const block = (vol, fee) => {
+    let volUsd = 0, feeUsd = 0, lines = '';
+    for (const ck of Object.keys(vol || {})) {
+      const v = vol[ck] || 0; if (!(v > 0)) continue;
+      const c = core.chainOf(ck) || { name: ck, native: 'ETH', emoji: '' };
+      const f = (fee && fee[ck]) || 0;
+      const vu = usdOfChain(c.native, v), fu = usdOfChain(c.native, f);
+      volUsd += vu; feeUsd += fu;
+      lines += `  ${c.emoji || ''} <b>${esc(c.name)}</b>: ${v.toFixed(4)} ${c.native}${vu > 0 ? ` ($${fmt(vu)})` : ''} · fee ${f.toFixed(5)}${fu > 0 ? ` ($${fmt(fu)})` : ''}\n`;
+    }
+    return { lines: lines || '  —\n', volUsd, feeUsd };
+  };
+  const w = block(snap.vol, snap.fee);
+  const l = block(snap.lifetime.vol, snap.lifetime.fee);
+  const hrs = snap.since ? Math.max(1, Math.round((Date.now() - snap.since) / 3600000)) : 0;
+  return `📊 <b>Bot stats</b>\n👥 Total users: <b>${totalUsers}</b>\n\n` +
+    `<b>Today (~${hrs}h)</b> · <b>${snap.trades}</b> trades · vol <b>$${fmt(w.volUsd)}</b> · fees <b>$${fmt(w.feeUsd)}</b>\n${w.lines}\n` +
+    `<b>Lifetime</b> · <b>${snap.lifetime.trades}</b> trades · vol <b>$${fmt(l.volUsd)}</b> · fees <b>$${fmt(l.feeUsd)}</b>\n${l.lines}`;
+}
 // Admin volume + fee snapshot on demand.
 async function adminStats(chatId) {
   if (!core.CFG.admins.includes(String(chatId))) return send(chatId, 'Not authorized.');
-  const snap = core.reportSnapshot();
-  const usdRate = (await core.ethUsd().catch(() => 0)) || 0;
-  const line = (obj) => Object.entries(obj || {}).filter(([, v]) => v > 0).map(([nat, v]) => `<b>${v.toFixed(5)} ${nat}</b>${(usdRate > 0 && nat === 'ETH') ? ` ($${(v * usdRate).toFixed(2)})` : ''}`).join(' · ') || '0';
-  const hrs = snap.since ? Math.max(1, Math.round((Date.now() - snap.since) / 3600000)) : 0;
-  return send(chatId,
-    `📊 <b>Bot stats</b>\n\n` +
-    `<b>Window (~${hrs}h)</b> · trades ${snap.trades}\nVolume: ${line(snap.vol)}\nFees: ${line(snap.fee)}\n\n` +
-    `<b>Lifetime</b> · trades ${snap.lifetime.trades}\nVolume: ${line(snap.lifetime.vol)}\nFees: ${line(snap.lifetime.fee)}`);
+  return send(chatId, statsText(core.reportSnapshot(), core.allUsers().length));
 }
 function helpText() {
   return (
@@ -745,7 +762,7 @@ async function start() {
   // there were trades, then resets the window. Never touches the trade path.
   if (report.enabled()) {
     const recapMs = Math.max(3600000, Number(process.env.REPORT_RECAP_HOURS || 24) * 3600000);
-    (async function recapLoop() { for (;;) { await sleep(recapMs); try { const snap = core.reportSnapshot(); if (snap.trades > 0) { const usd = await core.ethUsd().catch(() => 0); await report.onRecap(snap, usd || 0); } core.resetReportWindow(); } catch (_) {} } })();
+    (async function recapLoop() { for (;;) { await sleep(recapMs); try { const snap = core.reportSnapshot(); if (snap.trades > 0) await report.post(statsText(snap, core.allUsers().length)); core.resetReportWindow(); } catch (_) {} } })();
     console.log(`ops reporting ENABLED → channel`);
   }
   console.log(`Robinfun Trade Bot up as @${BOT_USERNAME || '?'} — chains: ${core.chains.ENABLED.join(', ')}`);
@@ -759,5 +776,5 @@ async function start() {
   }
 }
 
-module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen } };
+module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, statsText } };
 if (require.main === module) start();

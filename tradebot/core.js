@@ -180,12 +180,13 @@ function findUser(arg) {
   for (const id of Object.keys(DB.users)) { const u = DB.users[id]; if (u && u.username && u.username.toLowerCase() === low) return u; }
   return null;
 }
-// ---- ops reporting: volume + fee accounting (native-bucketed; never mixes ETH+BNB)
-function recordTrade(native, volEth, feeEth) {
+// ---- ops reporting: volume + fee accounting, bucketed PER CHAIN (each chain's amount
+// is in that chain's native; USD is computed at display time from the price feed).
+function recordTrade(chainKey, volNative, feeNative) {
   const r = DB.report || (DB.report = _emptyReport());
-  const v = Number(volEth) || 0, f = Number(feeEth) || 0;
-  r.trades++; r.vol[native] = (r.vol[native] || 0) + v; r.fee[native] = (r.fee[native] || 0) + f;
-  r.lifetime.trades++; r.lifetime.vol[native] = (r.lifetime.vol[native] || 0) + v; r.lifetime.fee[native] = (r.lifetime.fee[native] || 0) + f;
+  const v = Number(volNative) || 0, f = Number(feeNative) || 0;
+  r.trades++; r.vol[chainKey] = (r.vol[chainKey] || 0) + v; r.fee[chainKey] = (r.fee[chainKey] || 0) + f;
+  r.lifetime.trades++; r.lifetime.vol[chainKey] = (r.lifetime.vol[chainKey] || 0) + v; r.lifetime.fee[chainKey] = (r.lifetime.fee[chainKey] || 0) + f;
   saveStore();
 }
 function reportSnapshot() { return DB.report || _emptyReport(); }
@@ -196,7 +197,7 @@ async function _afterTrade(u, side, r) {
   try {
     const chain = chainOf(r.chain) || { name: r.chain, native: r.native };
     const volEth = side === 'buy' ? (Number(r.spentEth) + Number(r.feeEth)) : (Number(r.proceedsEth) + Number(r.feeEth));
-    recordTrade(r.native, volEth, Number(r.feeEth));
+    recordTrade(r.chain, volEth, Number(r.feeEth));   // bucket by chain (r.chain is the chainKey)
     let usdRate = 0; if (r.native === 'ETH') { try { usdRate = await ethUsd(); } catch (_) {} }
     report.onTrade({ username: u.username, chatId: u.chatId, side, sym: r.sym, ca: r.ca, native: r.native, volEth, feeEth: Number(r.feeEth), usdRate, chainName: chain.name });
   } catch (_) { /* reporting must never affect trading */ }

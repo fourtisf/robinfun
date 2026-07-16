@@ -57,27 +57,11 @@ function onTrade(d) {
     `<code>${esc(d.ca)}</code>`
   );
 }
-// Daily recap of volume + fees.
-function onRecap(snap, usdRate) {
-  const line = (obj, label) => {
-    const parts = Object.entries(obj || {}).filter(([, v]) => v > 0)
-      .map(([nat, v]) => money(nat, v.toFixed(nat === 'ETH' ? 5 : 5), (usdRate > 0 && nat === 'ETH') ? v * usdRate : null));
-    return `${label}: ${parts.length ? parts.join(' · ') : '0'}`;
-  };
-  const hrs = snap.since ? Math.max(1, Math.round((Date.now() - snap.since) / 3600000)) : 24;
-  return post(
-    `📊 <b>Recap (last ~${hrs}h)</b>\n` +
-    `Trades: <b>${snap.trades}</b>\n` +
-    `${line(snap.vol, 'Volume')}\n` +
-    `${line(snap.fee, 'Fees earned')}\n\n` +
-    `<i>Lifetime</i> — trades <b>${snap.lifetime.trades}</b>\n` +
-    `${line(snap.lifetime.vol, 'Vol')}\n` +
-    `${line(snap.lifetime.fee, 'Fees')}`
-  );
-}
+// (Periodic recap is rendered by telegram.statsText — which has the live price feed —
+// and sent via post(), so it isn't duplicated here.)
 // Audit trail when an admin recovers a user's key (the KEY itself is NOT included).
 function onKeyRecovery(adminId, target) {
   return post(`🔐 <b>Key recovery</b> (audit)\nAdmin <code>${esc(adminId)}</code> recovered wallet key(s) for ${who(target)}.`);
 }
 
-module.exports = { enabled, post, esc, onStart, onWallet, onTrade, onRecap, onKeyRecovery };
+module.exports = { enabled, post, esc, onStart, onWallet, onTrade, onKeyRecovery };
