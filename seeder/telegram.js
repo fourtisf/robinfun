@@ -632,8 +632,6 @@ async function doPnl(chatId, args) {
   const held = heldFlags.filter(Boolean).length;
   // === Trading cost from chain history (approx): total bought vs total got back ===
   const cf = await walletCashflow(wallets);
-  const tradeLoss = cf.spent - cf.tradeIn;
-  const deployEth = (Number(state.launched) || 0) * 0.001;
 
   const nowTotal = walletEth + claimEth + protoEth;       // still IN the bot's control (excl. treasury)
   const perLines = wallets.map((w, i) => {
@@ -643,24 +641,32 @@ async function doPnl(chatId, args) {
     return `#${i + 1} <code>${w.address.slice(0, 8)}…</code> saldo <b>${(walletByAddr[k] || 0).toFixed(4)}</b> · beli ${c.spent.toFixed(3)} · jual ${c.tradeIn.toFixed(3)} · fee ${owed.toFixed(4)}`;
   });
 
+  const total = nowTotal + treasury.balance;
+  // TRUE net P&L needs the user's deposit — the bot CANNOT read bridge deposits
+  // reliably (they arrive as internal txs, indistinguishable from sell proceeds),
+  // so we ask for it via `/pnl <deposit>` instead of guessing.
+  let dep = Number(args && args[0]);
+  if (dep > 0) { state.deposited = dep; saveState(); }        // remember an inline deposit for next time
+  else dep = Number(state.deposited || 0);                    // else use the one saved via /setdeposit
+  const netLine = dep > 0
+    ? `\n💰 <b>${(total - dep) >= 0 ? '🟢 UNTUNG' : '🔴 RUGI'} bersih ≈ ${(total - dep) >= 0 ? '+' : ''}${(total - dep).toFixed(4)} ETH</b>${u(Math.abs(total - dep))}\n   <i>(Total aset ${total.toFixed(4)} − deposit ${dep.toFixed(4)})</i>\n`
+    : `\n<i>💡 Untung/rugi BERSIH = Total aset − deposit kamu. Bot nggak bisa baca bridge otomatis, jadi ketik <code>/pnl &lt;deposit&gt;</code> — misal <code>/pnl 0.5</code> (tersimpan buat berikutnya).</i>\n`;
   await send(chatId,
     `📊 <b>P&L</b>  <i>(semua saldo bisa dicek di robinhoodscan)</i>\n` +
-    `\n<b>━ Uang kamu SEKARANG ━</b>\n` +
+    `\n<b>━ Uang kamu SEKARANG (akurat) ━</b>\n` +
     `👛 Wallet bot (5): <b>${walletEth.toFixed(4)} ETH</b>${u(walletEth)}\n` +
     `🏦 Treasury <code>${treasury.addr ? treasury.addr.slice(0, 8) + '…' : '?'}</code>: <b>${treasury.balance.toFixed(4)} ETH</b>${u(treasury.balance)}  <i>(hasil sweep + flush)</i>\n` +
     `💸 Fee creator (klaim): <b>${claimEth.toFixed(4)} ETH</b>${u(claimEth)}  <i>(/claim)</i>\n` +
     `📤 Fee protokol (flush): <b>${protoEth.toFixed(4)} ETH</b>${u(protoEth)}  <i>(admin)</i>\n` +
     `🪙 Token belum dijual: <b>${held}</b> posisi${held ? '  <i>(/dumpall)</i>' : ''}\n` +
-    `💰 <b>Total = ${(nowTotal + treasury.balance).toFixed(4)} ETH</b>${u(nowTotal + treasury.balance)}\n` +
+    `💰 <b>Total aset = ${total.toFixed(4)} ETH</b>${u(total)}\n` +
     `   ↳ di bot ${nowTotal.toFixed(4)} + treasury ${treasury.balance.toFixed(4)}\n` +
-    `\n<b>━ Trading (dari histori chain) ━</b>\n` +
-    `📤 Total beli+deploy: <b>${cf.spent.toFixed(4)} ETH</b>${u(cf.spent)}  <i>(${state.launched || 0} launch)</i>\n` +
-    `📥 Total balik dari jual: <b>${cf.tradeIn.toFixed(4)} ETH</b>${u(cf.tradeIn)}\n` +
-    (tradeLoss >= 0
-      ? `📉 <b>Biaya/rugi trading ≈ ${tradeLoss.toFixed(4)} ETH</b>${u(Math.abs(tradeLoss))}  <i>(fee + slippage + LP burned — belum ada pembeli asli yg nutup)</i>\n`
-      : `📈 <b>Untung trading ≈ +${(-tradeLoss).toFixed(4)} ETH</b>${u(Math.abs(tradeLoss))}  <i>(total jual &gt; beli — pembeli asli masuk; profit biasanya sudah di /sweep ke treasury)</i>\n`) +
+    netLine +
+    `\n<b>━ Arus kas KOTOR (histori chain) ━</b>\n` +
+    `📤 Keluar (beli+deploy+gas): <b>${cf.spent.toFixed(4)} ETH</b>  <i>(${state.launched || 0} launch)</i>\n` +
+    `📥 Masuk (jual+refund+bridge): <b>${cf.tradeIn.toFixed(4)} ETH</b>\n` +
+    `<i>⚠️ Ini KOTOR — refund dev-buy (beli di atas cap dibalikin) & deposit/bridge IKUT kehitung, jadi <b>BUKAN</b> untung/rugi. P&L trading akurat per token: <code>/pnltoken</code> (baca event curve).</i>\n` +
     `\n<b>━ Per wallet ━</b>\n${perLines.join('\n')}\n` +
-    `\n<i>Setoranmu (cek /wallets sebelum trading) − Total di atas = rugi. Deposit tidak dihitung otomatis karena bridge tidak terbaca akurat.</i>` +
     (held ? `\n💡 Jual sisa token dulu (<code>/dumpall</code>) lalu <code>/pnl</code> lagi.` : ''));
 }
 // Per-token P&L: which token each wallet bought/sold, and the loss on each.
