@@ -159,14 +159,21 @@ Alur: <b>/wallets → kirim ETH (L1) → /bridge → /go</b> ✅`;
 // Cached per-wallet token counts (enumerating all factory tokens is heavy, so we
 // refresh in the background and show the last-known count — first /wallets may
 // show "…" until the first refresh lands).
-let _ownedCache = { at: 0, rows: null, busy: false };
+let _ownedCache = { at: 0, rows: null, promise: null };
 async function ownedCached() {
   if (_ownedCache.rows && Date.now() - _ownedCache.at < 180000) return _ownedCache.rows;
-  if (_ownedCache.busy) return _ownedCache.rows;
-  _ownedCache.busy = true;
-  try { _ownedCache.rows = await ownedTokens(provider, wallets); _ownedCache.at = Date.now(); } catch (_) {}
-  finally { _ownedCache.busy = false; }
-  return _ownedCache.rows;
+  // Dedupe concurrent scans: /wallets (fire-and-forget) and /earnings (awaited) share
+  // ONE in-flight scan of the whole factory instead of each launching its own — the
+  // scan reads creator()+owed() for every token on the factory, so doing it twice at
+  // once is what made /earnings sit on "Cek reward creator…" for minutes.
+  if (!_ownedCache.promise) {
+    _ownedCache.promise = (async () => {
+      try { const r = await ownedTokens(provider, wallets); _ownedCache.rows = r; _ownedCache.at = Date.now(); return r; }
+      catch (_) { return _ownedCache.rows || []; }
+      finally { _ownedCache.promise = null; }
+    })();
+  }
+  return _ownedCache.promise;
 }
 async function walletsMsg() {
   const [l2bals, l1bals, usd] = await Promise.all([balances(), l1Balances(), ethUsd()]);
@@ -444,7 +451,7 @@ async function doSell(chatId, args) {
 // ---- creator reward (levy fee): view + claim ----
 async function doEarnings(chatId) {
   await send(chatId, `⏳ Cek reward creator di SEMUA token (baca chain)…`);
-  const rows = await ownedTokens(provider, wallets);   // chain-truth, ALL tokens (not just /last)
+  const rows = (await ownedCached()) || [];   // chain-truth, ALL tokens (not just /last) — shared/cached scan (fast when warm)
   if (!rows.length) { await send(chatId, 'Belum ada token yang dibuat wallet bot.'); return; }
   const usd = await ethUsd();
   const u = (e) => usd ? ` ≈ ${e * usd >= 1 ? fmtUsd(e * usd) : '$' + (e * usd).toFixed(2)}` : '';
