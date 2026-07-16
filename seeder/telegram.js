@@ -850,6 +850,7 @@ tx <code>${r.txHash}</code>`);
 // CFG.autoSalePct% of every wallet's balance across every already-created token.
 // Shares the `trading` lock with launches/manual trades to avoid nonce clashes;
 // only broadcasts when it actually sold something (no spam on idle rounds).
+let _lastAutoErrAt = 0;
 async function autoSaleLoop() {
   for (;;) {
     if (!CFG.autoSaleOn) { await sleep(3000); continue; }
@@ -860,7 +861,11 @@ async function autoSaleLoop() {
         const res = await sellAllHoldings(provider, wallets, cas, CFG.autoSalePct);
         const usd = await ethUsd().catch(() => 0);
         const rep = renderSaleReport(res, usd, { title: `🔻 Auto-sale ${CFG.autoSalePct}%` });
-        if (rep.sold > 0) { for (const m of rep.messages) await broadcast(m); }   // only broadcast when it actually sold (no idle-cycle spam)
+        if (rep.sold > 0) { for (const m of rep.messages) await broadcast(m); }   // sold → full detailed report
+        else if (rep.errors > 0 && Date.now() - _lastAutoErrAt > 1800000) {        // no sales but HARD errors → 1 heads-up / 30 min (not idle-cycle spam)
+          _lastAutoErrAt = Date.now();
+          await broadcast(rep.messages[0] + `\n\n<i>Tidak ada yang terjual siklus ini — cek RPC / likuiditas. Detail: <code>/dumpall</code>.</i>`);
+        }
       } catch (_) {} finally { trading = false; }
     }
     await sleep(CFG.autoSaleEverySec * 1000);

@@ -17,8 +17,11 @@ const fmtUsd = (n) => n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? '
 const ethShort = (wei) => { const n = Number(ethers.formatEther(wei)); return n === 0 ? '0' : n.toFixed(6).replace(/0+$/, '').replace(/\.$/, ''); };
 const usdOf = (wei, usd) => { if (!usd) return ''; const v = Number(ethers.formatEther(wei)) * usd; return ` (${v >= 1000 ? fmtUsd(v) : '$' + v.toFixed(2)})`; };
 const EXPLORER = (process.env.EXPLORER || 'https://explorer.mainnet.chain.robinhood.com').replace(/\/+$/, '');
-const txLink = (hash) => hash ? `<a href="${EXPLORER}/tx/${hash}">tx↗</a>` : '';
+// Only build a link for a well-formed tx hash (0x + 64 hex). This keeps the <a href>
+// safe even if a row's `hash` ever came from an untrusted source (esc doesn't escape ").
+const txLink = (hash) => /^0x[0-9a-fA-F]{64}$/.test(String(hash || '')) ? `<a href="${EXPLORER}/tx/${hash}">tx↗</a>` : (hash ? `tx <code>${esc(String(hash).slice(0, 14))}…</code>` : '');
 const fmtNum = (n) => { n = Number(n); if (!isFinite(n) || n === 0) return '0'; const a = Math.abs(n); if (a >= 1e9) return (n / 1e9).toFixed(2) + 'B'; if (a >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (a >= 1e3) return (n / 1e3).toFixed(1) + 'k'; if (a >= 1) return n.toFixed(2); return n.toPrecision(2); };
+const clamp = (s, n) => { s = String(s == null ? '' : s); return s.length > n ? s.slice(0, n) + '…' : s; };   // bound name/symbol so a long one can't blow the message size
 
 function renderSaleReport(res, usd, opts) {
   opts = opts || {};
@@ -38,15 +41,17 @@ function renderSaleReport(res, usd, opts) {
 
   const lines = [];
   for (const r of sold.slice(0, maxDetail)) {
-    const dec = r.decimals || 18;
+    const dec = (r.decimals != null && Number.isFinite(Number(r.decimals))) ? Number(r.decimals) : 18;   // 0-decimal is valid — don't coerce to 18
     const gotWei = gotWeiOf(r);
-    const soldTok = fmtNum(ethers.formatUnits(BigInt(r.tokensSold || 0), dec));
-    const remTok = fmtNum(ethers.formatUnits(BigInt(r.remaining || 0), dec));
+    let soldTok = '0', remTok = '0';
+    try { soldTok = fmtNum(ethers.formatUnits(BigInt(r.tokensSold || 0), dec)); } catch (_) {}
+    try { remTok = fmtNum(ethers.formatUnits(BigInt(r.remaining || 0), dec)); } catch (_) {}   // a malformed field must not crash the whole report
     let remWorthWei = 0n;
     try { if (r.tokensSold && BigInt(r.tokensSold) > 0n && gotWei > 0n && r.remaining) remWorthWei = (BigInt(r.remaining) * gotWei) / BigInt(r.tokensSold); } catch (_) {}
-    const sym = r.symbol || r.name || '?';
+    const sym = clamp(r.symbol || r.name || '?', 24);
+    const nm = clamp(r.name, 40);
     lines.push(
-      `✅ <b>$${esc(sym)}</b>${r.name && r.name !== sym ? ' · ' + esc(r.name) : ''} — <b>${ethShort(gotWei)} ETH</b>${usdOf(gotWei, usd)} <i>(${esc(r.venue || '?')})</i>\n`
+      `✅ <b>$${esc(sym)}</b>${nm && nm !== sym ? ' · ' + esc(nm) : ''} — <b>${ethShort(gotWei)} ETH</b>${usdOf(gotWei, usd)} <i>(${esc(r.venue || '?')})</i>\n`
       + `   jual ${soldTok} · sisa ${remTok}${(remWorthWei > 0n && usd) ? ' ' + usdOf(remWorthWei, usd).trim() : ''}${r.pending ? ' · ⏳ pending' : ''}\n`
       + `   👛 <code>${esc(r.address)}</code>\n`
       + `   🪙 <code>${esc(r.ca)}</code> · ${txLink(r.hash)}`
@@ -54,12 +59,18 @@ function renderSaleReport(res, usd, opts) {
   }
   if (sold.length > maxDetail) lines.push(`…dan <b>${sold.length - maxDetail}</b> penjualan lagi.`);
 
+  // Chunk by BYTE BUDGET (not block count): Telegram silently drops a >4096-char
+  // message (it returns {ok:false}, not an exception), which would lose a whole batch
+  // of blocks — or the header. Keep each message well under the limit.
+  const MAX = 3500;
   const messages = [];
-  if (!lines.length) { messages.push(header); }
-  else for (let i = 0; i < lines.length; i += perMsg) {
-    const chunk = lines.slice(i, i + perMsg).join('\n\n');
-    messages.push(i === 0 ? header + '\n\n' + chunk : chunk);
+  let cur = header;
+  for (const ln of lines) {
+    const piece = '\n\n' + ln;
+    if (cur.length + piece.length > MAX && cur.length) { messages.push(cur); cur = ln; }   // flush; continuation starts with the block (no header)
+    else cur += piece;
   }
+  messages.push(cur);
   return { messages, sold: sold.length, skipped, errors: hardErr, retry, totalWei };
 }
 
