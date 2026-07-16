@@ -344,13 +344,17 @@ async function onMessage(m) {
       const chainKey = core.userChain(u);
       // Safety gate: auto-buy skips the manual 🛡 Safety screen, so on GoPlus
       // chains refuse an obvious honeypot / can't-sell token before spending funds.
+      let safetyNote = '';
       if (goplus.supported(chainKey)) {
         const s = await goplus.tokenSecurity(chainKey, text).catch(() => null);
         if (s && (s.honeypot || s.cannotSellAll)) {
           return send(chatId, `🚨 <b>Auto-buy blocked</b> — <code>${short(text)}</code> looks like a <b>honeypot / can't-sell</b> token (GoPlus). Open the card and review 🛡 Safety before buying manually.`, rows([btn('🔎 Open card', `tok:${chainKey}:${walletIndex(chatId)}:${text}`), btn('« Menu', 'menu')]));
         }
+        // Gate fails OPEN when GoPlus has no data (fresh/unindexed token — the
+        // riskiest case). Tell the user the check didn't actually run.
+        if (!s) safetyNote = '\n⚠️ <i>Safety data unavailable — buying blind on a fresh/unknown token.</i>';
       }
-      await send(chatId, `⚡ <b>Auto-buy</b> ${esc(amt)} of <code>${short(text)}</code>… <i>(toggle in ⚙️ Settings)</i>`);
+      await send(chatId, `⚡ <b>Auto-buy</b> ${esc(amt)} of <code>${short(text)}</code>… <i>(toggle in ⚙️ Settings)</i>${safetyNote}`);
       return doBuy(chatId, text, amt, chainKey);
     }
     const c = await tokenCard(chatId, text); return send(chatId, c.text, c.kb);
