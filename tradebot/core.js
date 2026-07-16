@@ -366,18 +366,35 @@ function switchWallet(chatId, walletId) {
   u.activeWalletId = w.id; saveStore();
   return w;
 }
-// Remove a wallet. GUARD: keep at least one; refuse (fail-closed) if it still holds
-// native on any enabled chain, so removing can never strand funds. ERC20 bags can't
-// be auto-detected, so tell the user to export the key first if unsure.
+// A getBalance that survives a flaky public RPC: short per-call timeout, a couple
+// of retries. Resolves { ok, bal } — ok:false means we genuinely couldn't read it
+// (node down / rate-limited), NOT that the balance is zero.
+async function _balanceResilient(chainKey, addr, tries = 3, timeoutMs = 6000) {
+  for (let i = 0; i < tries; i++) {
+    try {
+      const bal = await Promise.race([
+        providerFor(chainKey).getBalance(addr),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
+      ]);
+      return { ok: true, bal };
+    } catch (_) { /* retry */ }
+  }
+  return { ok: false, bal: 0n };
+}
+// Remove a wallet. GUARD: keep at least one; refuse only when we can VERIFY it still
+// holds native on some chain (so we never nudge a user into abandoning visible funds).
+// A chain whose RPC we can't reach right now does NOT block removal: the encrypted key
+// is archived on removal and stays fully recoverable, so nothing is ever stranded — a
+// flaky public RPC (e.g. Ethereum) must not trap an otherwise-empty wallet forever.
+// ERC20 bags can't be auto-detected, hence the "export first" nudge in the confirm UI.
 async function removeWallet(chatId, walletId) {
   const u = ensureUser(chatId);
   if (u.wallets.length <= 1) throw new Error('you must keep at least one wallet');
   const w = walletById(u, walletId); if (!w) throw new Error('wallet not found');
   const dust = ethers.parseEther('0.0002');
   for (const ch of chains.enabledChains()) {
-    let bal;
-    try { bal = await providerFor(ch.key).getBalance(w.address); }
-    catch (_) { throw new Error(`couldn't verify this wallet's balance on ${ch.name} right now — try again in a moment.`); }
+    const { ok, bal } = await _balanceResilient(ch.key, w.address);
+    if (!ok) continue;   // couldn't verify → don't block (key is archived/recoverable)
     if (bal > dust) throw new Error(`this wallet still holds ${Number(ethers.formatEther(bal)).toFixed(5)} ${ch.native} on ${ch.name} — withdraw it (or export the key) first.`);
   }
   // Re-validate AFTER the async balance loop (the event loop yielded, so a
