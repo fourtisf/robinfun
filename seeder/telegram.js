@@ -20,7 +20,7 @@ const {
   launchWith, readDeployFee, checkBeta, sweepAll, fmt, sleep, ethUsd, tokenStats,
   makeL1Provider, verifyInbox, bridgeOne, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
-  creatorOwedTotal, ownedTokens, tokenPnl, reactToBuys, gasOverrides, capGuard,
+  creatorOwedTotal, ownedTokens, heldTokens, tokenPnl, reactToBuys, gasOverrides, capGuard,
 } = require('./core');
 
 if (!CFG.tgToken) {
@@ -430,8 +430,15 @@ async function doBuy(chatId, args) {
   finally { freeUserLock(); }
 }
 async function doSell(chatId, args) {
-  const ca = args[0]; const pct = args[1] || '100';
-  if (!ca || !ethers.isAddress(ca) || !(Number(pct) > 0 && Number(pct) <= 100)) { await send(chatId, 'Format: <code>/sell 0xCONTRACT 50</code> — jual 50% dari tiap wallet yang punya (default 100%).'); return; }
+  // Tolerant parsing: accept "/sell 0xADDR 50", "/sell 0xADDR" (=100%), and even a
+  // glued "/sell 0xADDR50" (address+pct with no space). A 42-char 0x address that is
+  // longer than 42 chars had its % stuck on the end → split it off.
+  let ca = (args[0] || '').trim(); let pct = args[1] || '';
+  const mGlue = ca.match(/^(0x[0-9a-fA-F]{40})(\d{1,3})$/);
+  if (mGlue) { ca = mGlue[1]; if (!pct) pct = mGlue[2]; }
+  if (!pct) pct = '100';
+  if (!ca || !ethers.isAddress(ca)) { await send(chatId, `❌ Alamat token nggak valid. Format: <code>/sell 0xCONTRACT 50</code> — pakai alamat TOKEN (bukan tx hash / curve). Atau <code>/dumpall</code> buat jual semua.`); return; }
+  if (!(Number(pct) > 0 && Number(pct) <= 100)) { await send(chatId, 'Format: <code>/sell 0xCONTRACT 50</code> — jual 50% dari tiap wallet yang punya (default 100%).'); return; }
   await takeUserLock();
   try {
     await send(chatId, `🔴 SELL ${pct}% · <code>${ca.slice(0, 12)}…</code> · dari wallet yang punya…`);
@@ -491,10 +498,17 @@ async function doClaim(chatId) {
 async function doDumpAll(chatId, args) {
   const pct = args[0] ? Number(args[0]) : 100;
   if (!(pct > 0 && pct <= 100)) { await send(chatId, 'Format: <code>/dumpall 100</code> — jual 100% SEMUA token dari semua wallet.'); return; }
-  // Chain-truth: dump EVERY token the bot ever created (recovers the dev-buy ETH
-  // locked in OLD bags that the bot's /last memory dropped), not just the tracked ones.
+  // Chain-truth: dump every token the wallets HOLD or CREATED — union of
+  //   (a) tokens we created (ownedCached, recovers old dev-buy bags), and
+  //   (b) tokens we currently HOLD but may NOT have created (heldTokens via the
+  //       explorer) — e.g. bought via react-to-buy or another wallet's launch.
+  // (b) is what fixes "blockscout shows I hold ASTROR/COMFY but /dumpall missed it".
   const owned = await ownedCached();
-  let cas = (owned || []).map((r) => r.ca).filter((ca) => ca && ethers.isAddress(ca));
+  const held = await heldTokens(wallets).catch(() => []);
+  const caMap = new Map();
+  for (const r of (owned || [])) if (r.ca && ethers.isAddress(r.ca)) caMap.set(r.ca.toLowerCase(), r.ca);
+  for (const h of held) if (h.ca && ethers.isAddress(h.ca)) caMap.set(h.ca.toLowerCase(), h.ca);
+  let cas = [...caMap.values()];
   if (!cas.length) cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));   // fallback if the chain read failed
   if (!cas.length) { await send(chatId, 'Belum ada token yang di-launch.'); return; }
   // Transparency: warn if the chain scan couldn't read every token (a flaky RPC can

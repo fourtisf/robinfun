@@ -765,6 +765,32 @@ async function creatorEarnings(provider, cas) {
   return out;
 }
 
+// Every ERC-20 token the wallets CURRENTLY HOLD (balance > 0), read from the
+// explorer's tokenlist API. Unlike ownedTokens (which filters by creator), this
+// catches tokens a wallet holds but did NOT create — e.g. bought via react-to-buy,
+// or another of our wallets' launches — so /dumpall can actually sell them.
+// Returns [{ ca, holders:[address…] }]. Best-effort; falls back to [] if the
+// explorer is down (callers union this with ownedTokens so nothing is lost).
+async function heldTokens(wallets) {
+  const api = (process.env.EXPLORER_API || 'https://robinhoodchain.blockscout.com/api').replace(/\/+$/, '');
+  const byCa = new Map();
+  await mapLimit(wallets, 5, async (w) => {
+    try {
+      const j = await retry(async () => (await (await fetch(`${api}?module=account&action=tokenlist&address=${w.address}`, { signal: AbortSignal.timeout(12000) })).json()), 3);
+      if (!Array.isArray(j.result)) return;
+      for (const t of j.result) {
+        const ca = t.contractAddress || t.contractaddress;
+        let bal = 0n; try { bal = BigInt(t.balance || '0'); } catch (_) {}
+        if (!ca || !ethers.isAddress(ca) || bal <= 0n) continue;
+        const k = ca.toLowerCase();
+        if (!byCa.has(k)) byCa.set(k, { ca, holders: [] });
+        byCa.get(k).holders.push(w.address);
+      }
+    } catch (_) {}
+  });
+  return [...byCa.values()];
+}
+
 // Auto-detect total ETH DEPOSITED into the wallets, read from chain history via
 // the Blockscout (Etherscan-compatible) explorer API. Sums only EXTERNAL incoming
 // transfers: normal txs where `to` is our wallet and `from` is NOT one of our own
@@ -1002,5 +1028,5 @@ module.exports = {
   makeL1Provider, verifyInbox, bridgeOne,
   resolveCurve, isGraduated, resolveRoute, tokenMeta, botBuy, botSell, seedVolume, sellHoldings, sellAllHoldings, randEthStr,
   creatorEarnings, claimCreator, protocolPending, treasuryInfo, tokenBalance, detectDeposits, walletCashflow,
-  mapLimit, ownedTokens, creatorOwedTotal, tokenPnl, reactToBuys, gasOverrides, capGuard,
+  mapLimit, ownedTokens, heldTokens, creatorOwedTotal, tokenPnl, reactToBuys, gasOverrides, capGuard,
 };
