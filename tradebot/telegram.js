@@ -172,19 +172,23 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   const sel = core.tradeSelection(chatId);
   const selIds = new Set(core.tradeWalletIds(chatId));
   const selN = selIds.size;
+  const usdOf = (tokens) => (priceUsd > 0 ? '$' + fmt(tokens * priceUsd) : '—');   // USD worth of a token bag
   if (list.length > 1) {
     // Per-wallet balance table (Maestro "Balance" panel): ✅ marks the wallet(s) a
-    // Buy/Sell will act on (single, a selected subset, or ALL).
+    // Buy/Sell will act on (single, a selected subset, or ALL). Shows each bag's USD worth.
     L.push('');
-    L.push(`👛 <b>Balance across wallets</b> (${esc(sym)} · ${nat})`);
+    L.push(`👛 <b>Balance across wallets</b> (${esc(sym)} · USD · ${nat})`);
     const held = across.rows.filter((r) => r.tokens > 1e-9 || r.eth > 1e-5);
     const show = (held.length ? held : across.rows).slice(0, 10);
     for (const r of show) {
       const on = selN ? selIds.has(r.id) : (r.id === w.id);
       const mark = on ? '✅' : (r.active ? '▫️' : '▪️');
       const pctStr = r.pctSupply >= 0.01 ? ` (${r.pctSupply.toFixed(2)}%)` : '';
-      L.push(`${mark} ${esc(r.label)} · <b>${fmt(r.tokens)}</b>${pctStr} · ${r.eth.toFixed(4)} ${nat}`);
+      L.push(`${mark} ${esc(r.label)} · <b>${fmt(r.tokens)}</b>${pctStr} · <b>${usdOf(r.tokens)}</b> · ${r.eth.toFixed(4)} ${nat}`);
     }
+    const totTok = across.rows.reduce((s, r) => s + r.tokens, 0);
+    const totEth = across.rows.reduce((s, r) => s + r.eth, 0);
+    if (totTok > 1e-9) L.push(`Σ <b>${fmt(totTok)} $${esc(sym)}</b> ≈ <b>${usdOf(totTok)}</b> · ${totEth.toFixed(4)} ${nat} across ${across.rows.length} wallets`);
     if (pos && pos.ethIn > 0 && !selN) { const unreal = valueEth - (pos.ethIn - pos.ethOut); L.push(`PnL (${esc(core.walletLabel(w, wi))}): <b>${unreal >= 0 ? '+' : ''}${unreal.toFixed(4)} ${nat}</b>`); }
     if (sel.all) L.push(`<i>Trading on <b>ALL ${list.length} wallets</b> at once. Tap 👛 below to change.</i>`);
     else if (selN >= 1) L.push(`<i>Trading on <b>${selN} selected wallet${selN > 1 ? 's' : ''}</b>. Tap 👛 below to change.</i>`);
@@ -901,5 +905,5 @@ async function start() {
   }
 }
 
-module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, statsText, walletPickScreen, tradeTargets } };
+module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, statsText, walletPickScreen, tradeTargets, tokenCard, PRICES } };
 if (require.main === module) start();
