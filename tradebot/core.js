@@ -546,6 +546,31 @@ function notifyOn(chatId, type) {
   if (!n || typeof n !== 'object' || n[type] === undefined) return true;   // default ON
   return !!n[type];
 }
+// ── Multi-wallet trade selection (Maestro style) ─────────────────────────────
+// Which wallets a Buy/Sell tap acts on. { all:true } = every wallet; else an
+// explicit id list. Empty/absent = single-wallet (the card's bound wallet).
+function _tradeSel(u) { u.settings = u.settings || {}; if (!u.settings.tradeSel || typeof u.settings.tradeSel !== 'object') u.settings.tradeSel = { all: false, ids: [] }; if (!Array.isArray(u.settings.tradeSel.ids)) u.settings.tradeSel.ids = []; return u.settings.tradeSel; }
+function tradeSelection(chatId) { const u = ensureUser(chatId); const s = _tradeSel(u); return { all: !!s.all, ids: s.ids.slice() }; }
+function setTradeAll(chatId, on) { const u = ensureUser(chatId); const s = _tradeSel(u); s.all = !!on; if (on) s.ids = []; else s.ids = []; saveStore(); return tradeSelection(chatId); }
+function toggleTradeWallet(chatId, walletId) {
+  const u = ensureUser(chatId); const s = _tradeSel(u);
+  const all = walletList(u).map((w) => w.id);
+  if (!all.includes(walletId)) return tradeSelection(chatId);
+  const set = new Set(s.all ? all : s.ids.filter((id) => all.includes(id)));
+  if (set.has(walletId)) set.delete(walletId); else set.add(walletId);
+  s.all = (all.length > 0 && set.size === all.length);
+  s.ids = s.all ? [] : Array.from(set);
+  saveStore();
+  return tradeSelection(chatId);
+}
+// Effective, existence-filtered wallet ids a trade should hit. [] = none explicitly
+// selected → caller falls back to the card's single wallet.
+function tradeWalletIds(chatId) {
+  const u = getUser(chatId); if (!u) return [];
+  const s = _tradeSel(u); const all = walletList(u).map((w) => w.id);
+  if (s.all) return all.slice();
+  return s.ids.filter((id) => all.includes(id));
+}
 
 // ---------------------------------------------------------------- chain reads
 async function resolveCurve(ca, chainKey) {
@@ -990,6 +1015,7 @@ module.exports = {
   renameWallet, walletLabel, hasChainPresets,
   buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
   setConfirmBuy, setExpert, setNotify, notifyOn, NOTIFY_TYPES,
+  tradeSelection, setTradeAll, toggleTradeWallet, tradeWalletIds,
   addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
   feePayoutEnabled, payFromFeeWallet,
   resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, tokenAcrossWallets, ethUsd, gasOverrides,
