@@ -393,11 +393,23 @@ function tradeBusy() {
 }
 function lockTrade() { tradingSince = Date.now(); }
 function unlockTrade() { tradingSince = 0; }
+// User-initiated trades (buttons / commands like /dumpall, /sell, /buy, /claim)
+// PREEMPT the background loops. They raise a priority flag — the auto-sale / react /
+// guard loops then YIELD instead of grabbing the lock — briefly wait for any in-flight
+// op to finish, then take the lock. This is why /dumpall can never be starved forever
+// by a slow or stuck background loop (the #1 cause of "Ada trade lain jalan").
+let userPriority = 0;
+async function takeUserLock(maxWaitMs = 40000) {
+  userPriority++;
+  const start = Date.now();
+  while (tradeBusy() && Date.now() - start < maxWaitMs) await sleep(500);
+  lockTrade();   // force-take: loops yield on userPriority, so a lock still held here is a stuck/slow op we intentionally preempt
+}
+function freeUserLock() { unlockTrade(); if (userPriority > 0) userPriority--; }
 async function doBuy(chatId, args) {
   const ca = args[0]; const eth = args[1];
   if (!ca || !ethers.isAddress(ca) || !eth || !(Number(eth) > 0)) { await send(chatId, 'Format: <code>/buy 0xCONTRACT 0.01</code> — beli 0.01 ETH token itu.'); return; }
-  if (tradeBusy()) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
-  lockTrade();
+  await takeUserLock();
   try {
     const need = ethers.parseEther(String(eth)) + gasBuf;
     const bals = await balances();
@@ -408,13 +420,12 @@ async function doBuy(chatId, args) {
     const r = await botBuy(w, provider, ca, eth);
     await send(chatId, `✅ Beli di ${r.venue === 'curve' ? 'bonding curve' : 'Uniswap'}${r.pending ? ' (terkirim, belum konfirmasi)' : ''}\ntx <code>${r.hash}</code>`);
   } catch (e) { await send(chatId, `❌ Buy gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
-  finally { unlockTrade(); }
+  finally { freeUserLock(); }
 }
 async function doSell(chatId, args) {
   const ca = args[0]; const pct = args[1] || '100';
   if (!ca || !ethers.isAddress(ca) || !(Number(pct) > 0 && Number(pct) <= 100)) { await send(chatId, 'Format: <code>/sell 0xCONTRACT 50</code> — jual 50% dari tiap wallet yang punya (default 100%).'); return; }
-  if (tradeBusy()) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
-  lockTrade();
+  await takeUserLock();
   try {
     await send(chatId, `🔴 SELL ${pct}% · <code>${ca.slice(0, 12)}…</code> · dari wallet yang punya…`);
     let done = 0;
@@ -427,7 +438,7 @@ async function doSell(chatId, args) {
       } catch (e) { await send(chatId, `❌ ${w.address.slice(0, 10)}…: ${esc(e.shortMessage || e.reason || e.message)}`); }
     }
     if (!done) await send(chatId, 'Nggak ada wallet yang pegang token ini.');
-  } finally { unlockTrade(); }
+  } finally { freeUserLock(); }
 }
 
 // ---- creator reward (levy fee): view + claim ----
@@ -452,8 +463,7 @@ async function doEarnings(chatId) {
     `\nKetik <code>/claim</code> untuk klaim semua ke wallet creator, lalu <code>/sweep 0xTreasury</code> untuk pindah ke treasury.`);
 }
 async function doClaim(chatId) {
-  if (tradeBusy()) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
-  lockTrade();
+  await takeUserLock();
   try {
     await send(chatId, '💸 Klaim reward creator dari SEMUA token (baca chain)…');
     const res = await claimCreator(wallets, provider);   // chain-truth: all tokens, not just /last
@@ -468,16 +478,15 @@ async function doClaim(chatId) {
     });
     await send(chatId, `💸 <b>Klaim selesai</b> — total <b>${total.toFixed(6)} ETH</b>${u(total)}\n\n${lines.join('\n')}\n\n💡 ETH masuk ke wallet creator. Pindahkan ke treasury: <code>/sweep 0xTreasury</code>.`);
   } catch (e) { await send(chatId, `❌ Claim gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
-  finally { unlockTrade(); }
+  finally { freeUserLock(); }
 }
 // ---- auto-sale: sell holdings across ALL already-created tokens ----
 async function doDumpAll(chatId, args) {
   const pct = args[0] ? Number(args[0]) : 100;
   if (!(pct > 0 && pct <= 100)) { await send(chatId, 'Format: <code>/dumpall 100</code> — jual 100% SEMUA token dari semua wallet.'); return; }
-  if (tradeBusy()) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
   const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
   if (!cas.length) { await send(chatId, 'Belum ada token yang di-launch.'); return; }
-  lockTrade();
+  await takeUserLock();
   try {
     await send(chatId, `🔻 DUMP ALL ${pct}% · ${cas.length} token · dari semua wallet…`);
     const res = await sellAllHoldings(provider, wallets, cas, pct);
@@ -489,7 +498,7 @@ async function doDumpAll(chatId, args) {
       for (const m of rep.messages) await send(chatId, m);
     }
   } catch (e) { await send(chatId, `❌ Dump gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
-  finally { unlockTrade(); }
+  finally { freeUserLock(); }
 }
 async function doAutoSale(chatId, args) {
   const a = (args[0] || '').toLowerCase();
@@ -871,7 +880,7 @@ async function autoSaleLoop() {
   for (;;) {
     if (!CFG.autoSaleOn) { await sleep(3000); continue; }
     const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
-    if (cas.length && !tradeBusy()) {
+    if (cas.length && !tradeBusy() && !userPriority) {
       lockTrade();
       try {
         const res = await sellAllHoldings(provider, wallets, cas, CFG.autoSalePct);
@@ -892,7 +901,7 @@ async function autoSaleLoop() {
 async function reactLoop() {
   for (;;) {
     if (!CFG.reactOn) { await sleep(3000); continue; }
-    if (!tradeBusy()) {
+    if (!tradeBusy() && !userPriority) {
       lockTrade();
       try {
         const { actions } = await reactToBuys(provider, wallets, state.react);
@@ -912,7 +921,7 @@ async function reactLoop() {
 async function guardLoop() {
   for (;;) {
     if (!CFG.capGuardOn) { await sleep(3000); continue; }
-    if (!tradeBusy()) {
+    if (!tradeBusy() && !userPriority) {
       lockTrade();
       try {
         const acted = await capGuard(provider, wallets, CFG.capCeilingEth);
