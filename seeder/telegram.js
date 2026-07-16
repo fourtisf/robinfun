@@ -656,7 +656,9 @@ async function doPnl(chatId, args) {
     `\n<b>━ Trading (dari histori chain) ━</b>\n` +
     `📤 Total beli+deploy: <b>${cf.spent.toFixed(4)} ETH</b>${u(cf.spent)}  <i>(${state.launched || 0} launch)</i>\n` +
     `📥 Total balik dari jual: <b>${cf.tradeIn.toFixed(4)} ETH</b>${u(cf.tradeIn)}\n` +
-    `📉 <b>Biaya/rugi trading ≈ ${tradeLoss.toFixed(4)} ETH</b>${u(Math.abs(tradeLoss))}  <i>(fee + slippage + LP burned)</i>\n` +
+    (tradeLoss >= 0
+      ? `📉 <b>Biaya/rugi trading ≈ ${tradeLoss.toFixed(4)} ETH</b>${u(Math.abs(tradeLoss))}  <i>(fee + slippage + LP burned — belum ada pembeli asli yg nutup)</i>\n`
+      : `📈 <b>Untung trading ≈ +${(-tradeLoss).toFixed(4)} ETH</b>${u(Math.abs(tradeLoss))}  <i>(total jual &gt; beli — pembeli asli masuk; profit biasanya sudah di /sweep ke treasury)</i>\n`) +
     `\n<b>━ Per wallet ━</b>\n${perLines.join('\n')}\n` +
     `\n<i>Setoranmu (cek /wallets sebelum trading) − Total di atas = rugi. Deposit tidak dihitung otomatis karena bridge tidak terbaca akurat.</i>` +
     (held ? `\n💡 Jual sisa token dulu (<code>/dumpall</code>) lalu <code>/pnl</code> lagi.` : ''));
