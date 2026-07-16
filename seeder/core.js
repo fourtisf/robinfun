@@ -783,8 +783,10 @@ async function heldTokens(wallets) {
         let bal = 0n; try { bal = BigInt(t.balance || '0'); } catch (_) {}
         if (!ca || !ethers.isAddress(ca) || bal <= 0n) continue;
         const k = ca.toLowerCase();
-        if (!byCa.has(k)) byCa.set(k, { ca, holders: [] });
-        byCa.get(k).holders.push(w.address);
+        if (!byCa.has(k)) byCa.set(k, { ca, symbol: t.symbol || '', name: t.name || '', decimals: Number(t.decimals || 18), holders: [], totalRaw: 0n });
+        const e = byCa.get(k);
+        e.holders.push({ address: w.address, balanceRaw: bal });
+        e.totalRaw += bal;
       }
     } catch (_) {}
   });

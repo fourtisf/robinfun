@@ -101,13 +101,14 @@ async function broadcast(text, extra) { for (const id of state.admins) { await s
 async function answerCb(id, text) { return tg('answerCallbackQuery', { callback_query_id: id, ...(text ? { text } : {}) }); }
 
 // Detailed, chunked sale report (own module so it's unit-testable without booting the bot).
-const { renderSaleReport } = require('./salereport');
+const { renderSaleReport, fmtNum } = require('./salereport');
 const isAdmin = (id) => state.admins.map(String).includes(String(id));
 function menu() {
   return { reply_markup: { inline_keyboard: [
     [{ text: state.running ? '⏸️ Stop' : '▶️ Go', callback_data: state.running ? 'stop' : 'go' }, { text: '📊 Status', callback_data: 'status' }],
     [{ text: '💰 Wallets', callback_data: 'wallets' }, { text: '🌉 Bridge', callback_data: 'bridge' }],
     [{ text: '📈 Stats', callback_data: 'stats' }, { text: '🆕 History (MC)', callback_data: 'last' }],
+    [{ text: '📊 Porto — sisa token', callback_data: 'porto' }],
   ] } };
 }
 
@@ -132,7 +133,8 @@ Bot bikin ${wallets.length} wallet sendiri. Isi ETH → (bridge) → /go.
 <b>/earnings</b> — 💸 reward creator (levy fee) yg belum diklaim
 <b>/claim</b> — 💸 klaim SEMUA reward creator ke wallet
 <b>/autosale on|off</b> — 🔻 auto-jual holding di SEMUA token berkala
-<b>/dumpall</b> [%] — 🔻 jual SEKARANG semua token dari semua wallet
+<b>/porto</b> — 📊 lihat CEPAT token yang MASIH dipegang tiap wallet
+<b>/dumpall</b> [%] — 🔻 jual SEKARANG semua token yang tersisa
 <b>/pnl</b> — 📊 rugi/untung (saldo + treasury + fee)
 <b>/pnltoken</b> — 📊 rugi PER TOKEN (wallet mana beli apa)
 <b>/setdeposit</b> 1.0 — 📥 catat total ETH yang kamu setor
@@ -494,27 +496,43 @@ async function doClaim(chatId) {
   } catch (e) { await send(chatId, `❌ Claim gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
   finally { freeUserLock(); }
 }
+// ---- /porto: FAST view of tokens the wallets still HOLD (explorer, no chain scan) ----
+async function doPorto(chatId) {
+  await send(chatId, '📊 Baca token yang masih dipegang…');
+  const held = await heldTokens(wallets).catch(() => []);
+  if (!held.length) { await send(chatId, '✅ Bersih — nggak ada token tersisa di wallet manapun (semua saldo 0).'); return; }
+  const idx = {}; wallets.forEach((w, i) => { idx[w.address.toLowerCase()] = i + 1; });
+  held.sort((a, b) => (b.totalRaw > a.totalRaw ? 1 : b.totalRaw < a.totalRaw ? -1 : 0));
+  const lines = held.slice(0, 40).map((h) => {
+    const tot = Number(ethers.formatUnits(h.totalRaw, h.decimals || 18));
+    const who = h.holders.map((x) => 'W' + (idx[x.address.toLowerCase()] || '?')).join(',');
+    return `• $${esc(h.symbol || '?')} <code>${h.ca.slice(0, 10)}…</code> — <b>${fmtNum(tot)}</b> (${who})`;
+  });
+  await send(chatId,
+    `📊 <b>Token tersisa</b> — <b>${held.length}</b> token masih dipegang\n` +
+    `<i>W1..W${wallets.length} = wallet (urutan /wallets)</i>\n\n` +
+    `${lines.join('\n')}${held.length > 40 ? `\n… +${held.length - 40} lagi` : ''}\n\n` +
+    `🔻 Jual SEMUA: <code>/dumpall 100</code>  ·  jual satu: <code>/sell &lt;CA&gt; 100</code>`);
+}
 // ---- auto-sale: sell holdings across ALL already-created tokens ----
 async function doDumpAll(chatId, args) {
   const pct = args[0] ? Number(args[0]) : 100;
   if (!(pct > 0 && pct <= 100)) { await send(chatId, 'Format: <code>/dumpall 100</code> — jual 100% SEMUA token dari semua wallet.'); return; }
-  // Chain-truth: dump every token the wallets HOLD or CREATED — union of
-  //   (a) tokens we created (ownedCached, recovers old dev-buy bags), and
-  //   (b) tokens we currently HOLD but may NOT have created (heldTokens via the
-  //       explorer) — e.g. bought via react-to-buy or another wallet's launch.
-  // (b) is what fixes "blockscout shows I hold ASTROR/COMFY but /dumpall missed it".
-  const owned = await ownedCached();
+  // FAST: the explorer already knows exactly which tokens each wallet HOLDS
+  // (balance>0) — dump just that SHORT list instead of probing all ~169 created
+  // tokens on-chain (which is what made this crawl). Fall back to the full
+  // created-token scan only if the explorer returns nothing (down / lagging).
+  let scanNote = '';
   const held = await heldTokens(wallets).catch(() => []);
-  const caMap = new Map();
-  for (const r of (owned || [])) if (r.ca && ethers.isAddress(r.ca)) caMap.set(r.ca.toLowerCase(), r.ca);
-  for (const h of held) if (h.ca && ethers.isAddress(h.ca)) caMap.set(h.ca.toLowerCase(), h.ca);
-  let cas = [...caMap.values()];
-  if (!cas.length) cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));   // fallback if the chain read failed
-  if (!cas.length) { await send(chatId, 'Belum ada token yang di-launch.'); return; }
-  // Transparency: warn if the chain scan couldn't read every token (a flaky RPC can
-  // drop some even after retries) — never pretend a partial scan covered everything.
-  const scanFailed = (owned && owned.scanFailed) || 0;
-  const scanNote = scanFailed > 0 ? `\n⚠️ <b>${scanFailed} token gagal dibaca</b> (RPC lelet) — belum tentu ke-cek. Ulangi <code>/dumpall</code> sebentar lagi buat pastikan bersih.` : '';
+  let cas = held.map((h) => h.ca).filter((ca) => ca && ethers.isAddress(ca));
+  if (!cas.length) {
+    const owned = await ownedCached();
+    cas = (owned || []).map((r) => r.ca).filter((ca) => ca && ethers.isAddress(ca));
+    const sf = (owned && owned.scanFailed) || 0;
+    if (sf > 0) scanNote = `\n⚠️ <b>${sf} token gagal dibaca</b> (RPC lelet) — ulangi <code>/dumpall</code> sebentar lagi buat pastikan bersih.`;
+  }
+  if (!cas.length) cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));   // last-resort fallback
+  if (!cas.length) { await send(chatId, '✅ Nggak ada token tersisa yang dipegang wallet (semua sudah 0).'); return; }
   await takeUserLock();
   try {
     await send(chatId, `🔻 DUMP ALL ${pct}% · ${cas.length} token · dari semua wallet…`);
@@ -765,6 +783,7 @@ async function dispatch(chatId, cmd, args) {
     case '/gas': case '/gasgwei': doGas(chatId, args).catch((e) => send(chatId, 'Gas error: ' + esc(e.message || String(e)))); break;
     case '/capguard': doCapGuard(chatId, args).catch((e) => send(chatId, 'Guard error: ' + esc(e.message || String(e)))); break;
     case '/capmax': await setCfg(chatId, 'capCeilingEth', args[0], (v) => Number.isFinite(Number(v)) && Number(v) >= 0.1 && Number(v) < 2.6, 'batas pool (ETH, < 2.6)'); break;
+    case '/porto': case '/portfolio': case '/holdings': doPorto(chatId).catch((e) => send(chatId, 'Porto error: ' + esc(e.message || String(e)))); break;
     case '/dumpall': doDumpAll(chatId, args).catch((e) => send(chatId, 'Dump error: ' + esc(e.message || String(e)))); break;
     case '/pnl': case '/profit': doPnl(chatId, args).catch((e) => send(chatId, 'P&L error: ' + esc(e.message || String(e)))); break;
     case '/pnltoken': case '/pnltokens': doPnlToken(chatId).catch((e) => send(chatId, 'P&L token error: ' + esc(e.message || String(e)))); break;
@@ -1043,6 +1062,7 @@ async function main() {
     { command: 'gas', description: 'Pilih gas: /gas cheap (termurah) / /gas 0.01 / /gas auto' },
     { command: 'capguard', description: 'Anti-graduate: jual semua sebelum pool graduate: /capguard on' },
     { command: 'capmax', description: 'Batas pool sebelum jual semua (ETH): /capmax 2' },
+    { command: 'porto', description: 'Lihat cepat token yang masih dipegang' },
     { command: 'dumpall', description: 'Jual SEKARANG semua token: /dumpall 100' },
     { command: 'pnl', description: 'Rugi/untung (saldo + treasury + fee)' },
     { command: 'pnltoken', description: 'Rugi PER TOKEN (wallet mana beli apa)' },
