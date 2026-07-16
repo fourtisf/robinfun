@@ -667,6 +667,33 @@ async function gasOverrides(chainKey) {
   return { gasPrice: (floor > 0n && floor > want) ? floor : want };
 }
 async function waitBounded(tx) { try { return await tx.wait(1, 180000); } catch (e) { if (e && e.code === 'TIMEOUT') return null; throw e; } }
+async function waitHash(hash, chainKey) { try { return await providerFor(chainKey).waitForTransaction(hash, 1, 180000); } catch (e) { if (e && e.code === 'TIMEOUT') return null; throw e; } }
+// Broadcast a signed write WITHOUT ethers' send/estimate path. On the Robinhood node
+// ethers' own send can throw an opaque "could not coalesce error" / "missing revert
+// data" because the node returns a non-standard JSON-RPC error envelope and strips
+// custom-error/revert data on eth_estimateGas. We sign locally and POST
+// eth_sendRawTransaction ourselves, so the node's REAL reason reaches the user (e.g. a
+// beta-allowlist NotAllowed) instead of an ethers wrapper. Returns the tx hash.
+async function rawSend(wallet, chainKey, to, data, gasLimit, value) {
+  const prov = providerFor(chainKey);
+  const ch = chainOf(chainKey);
+  const gasO = await gasOverrides(chainKey);
+  let gasPrice = gasO.gasPrice;
+  if (!gasPrice || gasPrice <= 0n) { try { const fd = await prov.getFeeData(); gasPrice = fd.gasPrice; } catch (_) {} }
+  if (!gasPrice || gasPrice <= 0n) gasPrice = ethers.parseUnits('0.02', 'gwei');
+  const nonce = await prov.getTransactionCount(wallet.address, 'pending');
+  const signed = await wallet.signTransaction({ to, data, value: value || 0n, gasLimit, gasPrice, nonce, chainId: ch.chainId, type: 0 });
+  let j = null;
+  try {
+    const r = await fetch(ch.rpc, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'eth_sendRawTransaction', params: [signed] }), signal: AbortSignal.timeout(25000) });
+    j = await r.json();
+  } catch (_) {
+    const resp = await prov.broadcastTransaction(signed); return resp.hash;   // network hiccup on the POST → ethers fallback
+  }
+  if (j && j.error) throw new Error((j.error && (j.error.message || JSON.stringify(j.error))) || 'node rejected the transaction');
+  if (!j || !j.result) throw new Error('no transaction hash returned by the node');
+  return j.result;
+}
 async function ensureApprove(wallet, ca, spender, amount, chainKey) {
   const erc = new ethers.Contract(ca, ERC20_ABI, wallet);
   const cur = await erc.allowance(wallet.address, spender).catch(() => 0n);
@@ -826,11 +853,16 @@ async function sell(chatId, ca, pct, chainKey, walletId) {
         }
       }
       if (!ok) throw new Error('could not quote this sell (try again)');
-      // Pass an explicit gasLimit so ethers never calls the Robinhood node's flaky
-      // eth_estimateGas on the send (it can return empty data → "missing revert data").
-      let gasLimit; try { gasLimit = (await cc.sell.estimateGas(sellAmt, minEth, deadline)) * 12n / 10n; } catch (_) { gasLimit = 600000n; }
-      const tx = await cc.sell(sellAmt, minEth, deadline, { ...gas, gasLimit });
-      venue = 'curve'; hash = tx.hash; trc = await waitBounded(tx);
+      // Sign + raw-broadcast with a fixed generous gasLimit — NEVER let ethers run
+      // eth_estimateGas or its send path on the quirky Robinhood node (that is what
+      // throws the opaque "could not coalesce error" / "missing revert data"). A curve
+      // sell is bounded work, so 600k is safe headroom; rawSend surfaces the node's real
+      // reason if it rejects (e.g. a private-beta NotAllowed).
+      const data = cc.interface.encodeFunctionData('sell', [sellAmt, minEth, deadline]);
+      hash = await rawSend(wallet, chainKey, curve, data, 600000n);
+      venue = 'curve';
+      trc = await waitHash(hash, chainKey);
+      if (trc && trc.status === 0) throw new Error('the sell reverted on-chain — you may not be allowed to sell this token yet (private beta), or try a slightly smaller amount. Tx: ' + hash);
     } else {
       const router = new ethers.Contract(chain.router, ROUTER_ABI, wallet);
       let expEth = 0n;
@@ -1033,6 +1065,6 @@ module.exports = {
   tradeSelection, setTradeAll, toggleTradeWallet, tradeWalletIds,
   addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
   feePayoutEnabled, payFromFeeWallet,
-  resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, tokenAcrossWallets, ethUsd, gasOverrides,
+  resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, tokenAcrossWallets, ethUsd, gasOverrides, rawSend,
   buy, sell, withdraw, portfolio, portfolioAll, DB,
 };
