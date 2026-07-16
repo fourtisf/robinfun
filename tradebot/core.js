@@ -19,6 +19,27 @@ const path = require('path');
 const chains = require('./chains');
 const { providerFor, chainOf, isEnabled, DEFAULT_CHAIN } = chains;
 
+// Load tradebot/.env (KEY=VALUE lines) into process.env BEFORE config is read.
+// Zero-dependency, no dotenv. A real environment variable ALWAYS wins over the
+// file (we only fill values that are unset), so pm2 --update-env / systemd env
+// still override. Keeps secrets (TRADEBOT_TOKEN, WALLET_SECRET) out of git.
+(function loadDotEnv() {
+  try {
+    const file = path.join(__dirname, '.env');
+    if (!fs.existsSync(file)) return;
+    for (let line of fs.readFileSync(file, 'utf8').split(/\r?\n/)) {
+      line = line.trim();
+      if (!line || line.startsWith('#')) continue;
+      const eq = line.indexOf('=');
+      if (eq < 0) continue;
+      const key = line.slice(0, eq).trim();
+      let val = line.slice(eq + 1).trim();
+      if (val.length >= 2 && ((val[0] === '"' && val.endsWith('"')) || (val[0] === "'" && val.endsWith("'")))) val = val.slice(1, -1);
+      if (key && process.env[key] === undefined) process.env[key] = val;
+    }
+  } catch (_) { /* never let env parsing crash the bot */ }
+})();
+
 // ---------------------------------------------------------------- config
 const CFG = {
   tgToken:   (process.env.TRADEBOT_TOKEN || process.env.TELEGRAM_BOT_TOKEN || '').trim(),
