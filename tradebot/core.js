@@ -246,7 +246,11 @@ function ensureUser(chatId, referredBy) {
       if (typeof s.slippage !== 'number') { s.slippage = 0; ch = true; }                                   // 0 → 5% default
       if (!Array.isArray(s.buyPresets) || s.buyPresets.length !== 3 || !s.buyPresets.every((x) => x > 0)) { s.buyPresets = DEFAULT_BUY_PRESETS.slice(); ch = true; }
       if (typeof s.autoBuy !== 'boolean') { s.autoBuy = false; ch = true; }
-      if (typeof s.autoBuyAmount !== 'string' || !(Number(s.autoBuyAmount) > 0)) { s.autoBuyAmount = '0.01'; ch = true; } }
+      if (typeof s.autoBuyAmount !== 'string' || !(Number(s.autoBuyAmount) > 0)) { s.autoBuyAmount = '0.01'; ch = true; }
+      if (typeof s.confirmBuy !== 'boolean') { s.confirmBuy = false; ch = true; }
+      if (typeof s.expert !== 'boolean') { s.expert = false; ch = true; }
+      if (!s.notify || typeof s.notify !== 'object') { s.notify = { snipe: true, copy: true, alerts: true }; ch = true; }
+      if (!s.presetsByChain || typeof s.presetsByChain !== 'object') { s.presetsByChain = {}; ch = true; } }
     // Write THROUGH if we just minted a key in the backfill (durability), else debounce.
     if (minted) saveStoreNow(); else if (ch) saveStore();
     return u;
@@ -262,7 +266,7 @@ function ensureUser(chatId, referredBy) {
     snipe: { ethAmount: '0.01', chains: { robinhood: false } },
     alerts: [], copy: { on: false, targets: [] },
     refEarnedEth: 0,
-    settings: { slippage: 0, buyPresets: DEFAULT_BUY_PRESETS.slice(), autoBuy: false, autoBuyAmount: '0.01' },
+    settings: { slippage: 0, buyPresets: DEFAULT_BUY_PRESETS.slice(), autoBuy: false, autoBuyAmount: '0.01', confirmBuy: false, expert: false, notify: { snipe: true, copy: true, alerts: true }, presetsByChain: {} },
   };
   DB.users[id] = u; DB.refByCode[code] = id;
   saveStoreNow();   // write-through: the encrypted key must be durable before we return the address
@@ -386,10 +390,17 @@ function setCopyOn(chatId, on) {
 // Getter that RE-ASSERTS the render constraint the setter enforces (short plain
 // decimal, ≤100), so the token card can never build an invalid/oversized callback
 // even if the store was hand-edited. Falls back to the defaults if anything's off.
-function buyPresets(u) {
-  const s = (u && u.settings) || {};
+function _presetsOk(a) {
   const okOne = (x) => x > 0 && x <= 100 && String(x).length <= 6 && !/e/i.test(String(x));
-  return (Array.isArray(s.buyPresets) && s.buyPresets.length === 3 && s.buyPresets.every(okOne)) ? s.buyPresets : DEFAULT_BUY_PRESETS;
+  return Array.isArray(a) && a.length === 3 && a.every(okOne);
+}
+// Quick-buy amounts. Per-chain override (settings.presetsByChain[chainKey]) wins,
+// then the global settings.buyPresets, then the default. Chain amounts differ in
+// value (0.01 ETH != 0.01 BNB) so a per-chain default is genuinely useful.
+function buyPresets(u, chainKey) {
+  const s = (u && u.settings) || {};
+  if (chainKey && s.presetsByChain && _presetsOk(s.presetsByChain[chainKey])) return s.presetsByChain[chainKey];
+  return _presetsOk(s.buyPresets) ? s.buyPresets : DEFAULT_BUY_PRESETS;
 }
 function setSlippage(chatId, pct) {
   const u = ensureUser(chatId);
@@ -398,7 +409,9 @@ function setSlippage(chatId, pct) {
   u.settings.slippage = n; saveStore();
   return n;
 }
-function setBuyPresets(chatId, input) {
+// Set the 3 quick-buy amounts. If chainKey is given, they apply to THAT chain only
+// (settings.presetsByChain[chainKey]); otherwise they set the global default.
+function setBuyPresets(chatId, input, chainKey) {
   const u = ensureUser(chatId);
   const toks = String(input).trim().split(/[\s,]+/).filter(Boolean);
   if (toks.length !== 3) throw new Error('give exactly 3 positive amounts, e.g. "0.01 0.05 0.1"');
@@ -413,7 +426,9 @@ function setBuyPresets(chatId, input) {
     if (!(n > 0) || n > 100 || String(n).length > 6 || /e/i.test(String(n))) throw new Error('keep each amount a short plain number ≤ 100 (e.g. 0.01 0.05 0.1)');
     nums.push(n);
   }
-  u.settings.buyPresets = nums; saveStore();
+  if (chainKey && isEnabled(chainKey)) { u.settings.presetsByChain = u.settings.presetsByChain || {}; u.settings.presetsByChain[chainKey] = nums; }
+  else u.settings.buyPresets = nums;
+  saveStore();
   return nums;
 }
 function setAutoBuy(chatId, on, amount) {
@@ -422,6 +437,25 @@ function setAutoBuy(chatId, on, amount) {
   if (amount !== undefined && amount !== null) { const a = Number(amount); if (!(a > 0)) throw new Error('amount must be > 0'); u.settings.autoBuyAmount = String(a); }
   saveStore();
   return { autoBuy: u.settings.autoBuy, autoBuyAmount: u.settings.autoBuyAmount };
+}
+// Confirm-before-buy: when ON, a buy asks for a Yes/No confirmation first.
+function setConfirmBuy(chatId, on) { const u = ensureUser(chatId); u.settings.confirmBuy = !!on; saveStore(); return u.settings.confirmBuy; }
+// Expert/fast mode: skip the intermediate "⏳ Buying…" progress messages.
+function setExpert(chatId, on) { const u = ensureUser(chatId); u.settings.expert = !!on; saveStore(); return u.settings.expert; }
+// Per-type notification toggles (snipe / copy / alerts). Orders always notify.
+const NOTIFY_TYPES = ['snipe', 'copy', 'alerts'];
+function setNotify(chatId, type, on) {
+  const u = ensureUser(chatId);
+  if (!NOTIFY_TYPES.includes(type)) throw new Error('unknown notify type');
+  u.settings.notify = u.settings.notify || {};
+  u.settings.notify[type] = !!on; saveStore();
+  return u.settings.notify;
+}
+function notifyOn(chatId, type) {
+  const u = getUser(chatId); if (!u) return true;
+  const n = u.settings && u.settings.notify;
+  if (!n || typeof n !== 'object' || n[type] === undefined) return true;   // default ON
+  return !!n[type];
 }
 
 // ---------------------------------------------------------------- chain reads
@@ -799,6 +833,7 @@ module.exports = {
   loadStore, saveStore, saveStoreNow, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, setChain,
   walletList, walletById, activeWallet, activeAddress, addWallet, switchWallet, removeWallet, listWallets, WALLET_CAP,
   buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
+  setConfirmBuy, setExpert, setNotify, notifyOn, NOTIFY_TYPES,
   addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
   feePayoutEnabled, payFromFeeWallet,
   resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, ethUsd, gasOverrides,

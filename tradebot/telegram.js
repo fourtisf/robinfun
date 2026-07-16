@@ -173,7 +173,7 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   // Encode the card's chain AND wallet index in every action, so a tap on a stale
   // card trades on the chain+wallet it was rendered for — never on whatever chain
   // or wallet merely happens to be active now.
-  const bp = core.buyPresets(u);   // user's quick-buy amounts (Settings)
+  const bp = core.buyPresets(u, chainKey);   // per-chain (or global) quick-buy amounts (Settings)
   const lastRow = [btn('🔔 Alert', `alt:${chainKey}:${wi}:${ca}`), btn('🔄 Refresh', `tok:${chainKey}:${wi}:${ca}`), btn('« Menu', 'menu')];
   if (goplus.supported(chainKey)) lastRow.unshift(btn('🛡 Safety', `sec:${chainKey}:${ca}`));   // GoPlus only on supported chains
   const kb = rows(
@@ -293,19 +293,41 @@ function settingsScreen(chatId) {
   const s = u.settings;
   const ch = core.chainOf(core.userChain(u));
   const slip = s.slippage > 0 ? s.slippage + '%' : 'default (5%)';
-  const bp = core.buyPresets(u).join(' · ');
+  const bp = core.buyPresets(u, ch.key).join(' · ');
+  const perChain = s.presetsByChain && s.presetsByChain[ch.key] ? ' <i>(set for this chain)</i>' : '';
+  const onoff = (b) => b ? '🟢 ON' : '⚪ OFF';
   return {
     text: `⚙️ <b>Settings</b>\n\n` +
       `Active chain: <b>${ch.emoji} ${esc(ch.name)}</b>\n` +
       `Slippage: <b>${esc(String(slip))}</b>\n` +
-      `Quick-buy buttons: <b>${esc(bp)} ${ch.native}</b>\n` +
+      `Quick-buy (${esc(ch.name)}): <b>${esc(bp)} ${ch.native}</b>${perChain}\n` +
+      `Confirm before buy: <b>${onoff(s.confirmBuy)}</b>\n` +
+      `Fast mode: <b>${onoff(s.expert)}</b>\n` +
       `Auto-buy on paste: <b>${s.autoBuy ? '🟢 ON · ' + esc(s.autoBuyAmount) + ' ' + ch.native : '⚪ OFF'}</b>\n\n` +
-      `<i>Slippage: max price move you'll accept. Quick-buy: the amounts shown on every token card. Auto-buy: paste a contract and it buys instantly (no card) — fast, but skips the safety card, so use it only for tokens you already trust.</i>`,
+      `<i>Quick-buy amounts are per-chain (0.01 ETH ≠ 0.01 BNB) — this sets them for ${esc(ch.name)}. Confirm-before-buy adds a Yes/No step. Fast mode skips the "buying…" messages. Auto-buy buys instantly on paste (skips the safety card).</i>`,
     kb: rows(
-      [btn('🌐 Chain', 'chain'), btn('📉 Slippage', 'setslip'), btn('⚡ Buy presets', 'setbp')],
+      [btn('🌐 Chain', 'chain'), btn('📉 Slippage', 'setslip'), btn(`⚡ Buy amounts`, 'setbp')],
+      [btn(`${s.confirmBuy ? '🔴 Confirm buy OFF' : '🟢 Confirm buy ON'}`, 'cbtog'), btn(`${s.expert ? '🔴 Fast mode OFF' : '🟢 Fast mode ON'}`, 'extog')],
       [btn(s.autoBuy ? '🔴 Auto-buy OFF' : '🟢 Auto-buy ON', 'abtog'), btn('✏️ Auto-buy amount', 'abamt')],
-      [btn('❔ Help', 'help'), btn('« Menu', 'menu')],
+      [btn('🔔 Notifications', 'ntf'), btn('❔ Help', 'help'), btn('« Menu', 'menu')],
     ),
+  };
+}
+function notifyScreen(chatId) {
+  const u = core.ensureUser(chatId);
+  const n = (u.settings && u.settings.notify) || {};
+  const on = (t) => (n[t] === undefined ? true : !!n[t]);
+  const row = (t, label) => [btn(`${on(t) ? '🟢' : '⚪'} ${label}`, `ntftog:${t}`)];
+  return {
+    text: `🔔 <b>Notifications</b>\n\nChoose which automatic DMs you get. Your own limit/TP/SL order fills always notify.`,
+    kb: {
+      inline_keyboard: [
+        row('snipe', 'Snipe fills'),
+        row('copy', 'Copy-trade fills'),
+        row('alerts', 'Price alerts'),
+        [btn('« Settings', 'set'), btn('« Menu', 'menu')],
+      ],
+    },
   };
 }
 async function safetyScreen(chatId, ca, chainKey) {
@@ -343,17 +365,31 @@ function walletIndex(chatId, walletId) {
   const i = core.walletList(u).findIndex((w) => w.id === id);
   return i >= 0 ? i + 1 : 1;
 }
+// Entry point for a buy from a tap/command. If the user enabled "Confirm before buy",
+// show a Yes/No confirmation first; otherwise execute immediately. (Auto-buy-on-paste
+// is deliberately instant and bypasses this.)
+async function requestBuy(chatId, ca, amt, chain, walletId) {
+  const u = core.ensureUser(chatId);
+  if (u.settings && u.settings.confirmBuy) {
+    const ch = core.chainOf(chain) || core.chainOf(core.userChain(u));
+    setPending(chatId, { action: 'confirm_buy', ca, amt: String(amt), chain, walletId });
+    return send(chatId, `🟢 <b>Confirm buy</b>\n\nBuy <b>${esc(String(amt))} ${ch.native}</b> of <code>${short(ca)}</code> on ${ch.emoji} ${esc(ch.name)}?`, rows([btn('✅ Confirm', 'bcok'), btn('✖ Cancel', 'bccancel')]));
+  }
+  return doBuy(chatId, ca, amt, chain, walletId);
+}
 async function doBuy(chatId, ca, amt, chain, walletId) {
+  const expert = core.ensureUser(chatId).settings.expert;
   try {
-    await send(chatId, `⏳ Buying ${esc(amt)} of <code>${short(ca)}</code>…`);
+    if (!expert) await send(chatId, `⏳ Buying ${esc(amt)} of <code>${short(ca)}</code>…`);
     const r = await core.buy(chatId, ca, amt, chain, walletId);
     const wi = walletIndex(chatId, walletId);
     await send(chatId, `✅ <b>Bought</b> ${fmt(r.gotTokens)} $${esc(r.sym)}\nSpent ${r.spentEth} ${r.native} · fee ${r.feeEth.toFixed(5)} · ${r.venue}\n${txLink(r.chain, r.hash)}`, rows([btn('🔄 Card', `tok:${r.chain}:${wi}:${ca}`), btn('📊 Portfolio', 'pos')]));
   } catch (e) { await send(chatId, `❌ Buy failed: ${esc(e.message || String(e))}`); }
 }
 async function doSell(chatId, ca, pct, chain, walletId) {
+  const expert = core.ensureUser(chatId).settings.expert;
   try {
-    await send(chatId, `⏳ Selling ${pct}% of <code>${short(ca)}</code>…`);
+    if (!expert) await send(chatId, `⏳ Selling ${pct}% of <code>${short(ca)}</code>…`);
     const r = await core.sell(chatId, ca, pct, chain, walletId);
     const wi = walletIndex(chatId, walletId);
     await send(chatId, `✅ <b>Sold</b> ${r.soldPct}%\nGot ${r.proceedsEth} ${r.native} · fee ${r.feeEth.toFixed(5)} · ${r.venue}\n${txLink(r.chain, r.hash)}`, rows([btn('🔄 Card', `tok:${r.chain}:${wi}:${ca}`), btn('📊 Portfolio', 'pos')]));
@@ -414,7 +450,7 @@ async function onMessage(m) {
   if (text === '/export') return askExport(chatId);
   if (text === '/admin') return adminScreen(chatId);
   if (text === '/menu' || text === '/help') return send(chatId, helpText(), mainMenu());
-  if (text.startsWith('/buy')) { const [, ca, amt] = text.split(/\s+/); if (isCa(ca) && amt) return doBuy(chatId, ca, amt); return send(chatId, 'Usage: <code>/buy &lt;contract&gt; &lt;amount&gt;</code> — or paste a contract address.'); }
+  if (text.startsWith('/buy')) { const [, ca, amt] = text.split(/\s+/); if (isCa(ca) && amt) return requestBuy(chatId, ca, amt); return send(chatId, 'Usage: <code>/buy &lt;contract&gt; &lt;amount&gt;</code> — or paste a contract address.'); }
   if (text.startsWith('/sell')) { const [, ca, pct] = text.split(/\s+/); if (isCa(ca) && pct) return doSell(chatId, ca, Number(pct)); return send(chatId, 'Usage: <code>/sell &lt;contract&gt; &lt;pct&gt;</code>'); }
 
   if (isCa(text)) {
@@ -450,6 +486,12 @@ async function onCallback(q) {
   const [k, ca, arg] = data.split(':');
   if (k !== 'oc' && k !== 'al') await answer(q.id);   // 'oc'/'al' answer with text in their handlers
 
+  if (data === 'bccancel') { pending.delete(chatId); return edit(chatId, mid, 'Buy cancelled.', mainMenu()); }
+  if (data === 'bcok') {
+    const pp = pending.get(chatId); pending.delete(chatId);
+    if (!pp || pp.action !== 'confirm_buy' || Date.now() - (pp.ts || 0) > PENDING_TTL) return send(chatId, 'Confirmation expired — tap Buy again.');
+    return doBuy(chatId, pp.ca, pp.amt, pp.chain, pp.walletId);
+  }
   if (data === 'wdcancel') { pending.delete(chatId); return send(chatId, 'Withdrawal cancelled.', mainMenu()); }
   if (data === 'wdok') {
     const pp = pending.get(chatId); pending.delete(chatId);
@@ -469,7 +511,11 @@ async function onCallback(q) {
   if (data === 'ref') { const s = referralScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'set') { const s = settingsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'setslip') { setPending(chatId, { action: 'slip_val' }); return send(chatId, 'Send your <b>slippage %</b> (e.g. <code>5</code>). <code>0</code> = default (5%). Max 50.'); }
-  if (data === 'setbp') { setPending(chatId, { action: 'bp_val' }); return send(chatId, 'Send <b>3 quick-buy amounts</b> separated by spaces, e.g. <code>0.01 0.05 0.1</code>:'); }
+  if (data === 'setbp') { const ck = core.userChain(core.ensureUser(chatId)); const cn = core.chainOf(ck); setPending(chatId, { action: 'bp_val', chain: ck }); return send(chatId, `Send <b>3 quick-buy amounts</b> for <b>${cn.emoji} ${esc(cn.name)}</b> (in ${cn.native}), separated by spaces, e.g. <code>0.01 0.05 0.1</code>:`); }
+  if (data === 'cbtog') { const u = core.ensureUser(chatId); try { core.setConfirmBuy(chatId, !u.settings.confirmBuy); } catch (_) {} const s = settingsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'extog') { const u = core.ensureUser(chatId); try { core.setExpert(chatId, !u.settings.expert); } catch (_) {} const s = settingsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'ntf') { const s = notifyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (k === 'ntftog') { const type = ca; try { core.setNotify(chatId, type, !core.notifyOn(chatId, type)); } catch (_) {} const s = notifyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'abtog') { const u = core.ensureUser(chatId); try { core.setAutoBuy(chatId, !u.settings.autoBuy); } catch (_) {} const s = settingsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'abamt') { setPending(chatId, { action: 'ab_amt' }); return send(chatId, 'Send the <b>auto-buy amount</b> to spend per paste (e.g. <code>0.02</code>):'); }
   if (k === 'sec') { const parts = data.split(':'); const s = await safetyScreen(chatId, parts[2], parts[1]); return edit(chatId, mid, s.text, s.kb); }
@@ -499,7 +545,7 @@ async function onCallback(q) {
     const wobj = core.walletList(core.ensureUser(chatId))[Number(wi) - 1];
     const wid = wobj ? wobj.id : undefined;   // stale/removed index → fall back to the active wallet
     if (k === 'tok') { const c = await tokenCard(chatId, tca, ch, wid); return edit(chatId, mid, c.text, c.kb); }
-    if (k === 'b') return doBuy(chatId, tca, a, ch, wid);
+    if (k === 'b') return requestBuy(chatId, tca, a, ch, wid);
     if (k === 's') return doSell(chatId, tca, Number(a), ch, wid);
     if (k === 'bx') { setPending(chatId, { action: 'buy_amt', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Send the amount to buy of <code>${short(tca)}</code>:`); }
     if (k === 'sx') { setPending(chatId, { action: 'sell_pct', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Sell what % of your <code>${short(tca)}</code> bag? Send a number 1–100:`); }
@@ -525,10 +571,11 @@ async function resolvePending(chatId, p, text, m) {
       try { const nw = core.addWallet(chatId, t); return send(chatId, `✅ <b>Wallet imported</b> — Wallet ${nw.index}\n<code>${nw.address}</code>\n\nIt's now active and your secret message was deleted. Trade as normal.`, rows([btn('💼 Wallet', 'wal'), btn('👛 Wallets', 'wallets')])); }
       catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e)) + '\n\n(Your message was deleted for safety — try Import again.)'); }
     }
-    if (p.action === 'buy_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); return doBuy(chatId, p.ca, t, p.chain, p.walletId); }
+    if (p.action === 'confirm_buy') { setPending(chatId, p); return send(chatId, 'Tap ✅ Confirm or ✖ Cancel above, or /cancel.'); }   // confirm is button-driven, not text
+    if (p.action === 'buy_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); return requestBuy(chatId, p.ca, t, p.chain, p.walletId); }
     if (p.action === 'sell_pct') { const pct = Number(t); if (!(pct > 0 && pct <= 100)) return send(chatId, 'Send a number 1–100.'); return doSell(chatId, p.ca, pct, p.chain, p.walletId); }
     if (p.action === 'slip_val') { const n = core.setSlippage(chatId, t); const s = settingsScreen(chatId); return send(chatId, `✅ Slippage set to <b>${n > 0 ? n + '%' : 'default (5%)'}</b>.`, s.kb); }
-    if (p.action === 'bp_val') { const arr = core.setBuyPresets(chatId, t); return send(chatId, `✅ Quick-buy buttons: <b>${arr.join(' · ')}</b>.`, settingsScreen(chatId).kb); }
+    if (p.action === 'bp_val') { const arr = core.setBuyPresets(chatId, t, p.chain); const cn = core.chainOf(p.chain); return send(chatId, `✅ Quick-buy for <b>${cn ? esc(cn.name) : 'this chain'}</b>: <b>${arr.join(' · ')}${cn ? ' ' + cn.native : ''}</b>.`, settingsScreen(chatId).kb); }
     if (p.action === 'ab_amt') { const r = core.setAutoBuy(chatId, undefined, t); return send(chatId, `✅ Auto-buy amount: <b>${esc(r.autoBuyAmount)}</b>.`, settingsScreen(chatId).kb); }
     if (p.action === 'snipe_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); core.setSnipeAmount(chatId, t); const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
     if (p.action === 'wd_addr') { if (!isCa(t)) return send(chatId, '❌ Not a valid address. Try /withdraw again.'); setPending(chatId, { action: 'wd_amt', to: t }); return send(chatId, `Amount to send to <code>${short(t)}</code> — a number, or <code>max</code>:`); }
@@ -623,7 +670,12 @@ async function start() {
   await getMe();
   await refreshPrices();
   setInterval(refreshPrices, 120000);
-  watchers.setNotifier((chatId, text, kb) => send(chatId, text, kb).catch(() => {}));
+  // `type` (snipe|copy|alerts) is gated by the user's notification settings; order
+  // fills / payouts pass no type and always notify.
+  watchers.setNotifier((chatId, text, kb, type) => {
+    if (type && !core.notifyOn(chatId, type)) return Promise.resolve();
+    return send(chatId, text, kb).catch(() => {});
+  });
   watchers.start();
   console.log(`Robinfun Trade Bot up as @${BOT_USERNAME || '?'} — chains: ${core.chains.ENABLED.join(', ')}`);
 
