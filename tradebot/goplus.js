@@ -32,11 +32,38 @@ function lpLockedPct(d) {
   return Math.min(100, locked * 100);
 }
 
+// Short-TTL cache + in-flight de-dup. The snipe/copy loops re-check the same fresh
+// token every few seconds; without this each check is a fresh HTTP round-trip that
+// adds latency to a cycle and can trip GoPlus rate limits. A good result is cached
+// briefly; a miss/error is cached for only a few seconds so an interactive re-scan
+// still retries quickly. Never throws (callers degrade to "no data" on null).
+const _secCache = new Map();   // 'cid:addr' -> { at, val }
+const _secInflight = new Map();
+const SEC_OK_TTL = Math.max(0, Number(process.env.GOPLUS_TTL_MS || 60000));       // cache a good result 60s
+const SEC_ERR_TTL = Math.max(0, Number(process.env.GOPLUS_ERR_TTL_MS || 8000));   // cache a miss/error 8s
+const SEC_CACHE_MAX = 5000;
+
 async function tokenSecurity(chainKey, ca) {
   const cid = GP_CHAIN[chainKey];
   if (!cid) return null;
   const addr = String(ca || '').toLowerCase();
   if (!/^0x[0-9a-f]{40}$/.test(addr)) return null;
+  const key = cid + ':' + addr;
+  const now = Date.now();
+  const hit = _secCache.get(key);
+  if (hit && (now - hit.at) < (hit.val ? SEC_OK_TTL : SEC_ERR_TTL)) return hit.val;
+  if (_secInflight.has(key)) return _secInflight.get(key);
+  const pr = (async () => {
+    const val = await _fetchSecurity(cid, addr, ca);   // never throws
+    if (_secCache.size >= SEC_CACHE_MAX) { const first = _secCache.keys().next().value; _secCache.delete(first); }
+    _secCache.set(key, { at: Date.now(), val });
+    return val;
+  })().finally(() => _secInflight.delete(key));
+  _secInflight.set(key, pr);
+  return pr;
+}
+
+async function _fetchSecurity(cid, addr, ca) {
   let j;
   try {
     const r = await fetch(`https://api.gopluslabs.io/api/v1/token_security/${cid}?contract_addresses=${addr}`, {

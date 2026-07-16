@@ -191,7 +191,7 @@ function historyScreen(chatId) {
   const wi = core.walletList(u).findIndex((x) => x.id === wal.id) + 1;
   const ch = core.chainOf(core.userChain(u));
   const h = core.getHistory(chatId);               // active wallet, newest first
-  const realized = core.realizedEth(wal, ch.key);  // active chain only
+  const realized = core.realizedEth(wal, ch.key);  // active chain only (out − in; net of cost still held)
   const rp = (realized >= 0 ? '+' : '') + realized.toFixed(4);
   if (!h.length) return { text: `🧾 <b>History</b> · Wallet ${wi}\n\nNo trades yet. Paste a token contract and buy to start.`, kb: rows([btn('🔄 Refresh', 'hist'), btn('« Menu', 'menu')]) };
   let body = '';
@@ -202,7 +202,7 @@ function historyScreen(chatId) {
       ? `🟢 <b>BUY</b> $${esc(t.sym || '')} · ${Number(t.ethAmount || 0).toFixed(4)} ${c.native} · ${when} ago\n`
       : `🔴 <b>SELL</b> $${esc(t.sym || '')} ${t.pct || 100}% · ${Number(t.ethAmount || 0).toFixed(4)} ${c.native} · ${when} ago\n`;
   }
-  return { text: `🧾 <b>History</b> · Wallet ${wi} · ${ch.emoji} ${esc(ch.name)}\nRealized PnL (this chain): <b>${rp} ${ch.native}</b>\n\n${body}`, kb: rows([btn('🔄 Refresh', 'hist'), btn('📊 Portfolio', 'pos'), btn('« Menu', 'menu')]) };
+  return { text: `🧾 <b>History</b> · Wallet ${wi} · ${ch.emoji} ${esc(ch.name)}\nNet PnL (this chain): <b>${rp} ${ch.native}</b>\n<i>proceeds − total cost; a partly-sold bag reads low until fully exited</i>\n\n${body}`, kb: rows([btn('🔄 Refresh', 'hist'), btn('📊 Portfolio', 'pos'), btn('« Menu', 'menu')]) };
 }
 function snipeScreen(chatId) {
   const u = core.ensureUser(chatId);
@@ -509,7 +509,7 @@ async function resolvePending(chatId, p, text, m) {
     if (p.action === 'slip_val') { const n = core.setSlippage(chatId, t); const s = settingsScreen(chatId); return send(chatId, `✅ Slippage set to <b>${n > 0 ? n + '%' : 'default (5%)'}</b>.`, s.kb); }
     if (p.action === 'bp_val') { const arr = core.setBuyPresets(chatId, t); return send(chatId, `✅ Quick-buy buttons: <b>${arr.join(' · ')}</b>.`, settingsScreen(chatId).kb); }
     if (p.action === 'ab_amt') { const r = core.setAutoBuy(chatId, undefined, t); return send(chatId, `✅ Auto-buy amount: <b>${esc(r.autoBuyAmount)}</b>.`, settingsScreen(chatId).kb); }
-    if (p.action === 'snipe_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); const u = core.ensureUser(chatId); u.snipe.ethAmount = String(Number(t)); core.saveStore(); const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
+    if (p.action === 'snipe_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); core.setSnipeAmount(chatId, t); const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
     if (p.action === 'wd_addr') { if (!isCa(t)) return send(chatId, '❌ Not a valid address. Try /withdraw again.'); setPending(chatId, { action: 'wd_amt', to: t }); return send(chatId, `Amount to send to <code>${short(t)}</code> — a number, or <code>max</code>:`); }
     if (p.action === 'wd_amt') {
       if (!(String(t).toLowerCase() === 'max' || Number(t) > 0)) return send(chatId, 'Send a positive amount, or <code>max</code>.');
@@ -547,7 +547,11 @@ async function resolvePending(chatId, p, text, m) {
       const meta = await core.tokenMeta(p.ca, ch.key);
       const snap = await core.tokenSnapshot(p.ca, ch.key).catch(() => null);   // infer direction from current price
       const curUsd = snap ? snap.priceEth * nativeUsd(ch.native) : null;
-      const dir = (curUsd != null && usdPrice < curUsd) ? 'below' : 'above';
+      // Don't GUESS the direction — a bad guess fires an immediate wrong-worded alert.
+      // For a fresh/illiquid token with no readable price, ask the user to retry.
+      if (!(curUsd > 0)) return send(chatId, 'Could not read the current price to set the alert direction — try again in a moment.');
+      if (Math.abs(usdPrice - curUsd) <= curUsd * 1e-6) return send(chatId, `That target ($${usdPrice}) is essentially the current price — pick a target clearly above or below it.`);
+      const dir = usdPrice < curUsd ? 'below' : 'above';
       watchers.addAlert(chatId, { ca: p.ca, sym: meta.sym, chain: ch.key, targetPriceEth: usdPrice / nativeUsd(ch.native), targetUsd: usdPrice, dir });
       return send(chatId, `✅ Alert set: I'll ping you when $${esc(meta.sym)} goes <b>${dir}</b> $${usdPrice}.`, rows([btn('🔔 Alerts', 'alerts')]));
     }

@@ -526,7 +526,7 @@ function _creditReferral(user, feeWei, chainKey) {
   // != 1 ETH). refOwed[chainKey] = wei string, settled per native.
   ref.refOwed = ref.refOwed || {};
   ref.refOwed[chainKey] = ((BigInt(ref.refOwed[chainKey] || '0')) + share).toString();
-  saveStore();
+  saveStoreNow();   // write-through: the fee already moved on-chain; don't lose the credit in the debounce window
 }
 function posKey(chainKey, ca) { return chainKey + ':' + ca.toLowerCase(); }
 // Append a trade to a wallet's history (newest last), bounded so the store can't grow forever.
@@ -589,7 +589,13 @@ async function buy(chatId, ca, ethAmount, chainKey, walletId) {
     // thrown) OR a positive balance change. Only "pending" if BOTH the receipt
     // timed out (null) AND the balance read shows no gain — so a successful buy
     // whose balance read merely failed isn't falsely retried (double-buy).
-    if (!trc && got <= 0n) throw new Error('trade sent but not confirmed / no tokens received yet — check your wallet before retrying. Tx: ' + hash);
+    if (!trc && got <= 0n) {
+      // Broadcast succeeded but we can't confirm the fill (receipt timed out AND the
+      // balance read shows no gain). The tx MAY still land, so tag it: callers that
+      // committed budget/dedup before the buy (copy-trade) must NOT roll it back.
+      const e = new Error('trade sent but not confirmed / no tokens received yet — check your wallet before retrying. Tx: ' + hash);
+      e.broadcast = true; throw e;
+    }
 
     const feeHash = await _chargeFee(wallet, fee, chainKey);
     if (feeHash) _creditReferral(u, fee, chainKey);
@@ -708,28 +714,39 @@ function feePayoutEnabled() {
   try { return !!CFG.feeWallet && new ethers.Wallet(CFG.feeWalletKey).address.toLowerCase() === CFG.feeWallet.toLowerCase(); }
   catch (_) { return false; }
 }
-// Pay `wei` native from the fee wallet to `to`. Nonce-serialized. Throws ONLY on a
-// clear pre-broadcast failure or an on-chain revert (safe to restore the debt);
-// once broadcast, a timeout/unknown returns { confirmed:false } so the caller never
-// double-pays.
+// Pay `wei` native from the fee wallet to `to`. Nonce-serialized. We build + sign
+// the tx LOCALLY, then broadcast as a distinct step, so failure classification is
+// exact: anything before broadcast (nonce/estimate/sign) throws plainly → the caller
+// may safely restore the debt; a failure DURING broadcast is tagged `e.ambiguous`
+// (the node may have accepted the tx) → the caller must NOT re-pay. A timeout while
+// waiting for the receipt returns { confirmed:false } (already broadcast → no re-pay).
 async function payFromFeeWallet(chainKey, to, wei) {
   if (!feePayoutEnabled()) throw new Error('fee payout disabled');
   if (!/^0x[0-9a-fA-F]{40}$/.test(String(to))) throw new Error('bad destination');
   wei = BigInt(wei);
   if (wei <= 0n) throw new Error('nothing to pay');
-  const signer = new ethers.Wallet(CFG.feeWalletKey, providerFor(chainKey));
+  const prov = providerFor(chainKey);
+  const signer = new ethers.Wallet(CFG.feeWalletKey, prov);
   return withWalletLock(signer.address, async () => {
     const bal = await ethBalance(signer.address, chainKey);
     const gas = await gasOverrides(chainKey);
     let gp = gas.gasPrice;
-    if (!gp) { try { const fd = await providerFor(chainKey).getFeeData(); gp = fd.gasPrice || fd.maxFeePerGas; } catch (_) {} }
+    if (!gp) { try { const fd = await prov.getFeeData(); gp = fd.gasPrice || fd.maxFeePerGas; } catch (_) {} }
     if (!gp || gp <= 0n) gp = ethers.parseUnits('0.1', 'gwei');
-    const gasCost = gp * 21000n * 2n;
-    if (wei + gasCost > bal) throw new Error('fee wallet balance too low for payout + gas');
-    const tx = await signer.sendTransaction({ to, value: wei, gasPrice: gp });   // pre-broadcast errors throw here → safe to restore
+    let gasLimit = 21000n;   // plain value transfer; bump if the chain estimates higher (e.g. Arbitrum L1 component)
+    try { const est = await prov.estimateGas({ from: signer.address, to, value: wei }); if (est > gasLimit) gasLimit = est + est / 5n; } catch (_) {}
+    if (wei + gp * gasLimit * 2n > bal) throw new Error('fee wallet balance too low for payout + gas');
+    // Everything up to broadcast is PRE-broadcast: a throw here means nothing was sent.
+    const nonce = await prov.getTransactionCount(signer.address, 'pending');
+    const signed = await signer.signTransaction({ to, value: wei, gasPrice: gp, gasLimit, nonce, chainId: chainOf(chainKey).chainId, type: 0 });
+    // Broadcast — from here on the node MAY have accepted the tx even if the RPC
+    // errors, so a throw is AMBIGUOUS and the caller must NOT restore the debt.
+    let tx;
+    try { tx = await prov.broadcastTransaction(signed); }
+    catch (e) { e.ambiguous = true; throw e; }
     let rc = null;
-    try { rc = await waitBounded(tx); } catch (_) { rc = null; }   // once broadcast, NEVER treat as failure (no re-pay)
-    if (rc && rc.status === 0) { const e = new Error('payout reverted'); e.reverted = true; throw e; }
+    try { rc = await waitBounded(tx); } catch (_) { rc = null; }   // already broadcast → never treat a wait failure as "not sent"
+    if (rc && rc.status === 0) { const e = new Error('payout reverted'); e.reverted = true; throw e; }   // reverted value-transfer returns the ETH → safe to restore
     return { hash: tx.hash, confirmed: !!rc };
   });
 }

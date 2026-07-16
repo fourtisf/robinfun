@@ -90,51 +90,66 @@ async function dexFactoryOf(chainKey) {
   } catch (_) {}
   return null;
 }
+// A getLogs/queryFilter error that means "the block range is too wide" (as opposed
+// to a transient timeout). On these we skip the cursor FORWARD rather than retrying
+// the same doomed range forever (which would livelock that chain's loop).
+function _isRangeError(e) {
+  const m = String((e && (e.message || e.info || e)) || '').toLowerCase();
+  if (/too many requests|rate.?limit|\b429\b/.test(m)) return false;   // transient → retry the range, don't skip past it
+  return /(too many results|more than \d+ results|query returned more than|block range|range is too|range too (large|wide|big)|response size|limited to|logs? .*range|\b10000\b|max.*results)/.test(m);
+}
+
 // Snipe brand-new DEX pairs on ETH/Base/BNB/Arbitrum for users who opted in per
 // chain. Honeypots are skipped; each armed user's ACTIVE wallet buys the amount.
+// Each chain scans INDEPENDENTLY and CONCURRENTLY so one slow/flaky RPC can't delay
+// sniping on the others.
 async function dexSnipeCycle() {
-  for (const ch of core.chains.enabledChains()) {
-    if (ch.curve) continue;   // Robinhood is handled by snipeCycle
-    const armed = core.allUsers().filter((u) => u.snipe && u.snipe.chains && u.snipe.chains[ch.key] && Number(u.snipe.ethAmount) > 0);
-    if (!armed.length) continue;
-    const prov = core.providerFor(ch.key);
-    let head; try { head = await prov.getBlockNumber(); } catch (_) { continue; }
-    const cursor = _dexSnipeCursor[ch.key];
-    if (!cursor || head < cursor) { _dexSnipeCursor[ch.key] = head; continue; }   // pin near head first pass (no backfill flood)
-    const factory = await dexFactoryOf(ch.key); if (!factory) { _dexSnipeCursor[ch.key] = head; continue; }
-    const from = Math.max(cursor + 1, head - SNIPE_MAX_SPAN);
-    if (from > head) { _dexSnipeCursor[ch.key] = head; continue; }
-    let evs = [];
-    try { const fc = new ethers.Contract(factory, PAIR_CREATED_ABI, prov); evs = await fc.queryFilter(fc.filters.PairCreated(), from, head); }
-    catch (_) { continue; }   // transient RPC error → keep cursor, retry the range next cycle
-    _dexSnipeCursor[ch.key] = head;
-    const weth = ch.weth.toLowerCase();
-    let processed = 0;
-    for (const e of evs) {
-      if (processed >= DEX_SNIPE_MAX_TOKENS) break;
-      const a = e.args || {};
-      const t0 = String(a.token0 || '').toLowerCase(), t1 = String(a.token1 || '').toLowerCase();
-      let token = null;
-      if (t0 === weth) token = a.token1; else if (t1 === weth) token = a.token0; else continue;   // only native-paired launches
-      if (!token) continue;
-      processed++;
-      if (goplus.supported(ch.key)) { const s = await goplus.tokenSecurity(ch.key, token).catch(() => null); if (s && (s.honeypot || s.cannotSellAll)) continue; }   // skip traps
-      await mapLimit(armed, SNIPE_CONCURRENCY, async (u) => {
-        const addr = core.activeAddress(u); if (!addr) return;
-        try {
-          const bal = await core.ethBalance(addr, ch.key);
-          const need = ethers.parseEther(String(u.snipe.ethAmount)) + ethers.parseEther(core.CFG.gasBufferEth);
-          if (bal < need) return;
-        } catch (_) { return; }
-        try {
-          const r = await core.buy(u.chatId, token, u.snipe.ethAmount, ch.key);
-          _notify(u.chatId, `🎯 <b>Sniped $${esc(r.sym)}</b> on ${ch.emoji} ${esc(ch.name)}\nBought ${fmt(r.gotTokens)} for ${r.spentEth} ${r.native}\n<code>${token}</code>\n${txLink(ch.key, r.hash)}`);
-        } catch (err) {
-          const now = Date.now(), key = u.chatId + ':' + ch.key;
-          if (now - (_snipeFailAt.get(key) || 0) > 300000) { _snipeFailAt.set(key, now); _notify(u.chatId, `⚠️ A snipe on ${esc(ch.name)} failed: ${esc(err.message || String(err))} (muted 5 min)`); }
-        }
-      });
-    }
+  const list = core.chains.enabledChains().filter((ch) => !ch.curve);   // Robinhood is handled by snipeCycle
+  await Promise.all(list.map((ch) => _dexSnipeChain(ch).catch((e) => console.error('dexsnipe', ch.key, (e && e.message) || e))));
+}
+async function _dexSnipeChain(ch) {
+  const armed = core.allUsers().filter((u) => u.snipe && u.snipe.chains && u.snipe.chains[ch.key] && Number(u.snipe.ethAmount) > 0);
+  if (!armed.length) return;
+  const prov = core.providerFor(ch.key);
+  let head; try { head = await prov.getBlockNumber(); } catch (_) { return; }
+  const cursor = _dexSnipeCursor[ch.key];
+  if (!cursor || head < cursor) { _dexSnipeCursor[ch.key] = head; return; }   // pin near head first pass (no backfill flood)
+  const factory = await dexFactoryOf(ch.key); if (!factory) { _dexSnipeCursor[ch.key] = head; return; }
+  const from = Math.max(cursor + 1, head - SNIPE_MAX_SPAN);
+  if (from > head) { _dexSnipeCursor[ch.key] = head; return; }
+  let evs = [];
+  try { const fc = new ethers.Contract(factory, PAIR_CREATED_ABI, prov); evs = await fc.queryFilter(fc.filters.PairCreated(), from, head); }
+  catch (e) { if (_isRangeError(e)) _dexSnipeCursor[ch.key] = head; return; }   // range too wide → skip forward; else keep cursor, retry next cycle
+  _dexSnipeCursor[ch.key] = head;
+  const weth = ch.weth.toLowerCase();
+  let processed = 0;
+  for (const e of evs) {
+    if (processed >= DEX_SNIPE_MAX_TOKENS) break;
+    const a = e.args || {};
+    const t0 = String(a.token0 || '').toLowerCase(), t1 = String(a.token1 || '').toLowerCase();
+    let token = null;
+    if (t0 === weth) token = a.token1; else if (t1 === weth) token = a.token0; else continue;   // only native-paired launches
+    if (!token) continue;
+    processed++;
+    // Skip anything GoPlus flags as DANGER (honeypot, can't-sell, pausable, owner-rug,
+    // blacklist, >10% tax). When GoPlus has no data yet (brand-new token) we proceed —
+    // sniping fresh launches is the whole point; blind-buy risk is bounded by the amount.
+    if (goplus.supported(ch.key)) { const s = await goplus.tokenSecurity(ch.key, token).catch(() => null); if (s && goplus.verdict(s).level === 'danger') continue; }
+    await mapLimit(armed, SNIPE_CONCURRENCY, async (u) => {
+      const addr = core.activeAddress(u); if (!addr) return;
+      try {
+        const bal = await core.ethBalance(addr, ch.key);
+        const need = ethers.parseEther(String(u.snipe.ethAmount)) + ethers.parseEther(core.CFG.gasBufferEth);
+        if (bal < need) return;
+      } catch (_) { return; }
+      try {
+        const r = await core.buy(u.chatId, token, u.snipe.ethAmount, ch.key);
+        _notify(u.chatId, `🎯 <b>Sniped $${esc(r.sym)}</b> on ${ch.emoji} ${esc(ch.name)}\nBought ${fmt(r.gotTokens)} for ${r.spentEth} ${r.native}\n<code>${token}</code>\n${txLink(ch.key, r.hash)}`);
+      } catch (err) {
+        const now = Date.now(), key = u.chatId + ':' + ch.key;
+        if (now - (_snipeFailAt.get(key) || 0) > 300000) { _snipeFailAt.set(key, now); _notify(u.chatId, `⚠️ A snipe on ${esc(ch.name)} failed: ${esc(err.message || String(err))} (muted 5 min)`); }
+      }
+    });
   }
 }
 
@@ -274,9 +289,10 @@ async function alertsCycle() {
     // ONE-SHOT: remove + persist BEFORE notifying, so a crash can't double-fire.
     u.alerts = u.alerts.filter((x) => x.id !== a.id);
     core.saveStoreNow();
-    const c = core.chainOf(chain) || { native: 'ETH' };
-    const kb = { inline_keyboard: [[{ text: '📈 Trade', callback_data: `tok:${chain}:1:${a.ca}` }]] };
-    _notify(u.chatId, `🔔 <b>Price alert</b> — $${esc(a.sym || '')} is now <b>${a.dir === 'above' ? 'above' : 'below'}</b> your target${a.targetUsd ? ' of $' + a.targetUsd : ''} on ${c.native === 'BNB' ? 'BNB Chain' : chain}.`, kb);
+    const c = core.chainOf(chain) || { native: 'ETH', name: chain, emoji: '' };
+    const wi = ((u.wallets || []).findIndex((w) => w.id === u.activeWalletId) + 1) || 1;   // active wallet (1-based), not a hardcoded #1
+    const kb = { inline_keyboard: [[{ text: '📈 Trade', callback_data: `tok:${chain}:${wi}:${a.ca}` }]] };
+    _notify(u.chatId, `🔔 <b>Price alert</b> — $${esc(a.sym || '')} is now <b>${a.dir === 'above' ? 'above' : 'below'}</b> your target${a.targetUsd ? ' of $' + a.targetUsd : ''} on ${c.emoji ? c.emoji + ' ' : ''}${esc(c.name || chain)}.`, kb);
   });
 }
 
@@ -289,17 +305,23 @@ async function alertsCycle() {
 const TRANSFER_TOPIC = ethers.id('Transfer(address,address,uint256)');
 const GET_PAIR_ABI = ['function getPair(address,address) view returns (address)'];
 const COPY_MAX_MIRRORS_PER_CYCLE = Math.max(1, Number(process.env.COPY_MAX_MIRRORS || 5));
-const _copyPair = {};   // chain:token -> pair (cached)
+const _copyPair = new Map();   // 'chain:token' -> { pair: string|null, at: ms }, BOUNDED
+const COPY_PAIR_MAX = 5000;
+const COPY_PAIR_NULL_TTL = 600000;   // a V2 pair address is permanent once it exists; re-check "no pair yet" every 10 min
 async function pairOf(chainKey, token) {
   const k = chainKey + ':' + String(token).toLowerCase();
-  if (k in _copyPair) return _copyPair[k];
+  const hit = _copyPair.get(k);
+  if (hit && (hit.pair || (Date.now() - hit.at) < COPY_PAIR_NULL_TTL)) return hit.pair;
   const factory = await dexFactoryOf(chainKey);
-  if (!factory) { _copyPair[k] = null; return null; }
+  if (!factory) return null;   // transient factory miss → don't cache (retry next time)
+  let pair = null;
   try {
     const p = await new ethers.Contract(factory, GET_PAIR_ABI, core.providerFor(chainKey)).getPair(token, core.chainOf(chainKey).weth);
-    _copyPair[k] = (p && p !== ethers.ZeroAddress) ? p.toLowerCase() : null;
-  } catch (_) { _copyPair[k] = null; }
-  return _copyPair[k];
+    pair = (p && p !== ethers.ZeroAddress) ? p.toLowerCase() : null;
+  } catch (_) { return null; }   // transient RPC error → don't cache a false "no pair"
+  if (_copyPair.size >= COPY_PAIR_MAX) { const first = _copyPair.keys().next().value; _copyPair.delete(first); }   // bound memory (drop oldest)
+  _copyPair.set(k, { pair, at: Date.now() });
+  return pair;
 }
 async function copyCycle() {
   const users = core.allUsers().filter((u) => u.copy && u.copy.on && Array.isArray(u.copy.targets) && u.copy.targets.length);
@@ -314,7 +336,7 @@ async function copyCycle() {
       if (from > head) { t.cursor = head; continue; }
       let logs = [];
       try { logs = await prov.getLogs({ fromBlock: from, toBlock: head, topics: [TRANSFER_TOPIC, null, ethers.zeroPadValue(t.address.toLowerCase(), 32)] }); }
-      catch (_) { continue; }   // transient error → keep cursor, retry
+      catch (e) { if (_isRangeError(e)) { t.cursor = head; core.saveStore(); }  continue; }   // range too wide → skip forward (don't livelock); else keep cursor, retry
       t.cursor = head;
       let mirrors = 0;
       for (const log of logs) {
@@ -327,9 +349,14 @@ async function copyCycle() {
         if (Number(t.spentEth) + Number(t.buyEth) > Number(t.maxEth) + 1e-12) continue;   // budget cap
         const pair = await pairOf(t.chain, token);
         if (!pair || pair !== fromAddr) continue;                          // not a swap-buy → skip (airdrop/transfer)
-        if (goplus.supported(t.chain)) { const s = await goplus.tokenSecurity(t.chain, token).catch(() => null); if (s && (s.honeypot || s.cannotSellAll)) continue; }
+        // Skip anything GoPlus flags as DANGER (honeypot/pausable/owner-rug/high-tax…);
+        // when GoPlus has no data we still mirror — worst-case loss stays bounded by maxEth.
+        if (goplus.supported(t.chain)) { const s = await goplus.tokenSecurity(t.chain, token).catch(() => null); if (s && goplus.verdict(s).level === 'danger') continue; }
         // Commit budget + dedup BEFORE spending (crash-safe: no double-mirror, budget can't be exceeded on restart).
-        t.bought = t.bought || {}; t.bought[token] = true;
+        t.bought = t.bought || {};
+        const boughtKeys = Object.keys(t.bought);
+        if (boughtKeys.length >= 2000) delete t.bought[boughtKeys[0]];   // hard cap the dedup map (drop oldest)
+        t.bought[token] = true;
         t.spentEth = Number(t.spentEth) + Number(t.buyEth);
         core.saveStoreNow();
         mirrors++;
@@ -337,8 +364,14 @@ async function copyCycle() {
           const r = await core.buy(u.chatId, token, t.buyEth, t.chain);
           _notify(u.chatId, `👥 <b>Copy-buy</b> $${esc(r.sym)} on ${ch.emoji} ${esc(ch.name)}\nFollowed <code>${short(t.address)}</code> · ${r.spentEth} ${r.native}\n<code>${token}</code>\n${txLink(t.chain, r.hash)}`);
         } catch (err) {
-          t.spentEth = Math.max(0, Number(t.spentEth) - Number(t.buyEth));   // buy didn't spend → give the budget back
-          core.saveStore();
+          // Only give the budget/dedup back when the buy CLEARLY didn't spend. If the tx
+          // was broadcast but couldn't be confirmed (err.broadcast), it may still land —
+          // keep the commit so we never double-spend the budget on the next cycle.
+          if (!err || !err.broadcast) {
+            t.spentEth = Math.max(0, Number(t.spentEth) - Number(t.buyEth));   // buy didn't spend → give the budget back
+            delete t.bought[token];                                            // and forget it (nothing bought → no dedup leak)
+            core.saveStoreNow();
+          }
           const now = Date.now(), key = u.chatId + ':copy:' + token;
           if (now - (_snipeFailAt.get(key) || 0) > 300000) { _snipeFailAt.set(key, now); _notify(u.chatId, `⚠️ Copy-buy of ${short(token)} failed: ${esc(err.message || String(err))} (muted 5 min)`); }
         }
@@ -360,17 +393,26 @@ async function payoutCycle() {
       const ch = core.chainOf(ck); if (!ch) continue;
       let wei; try { wei = BigInt(owed[ck] || '0'); } catch (_) { continue; }
       if (wei < minWei) continue;
-      // Deduct BEFORE paying so a crash can never overpay; restore only on a CLEAR
-      // failure (payFromFeeWallet throws only pre-broadcast / on revert).
+      // Deduct BEFORE paying so a crash can never overpay.
       owed[ck] = '0';
       core.saveStoreNow();
       try {
         const r = await core.payFromFeeWallet(ck, dest, wei);
         _notify(u.chatId, `💸 <b>Referral payout</b> — ${Number(ethers.formatEther(wei)).toFixed(5)} ${ch.native} sent to your wallet${r.confirmed ? '' : ' (confirming)'}.\n${txLink(ck, r.hash)}`);
       } catch (err) {
-        owed[ck] = wei.toString();   // nothing moved → restore the debt
-        core.saveStore();
-        console.error('payout', ck, err.message || err);
+        if (err && err.ambiguous) {
+          // The tx MAY have been accepted on-chain (broadcast errored after the node saw
+          // it). Re-paying could double-send real funds, so we do NOT restore — the debt
+          // stays cleared and we log it for manual review. Under-paying a small referral
+          // credit is far safer than double-paying from a hot wallet.
+          console.error('payout AMBIGUOUS (left cleared, verify manually)', ck, dest, wei.toString(), (err && err.message) || err);
+        } else {
+          // Nothing moved (pre-broadcast failure or clean revert) → give the debt back.
+          // ADDITIVELY: a concurrent referral credit may have landed since we zeroed it.
+          try { owed[ck] = (BigInt(owed[ck] || '0') + wei).toString(); } catch (_) { owed[ck] = wei.toString(); }
+          core.saveStoreNow();
+          console.error('payout', ck, (err && (err.message || err)) || 'unknown');
+        }
       }
     }
   }
