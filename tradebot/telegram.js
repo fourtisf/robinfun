@@ -10,6 +10,7 @@ const { ethers } = require('ethers');
 const core = require('./core');
 const watchers = require('./watchers');
 const goplus = require('./goplus');
+const tokeninfo = require('./tokeninfo');
 
 const API = `https://api.telegram.org/bot${core.CFG.tgToken}`;
 const pending = new Map();      // chatId -> { action, ..., ts }
@@ -38,6 +39,8 @@ const nativeUsd = (native) => PRICES[native] || 0;
 const usd = (amount, native) => nativeUsd(native) > 0 ? '$' + fmt(Number(amount) * nativeUsd(native)) : '—';
 const txLink = (chainKey, h) => { const c = core.chainOf(chainKey); return (h && c) ? `<a href="${c.explorer}/tx/${h}">tx ↗</a>` : ''; };
 const fmtEth = (wei) => { try { return Number(ethers.formatEther(wei)).toFixed(5); } catch (_) { return '0'; } };
+const taxStr = (t) => (t == null ? '?' : (Math.round(t * 10) / 10) + '%');
+function fmtAge(ms) { const s = Math.max(0, Math.floor((Date.now() - ms) / 1000)); if (s < 3600) return Math.floor(s / 60) + 'm'; if (s < 86400) return Math.floor(s / 3600) + 'h'; return Math.floor(s / 86400) + 'd'; }
 function setPending(chatId, obj) { obj.ts = Date.now(); pending.set(chatId, obj); }
 function activeChain(chatId) { return core.chainOf(core.userChain(core.ensureUser(chatId))); }
 
@@ -109,26 +112,48 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   const list = core.walletList(u);
   const w = (walletId && core.walletById(u, walletId)) || core.activeWallet(u);
   const wi = list.findIndex((x) => x.id === w.id) + 1;   // 1-based wallet index, encoded in every action
-  const snap = await core.tokenSnapshot(ca, chainKey).catch(() => null);
-  if (!snap) return { text: `❌ Couldn't price <code>${short(ca)}</code> on ${ch.emoji} ${esc(ch.name)} — no pool/curve found here. Switch chain if it trades elsewhere.`, kb: rows([btn('🌐 Switch chain', 'chain'), btn('« Menu', 'menu')]) };
+  // Rich scan: on-chain price/mcap + liquidity + Robinfun API (vol/socials) + GoPlus
+  // (tax/honeypot/holders/LP) — all best-effort, never throws (tokeninfo swallows).
+  const info = await tokeninfo.enrich(ca, chainKey).catch(() => null);
+  if (!info) return { text: `❌ Couldn't price <code>${short(ca)}</code> on ${ch.emoji} ${esc(ch.name)} — no pool/curve found here. Switch chain if it trades elsewhere.`, kb: rows([btn('🌐 Switch chain', 'chain'), btn('« Menu', 'menu')]) };
   const meta = await core.tokenMeta(ca, chainKey);
   const balRaw = await core.tokenBalance(ca, w.address, chainKey);
   const bal = Number(ethers.formatUnits(balRaw, meta.decimals));
   const pos = (w.positions || {})[chainKey + ':' + ca.toLowerCase()];
-  const valueEth = bal * snap.priceEth;
-  let bagLine = '';
-  if (pos && pos.ethIn > 0) {
-    const unreal = valueEth - (pos.ethIn - pos.ethOut);
-    bagLine = `\nYour bag: ${fmt(bal)} $${esc(meta.sym)} · ${usd(valueEth, ch.native)} · PnL <b>${unreal >= 0 ? '+' : ''}${unreal.toFixed(4)} ${ch.native}</b>`;
-  } else if (bal > 0) bagLine = `\nYour bag: ${fmt(bal)} $${esc(meta.sym)} · ${usd(valueEth, ch.native)}`;
-  const walletLine = list.length > 1 ? `\n<i>Trading with Wallet ${wi}</i>` : '';
-  const phase = snap.dex ? '◆ DEX' : (snap.graduated ? '◆ GRADUATED' : `◈ LISTED · ${snap.progressPct.toFixed(0)}%`);
-  const priceUsd = snap.priceEth * nativeUsd(ch.native);
-  const text =
-    `<b>${esc(meta.name)}</b>  $${esc(meta.sym)}  ·  ${ch.emoji} ${esc(ch.name)}\n` +
-    `<code>${ca}</code>\n${phase}\n\n` +
-    `Price: <b>${priceUsd > 0 ? '$' + priceUsd.toPrecision(3) : snap.priceEth.toExponential(2) + ' ' + ch.native}</b>\n` +
-    `Market cap: <b>${usd(snap.mcapEth, ch.native)}</b>${bagLine}${walletLine}`;
+  const nat = ch.native;
+  const api = info.api, sec = info.security;
+  const px = info.priceEth || 0;
+  const priceUsd = px * nativeUsd(nat);
+  const name = (api && api.name) || meta.name;
+  const sym = (api && api.symbol) || meta.sym;
+
+  const L = [];
+  L.push(`<b>${esc(name)}</b>  $${esc(sym)}  ·  ${ch.emoji} ${esc(ch.name)}`);
+  L.push(`<code>${ca}</code>`);
+  L.push(info.dex ? '◆ DEX' : (info.graduated ? '◆ GRADUATED' : `◈ LISTED · ${(info.progressPct || 0).toFixed(0)}%`));
+  if (sec) { const v = goplus.verdict(sec); if (v.level === 'danger') L.push(`🚨 <b>HIGH RISK</b>: ${esc(v.red.join(', '))}`); else if (v.level === 'warn') L.push(`⚠️ ${esc(v.warn.join(', '))}`); }
+  L.push('');
+  L.push(`💵 Price: <b>${priceUsd > 0 ? '$' + priceUsd.toPrecision(3) : px.toExponential(2) + ' ' + nat}</b>`);
+  const mcapUsd = (api && api.marketCapUsd) || (info.mcapEth * nativeUsd(nat));
+  L.push(`📊 Market cap: <b>${mcapUsd > 0 ? '$' + fmt(mcapUsd) : usd(info.mcapEth, nat)}</b>`);
+  if (info.liquidityNative != null) L.push(`💧 Liquidity: <b>${info.liquidityNative.toFixed(3)} ${nat}</b> (${usd(info.liquidityNative, nat)})`);
+  else if (info.raised != null) L.push(`💧 Raised: <b>${info.raised.toFixed(3)} / ${(info.target || 0).toFixed(2)} ${nat}</b> (bonding curve)`);
+  if (api && api.volume) L.push(`📈 Vol 24h: <b>${api.volume.h24Usd != null ? '$' + fmt(api.volume.h24Usd) : '—'}</b>${api.volume.totalUsd != null ? ' · total $' + fmt(api.volume.totalUsd) : ''}`);
+  const hLp = [];
+  if (sec && sec.holders != null) hLp.push(`👥 ${sec.holders} holders`);
+  if (sec && sec.lpLockedPct != null) hLp.push(`🔒 LP ${Math.round(sec.lpLockedPct)}% locked`);
+  else if (ch.curve && info.graduated) hLp.push('🔒 LP burned');
+  if (hLp.length) L.push(hLp.join('  ·  '));
+  if (sec) L.push(`🛡 Tax B/S: <b>${taxStr(sec.buyTaxPct)}/${taxStr(sec.sellTaxPct)}</b> · Honeypot: <b>${sec.honeypot ? '🔴 YES' : 'no'}</b>${sec.openSource === false ? ' · ⚠️ closed-source' : ''}`);
+  else if (ch.curve) L.push(`🛡 <b>Fair-launch</b> · 0% tax · fixed 1B supply · LP burned on graduation`);
+  const created = api && api.createdAt;
+  if (created) L.push(`⏱ Age: <b>${fmtAge(created)}</b>`);
+  if (api && api.links) { const lk = []; if (api.links.website) lk.push(`<a href="${esc(api.links.website)}">Web</a>`); if (api.links.twitter) lk.push(`<a href="${esc(api.links.twitter)}">X</a>`); if (api.links.telegram) lk.push(`<a href="${esc(api.links.telegram)}">TG</a>`); if (lk.length) L.push('🔗 ' + lk.join(' · ')); }
+  const valueEth = bal * px;
+  if (pos && pos.ethIn > 0) { const unreal = valueEth - (pos.ethIn - pos.ethOut); L.push(''); L.push(`💼 Your bag: ${fmt(bal)} $${esc(sym)} · ${usd(valueEth, nat)} · PnL <b>${unreal >= 0 ? '+' : ''}${unreal.toFixed(4)} ${nat}</b>`); }
+  else if (bal > 0) { L.push(''); L.push(`💼 Your bag: ${fmt(bal)} $${esc(sym)} · ${usd(valueEth, nat)}`); }
+  if (list.length > 1) L.push(`<i>Trading with Wallet ${wi}</i>`);
+  const text = L.join('\n');
   // Encode the card's chain AND wallet index in every action, so a tap on a stale
   // card trades on the chain+wallet it was rendered for — never on whatever chain
   // or wallet merely happens to be active now.
@@ -316,8 +341,17 @@ async function onMessage(m) {
     // Auto-buy on paste (Settings): buy instantly with the active wallet/chain.
     if (u.settings && u.settings.autoBuy) {
       const amt = u.settings.autoBuyAmount || '0.01';
+      const chainKey = core.userChain(u);
+      // Safety gate: auto-buy skips the manual 🛡 Safety screen, so on GoPlus
+      // chains refuse an obvious honeypot / can't-sell token before spending funds.
+      if (goplus.supported(chainKey)) {
+        const s = await goplus.tokenSecurity(chainKey, text).catch(() => null);
+        if (s && (s.honeypot || s.cannotSellAll)) {
+          return send(chatId, `🚨 <b>Auto-buy blocked</b> — <code>${short(text)}</code> looks like a <b>honeypot / can't-sell</b> token (GoPlus). Open the card and review 🛡 Safety before buying manually.`, rows([btn('🔎 Open card', `tok:${chainKey}:${walletIndex(chatId)}:${text}`), btn('« Menu', 'menu')]));
+        }
+      }
       await send(chatId, `⚡ <b>Auto-buy</b> ${esc(amt)} of <code>${short(text)}</code>… <i>(toggle in ⚙️ Settings)</i>`);
-      return doBuy(chatId, text, amt, core.userChain(u));
+      return doBuy(chatId, text, amt, chainKey);
     }
     const c = await tokenCard(chatId, text); return send(chatId, c.text, c.kb);
   }
