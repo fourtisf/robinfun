@@ -3249,14 +3249,15 @@ async function loadCurveTrades(t){
     const ro = roProvider();
     const curve = new ethers.Contract(t.curveAddr, CURVE_ABI, ro);
     const head = await ro.getBlockNumber();
-    // Probe (once) the widest eth_getLogs window this RPC will accept. Some nodes
-    // cap the block span and reject anything wider; others take a huge range.
+    // Probe (once) how wide an eth_getLogs range this RPC accepts. Prefer a SINGLE
+    // full-history query (0..head) — many nodes allow it for one contract with few
+    // events; otherwise fall back to the widest fixed window.
     if(!LOG_CHUNK){
-      for(const c of [90000, 45000, 18000, 7000, 2500, 800]){
+      try{ await curve.queryFilter(curve.filters.Buy(), 0, head); LOG_CHUNK = 'full'; }catch(_){}
+      if(!LOG_CHUNK) for(const c of [90000, 45000, 18000, 7000, 2500, 800]){
         try{ await curve.queryFilter(curve.filters.Buy(), Math.max(0, head-c), head); LOG_CHUNK = c; break; }catch(_){}
       }
     }
-    const chunk = LOG_CHUNK || 800;   // reused across tokens — only the first probes
     // Raw-log cache keyed "block:index:side" so repeat polls dedupe and stay cheap.
     if(!t._rawCurve) t._rawCurve = new Map();
     const add = (e,buy)=> t._rawCurve.set(e.blockNumber+':'+e.index+':'+(buy?'b':'s'), {a:e.args, block:e.blockNumber, li:e.index, buy});
@@ -3271,26 +3272,29 @@ async function loadCurveTrades(t){
       }catch(_){ return false; }
     };
     if(t._scannedLo===undefined){
-      // First load — PAGE BACKWARD from head in accepted-size windows, merging
-      // every window's logs. Stop after a short run of empty windows once we've
-      // seen activity (we've paged past the token's launch), or at a bounded
-      // floor. The old code broke on the first non-throwing span, so on a
-      // range-capped RPC it could settle on a window too RECENT to contain an
-      // older/graduated token's events → empty logs → $0 volume + a blank chart.
-      const FLOOR = Math.max(0, head - Math.min(2000000, chunk*30));
-      let seen=false, empty=0, lo=head, errored=false;
-      for(let hi=head; hi>FLOOR; hi-=chunk){
-        lo = Math.max(FLOOR, hi-chunk);
-        const before = t._rawCurve.size;
-        if(!(await scan(lo, hi))) errored=true;
-        if(t._rawCurve.size>before){ seen=true; empty=0; }
-        else if(seen && ++empty>=3) break;
-        if(lo===FLOOR) break;
+      if(LOG_CHUNK==='full'){
+        // One query = the token's ENTIRE history. No trade can be missed.
+        if(await scan(0, head)) t._scannedLo = 0;
+      }else{
+        // Page the WHOLE range to a bounded floor — NO early stop. The old code
+        // stopped after a few empty windows once it had seen activity, which silently
+        // dropped the launch dev-buy when it was separated from later trades by a gap
+        // of empty blocks → "history disappeared" + undercounted volume. Scanning
+        // every window guarantees ALL real trades show.
+        const chunk = LOG_CHUNK || 800;
+        const FLOOR = Math.max(0, head - Math.min(3000000, chunk*40));
+        let lo=head, ok=false;
+        for(let hi=head; hi>FLOOR; hi-=chunk){
+          lo = Math.max(FLOOR, hi-chunk);
+          if(await scan(lo, hi)) ok=true;
+          if(lo===FLOOR) break;
+        }
+        if(ok || t._rawCurve.size>0) t._scannedLo = lo;   // don't lock in a fully-failed sweep
       }
-      if(seen || !errored) t._scannedLo = lo;   // don't lock in a fully-failed sweep
     }else{
-      // Incremental — refresh only the newest window and merge any new trades.
-      await scan(Math.max(0, head-chunk), head);
+      // Incremental — refresh the recent tail and merge any new trades (dedup by key).
+      const span = (LOG_CHUNK==='full') ? Math.min(head, 50000) : (LOG_CHUNK || 800);
+      await scan(Math.max(0, head-span), head);
     }
     // Creator address (once) — the on-chain fee destination + dev-wallet tag.
     if(!t._creatorAddr){ try{ t._creatorAddr = (await new ethers.Contract(t.ca, ['function creator() view returns (address)'], ro).creator()).toLowerCase(); }catch(_){} }
@@ -3511,23 +3515,30 @@ async function loadDexTrades(t){
     // repeat polls stay cheap. Don't stop on the first non-throwing but too-
     // recent span — that would miss older swaps → $0 volume.
     let chunk = LOG_CHUNK;
-    if(!chunk){ for(const c of [90000,45000,18000,7000,2500,800]){ try{ await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-c), head); chunk=c; LOG_CHUNK=c; break; }catch(_){} } }
+    if(!chunk){
+      try{ await pair.queryFilter(pair.filters.Swap(), 0, head); chunk='full'; LOG_CHUNK='full'; }catch(_){}
+      if(!chunk){ for(const c of [90000,45000,18000,7000,2500,800]){ try{ await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-c), head); chunk=c; LOG_CHUNK=c; break; }catch(_){} } }
+    }
     if(!chunk) return [];
     if(!t._rawDex) t._rawDex = new Map();
     const addSwap = e => t._rawDex.set(e.blockNumber+':'+e.index, e);
     if(t._dexScannedLo===undefined){
-      const FLOOR = Math.max(0, head - Math.min(2000000, chunk*30));
-      let seen=false, empty=0, lo=head, errored=false;
-      for(let hi=head; hi>FLOOR; hi-=chunk){
-        lo = Math.max(FLOOR, hi-chunk);
-        const before = t._rawDex.size;
-        try{ (await pair.queryFilter(pair.filters.Swap(), lo, hi)).forEach(addSwap); }catch(_){ errored=true; if(lo===FLOOR) break; continue; }
-        if(t._rawDex.size>before){ seen=true; empty=0; } else if(seen && ++empty>=3) break;
-        if(lo===FLOOR) break;
+      if(chunk==='full'){
+        try{ (await pair.queryFilter(pair.filters.Swap(), 0, head)).forEach(addSwap); t._dexScannedLo=0; }catch(_){}
+      }else{
+        // Page the WHOLE range (no early stop) so no swap is dropped by a gap of empty blocks.
+        const FLOOR = Math.max(0, head - Math.min(3000000, chunk*40));
+        let lo=head, ok=false;
+        for(let hi=head; hi>FLOOR; hi-=chunk){
+          lo = Math.max(FLOOR, hi-chunk);
+          try{ (await pair.queryFilter(pair.filters.Swap(), lo, hi)).forEach(addSwap); ok=true; }catch(_){}
+          if(lo===FLOOR) break;
+        }
+        if(ok || t._rawDex.size>0) t._dexScannedLo = lo;
       }
-      if(seen || !errored) t._dexScannedLo = lo;   // don't lock in a fully-failed sweep
     }else{
-      try{ (await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-chunk), head)).forEach(addSwap); }catch(_){}
+      const span=(chunk==='full')?Math.min(head,50000):chunk;
+      try{ (await pair.queryFilter(pair.filters.Swap(), Math.max(0,head-span), head)).forEach(addSwap); }catch(_){}
     }
     const swaps = [...t._rawDex.values()];
     if(!swaps.length) return [];
