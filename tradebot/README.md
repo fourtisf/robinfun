@@ -12,12 +12,14 @@ DEX (any token, by contract address). Solana / non-EVM is a separate future modu
 
 ## Features
 
-- **Wallet** — every user gets a bot-managed wallet, or can **import** their own
-  (private key or 12–24-word seed phrase — the message holding the secret is
-  deleted immediately), or **generate a fresh** one. Private keys are encrypted at
-  rest with AES-256-GCM under `WALLET_SECRET` and only decrypted transiently to
-  sign a trade the user asked for. Deposit / withdraw / export-key built in.
-  Switching wallets is blocked while the current one still holds ETH (no stranding).
+- **Wallets (up to 10 per user)** — hold multiple bot-managed wallets, **generate**
+  fresh ones or **import** your own (private key or 12–24-word seed phrase — the
+  message holding the secret is deleted immediately), and **switch** the active one
+  anytime. Each wallet has its own balance, positions and orders. Private keys are
+  encrypted at rest with AES-256-GCM under `WALLET_SECRET` and only decrypted
+  transiently to sign a trade the user asked for. Deposit / withdraw / export-key
+  built in. Removing a wallet is blocked while it still holds native (no stranding),
+  and you always keep at least one.
 - **Buy / Sell by CA** — paste a contract address → live card (price, mcap,
   graduation %, your bag & PnL) with one-tap buy/sell. Routes to the bonding curve
   while listed, and to Uniswap V2 once graduated — same path as the website.

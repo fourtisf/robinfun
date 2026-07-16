@@ -85,9 +85,12 @@ function decrypt(blob) {
 const STORE_FILE = path.join(CFG.dataDir, 'tradebot.json');
 let DB = { users: {}, refByCode: {} };
 function loadStore() {
-  try { DB = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8')); } catch (_) { DB = { users: {}, refByCode: {} }; }
-  if (!DB.users) DB.users = {};
-  if (!DB.refByCode) DB.refByCode = {};
+  let parsed;
+  try { parsed = JSON.parse(fs.readFileSync(STORE_FILE, 'utf8')); } catch (_) { parsed = {}; }
+  // Mutate the existing DB object in place (never reassign the binding) so the
+  // exported reference (module.exports.DB) stays valid after a (re)load.
+  DB.users = (parsed && parsed.users) || {};
+  DB.refByCode = (parsed && parsed.refByCode) || {};
   wireShutdownFlush();
 }
 let _saveTimer = null;
@@ -131,44 +134,14 @@ function allUsers() { return Object.values(DB.users); }
 function getUser(chatId) { return DB.users[String(chatId)] || null; }
 function userChain(u) { return (u && u.activeChain && chainOf(u.activeChain) && isEnabled(u.activeChain)) ? u.activeChain : DEFAULT_CHAIN; }
 
-// ---------------------------------------------------------------- wallet (custodial)
+// ---------------------------------------------------------------- wallet (custodial, MULTI)
+// A user holds up to WALLET_CAP wallets, one active at a time. Positions AND orders
+// live ON each wallet (they belong to a specific address), so switching the active
+// wallet never mixes one wallet's bags/orders with another's. Legacy single-wallet
+// records are migrated transparently on first touch (see _migrateLegacy).
+const WALLET_CAP = Math.max(1, Number(process.env.MAX_WALLETS_PER_USER || 10));
 function _refCode() { let c; do { c = crypto.randomBytes(4).toString('hex'); } while (DB.refByCode[c]); return c; }
-function ensureUser(chatId, referredBy) {
-  const id = String(chatId);
-  let u = DB.users[id];
-  if (u) {
-    // Backfill any field a stored record predates, so screens never crash on a
-    // partial/legacy user after a schema change.
-    let ch = false;
-    if (!u.activeChain) { u.activeChain = DEFAULT_CHAIN; ch = true; }
-    if (!u.positions || typeof u.positions !== 'object') { u.positions = {}; ch = true; }
-    if (!Array.isArray(u.orders)) { u.orders = []; ch = true; }
-    if (!u.snipe || typeof u.snipe !== 'object') { u.snipe = { on: false, ethAmount: '0.01' }; ch = true; }
-    if (!u.settings || typeof u.settings !== 'object') { u.settings = { slippage: 0 }; ch = true; }
-    if (ch) saveStore();
-    return u;
-  }
-  const w = ethers.Wallet.createRandom();
-  const code = _refCode();
-  u = {
-    chatId: id, address: w.address, enc: encrypt(w.privateKey), refCode: code,
-    referredBy: (referredBy && DB.refByCode[referredBy] && DB.refByCode[referredBy] !== id) ? referredBy : null,
-    createdAt: Date.now(),
-    activeChain: DEFAULT_CHAIN,
-    positions: {},        // "chain:caLower" -> { chain, ca, name, sym, dec, ethIn, ethOut, realizedEth, tokens }
-    orders: [], snipe: { on: false, ethAmount: '0.01' },
-    refEarnedEth: 0,
-    settings: { slippage: 0 },
-  };
-  DB.users[id] = u; DB.refByCode[code] = id;
-  saveStoreNow();   // write-through: the encrypted key must be durable before we return the address
-  return u;
-}
-function signerFor(chatId, chainKey) {
-  const u = getUser(chatId); if (!u) throw new Error('no wallet');
-  return new ethers.Wallet(decrypt(u.enc), providerFor(chainKey || userChain(u)));
-}
-function exportKey(chatId) { const u = getUser(chatId); if (!u) throw new Error('no wallet'); return decrypt(u.enc); }
+function _walletId() { return crypto.randomBytes(5).toString('hex'); }
 function walletFromSecret(secret) {
   secret = String(secret || '').trim();
   if (/^(0x)?[0-9a-fA-F]{64}$/.test(secret)) return new ethers.Wallet(secret.startsWith('0x') ? secret : '0x' + secret);
@@ -176,32 +149,146 @@ function walletFromSecret(secret) {
   if ([12, 15, 18, 21, 24].includes(words.length)) return ethers.Wallet.fromPhrase(words.join(' '));
   throw new Error('not a valid private key (64 hex chars) or seed phrase (12–24 words)');
 }
-// Replace wallet (import a secret, or generate when secret is undefined). GUARD:
-// refuse if the OUTGOING wallet holds native on ANY enabled chain, so switching
-// can never strand funds — withdraw/export first.
-async function replaceWallet(chatId, secret) {
-  const u = getUser(chatId); if (!u) throw new Error('no wallet');
+function _newWallet(secret) {
   const w = secret ? walletFromSecret(secret) : ethers.Wallet.createRandom();
-  if (w.address.toLowerCase() === u.address.toLowerCase()) throw new Error('that is already your current wallet');
+  return { id: _walletId(), address: w.address, enc: encrypt(w.privateKey), createdAt: Date.now(), positions: {}, orders: [] };
+}
+function walletList(u) { return (u && Array.isArray(u.wallets)) ? u.wallets : []; }
+function walletById(u, id) { return walletList(u).find((w) => w.id === id) || null; }
+function activeWallet(u) { const list = walletList(u); return list.find((w) => w.id === u.activeWalletId) || list[0] || null; }
+function activeAddress(u) { const w = activeWallet(u); return w ? w.address : null; }
+function _resolveWallet(u, walletId) { const w = walletId ? walletById(u, walletId) : activeWallet(u); if (!w) throw new Error('no wallet'); return w; }
+
+// Migrate a legacy single-wallet record { address, enc, positions, orders, oldWallets }
+// into the multi-wallet shape. The current wallet becomes Wallet 1 (keeps its
+// positions+orders); previously-archived oldWallets return as extra selectable
+// wallets (empty bags — they were cleared when archived), capped at WALLET_CAP.
+function _migrateLegacy(u) {
+  if (Array.isArray(u.wallets) && u.wallets.length) return false;
+  const wallets = [];
+  if (u.address && u.enc) {
+    wallets.push({ id: _walletId(), address: u.address, enc: u.enc, createdAt: u.createdAt || Date.now(),
+      positions: (u.positions && typeof u.positions === 'object') ? u.positions : {},
+      orders: Array.isArray(u.orders) ? u.orders : [] });
+  }
+  // Bring back archived wallets as selectable ones (up to the cap). Any that don't
+  // fit are KEPT in a residual archive — never wholesale-deleted, so no encrypted
+  // key is ever destroyed by the migration.
+  const leftover = [];
+  for (const ow of (Array.isArray(u.oldWallets) ? u.oldWallets : [])) {
+    if (!ow || !ow.address || !ow.enc) continue;
+    if (wallets.some((w) => w.address.toLowerCase() === ow.address.toLowerCase())) continue;
+    if (wallets.length < WALLET_CAP) wallets.push({ id: _walletId(), address: ow.address, enc: ow.enc, createdAt: ow.at || Date.now(), positions: {}, orders: [] });
+    else leftover.push(ow);
+  }
+  if (!wallets.length) return false;
+  // Stamp every migrated order with its owning wallet's id, so a pre-upgrade
+  // TP/SL/limit always executes on THE WALLET IT BELONGS TO — never on whatever
+  // wallet happens to be active after the user adds/switches wallets.
+  for (const w of wallets) for (const o of w.orders) if (o && !o.walletId) o.walletId = w.id;
+  u.wallets = wallets;
+  u.activeWalletId = wallets[0].id;
+  delete u.address; delete u.enc; delete u.positions; delete u.orders;
+  if (leftover.length) u.oldWallets = leftover; else delete u.oldWallets;
+  return true;
+}
+function ensureUser(chatId, referredBy) {
+  const id = String(chatId);
+  let u = DB.users[id];
+  if (u) {
+    // Backfill any field a stored record predates, so screens never crash on a
+    // partial/legacy user after a schema change.
+    let ch = false, minted = false;
+    if (!u.activeChain) { u.activeChain = DEFAULT_CHAIN; ch = true; }
+    if (_migrateLegacy(u)) ch = true;
+    if (!Array.isArray(u.wallets) || !u.wallets.length) { u.wallets = [_newWallet()]; ch = true; minted = true; }
+    for (const w of u.wallets) {
+      if (!w.id) { w.id = _walletId(); ch = true; }
+      if (!w.positions || typeof w.positions !== 'object') { w.positions = {}; ch = true; }
+      if (!Array.isArray(w.orders)) { w.orders = []; ch = true; }
+      for (const o of w.orders) if (o && !o.walletId) { o.walletId = w.id; ch = true; }   // every order knows its wallet
+    }
+    if (!u.activeWalletId || !walletById(u, u.activeWalletId)) { u.activeWalletId = u.wallets[0].id; ch = true; }
+    if (!u.snipe || typeof u.snipe !== 'object') { u.snipe = { on: false, ethAmount: '0.01' }; ch = true; }
+    if (!u.settings || typeof u.settings !== 'object') { u.settings = { slippage: 0 }; ch = true; }
+    // Write THROUGH if we just minted a key in the backfill (durability), else debounce.
+    if (minted) saveStoreNow(); else if (ch) saveStore();
+    return u;
+  }
+  const w = _newWallet();
+  const code = _refCode();
+  u = {
+    chatId: id, refCode: code,
+    referredBy: (referredBy && DB.refByCode[referredBy] && DB.refByCode[referredBy] !== id) ? referredBy : null,
+    createdAt: Date.now(),
+    activeChain: DEFAULT_CHAIN,
+    wallets: [w], activeWalletId: w.id,   // each wallet: { id, address, enc, positions, orders }
+    snipe: { on: false, ethAmount: '0.01' },
+    refEarnedEth: 0,
+    settings: { slippage: 0 },
+  };
+  DB.users[id] = u; DB.refByCode[code] = id;
+  saveStoreNow();   // write-through: the encrypted key must be durable before we return the address
+  return u;
+}
+function _signer(w, chainKey) { return new ethers.Wallet(decrypt(w.enc), providerFor(chainKey)); }
+function signerFor(chatId, chainKey, walletId) {
+  const u = getUser(chatId); if (!u) throw new Error('no wallet');
+  return _signer(_resolveWallet(u, walletId), chainKey || userChain(u));
+}
+function exportKey(chatId, walletId) { const u = getUser(chatId); if (!u) throw new Error('no wallet'); return decrypt(_resolveWallet(u, walletId).enc); }
+
+// Add a wallet (generate when secret is undefined, else import a key/seed). Adds
+// to the list (up to WALLET_CAP) and makes it active. Non-destructive — existing
+// wallets are untouched, so nothing can be stranded.
+function addWallet(chatId, secret) {
+  const u = ensureUser(chatId);
+  if (u.wallets.length >= WALLET_CAP) throw new Error(`wallet limit reached (${WALLET_CAP}). Remove one first.`);
+  const nw = _newWallet(secret);
+  if (u.wallets.some((w) => w.address.toLowerCase() === nw.address.toLowerCase())) throw new Error('that wallet is already in your list');
+  u.wallets.push(nw);
+  u.activeWalletId = nw.id;
+  saveStoreNow();   // write-through: a fresh/imported key must be durable
+  return { id: nw.id, address: nw.address, index: u.wallets.length };
+}
+function switchWallet(chatId, walletId) {
+  const u = ensureUser(chatId);
+  const w = walletById(u, walletId); if (!w) throw new Error('wallet not found');
+  u.activeWalletId = w.id; saveStore();
+  return w;
+}
+// Remove a wallet. GUARD: keep at least one; refuse (fail-closed) if it still holds
+// native on any enabled chain, so removing can never strand funds. ERC20 bags can't
+// be auto-detected, so tell the user to export the key first if unsure.
+async function removeWallet(chatId, walletId) {
+  const u = ensureUser(chatId);
+  if (u.wallets.length <= 1) throw new Error('you must keep at least one wallet');
+  const w = walletById(u, walletId); if (!w) throw new Error('wallet not found');
   const dust = ethers.parseEther('0.0002');
-  // Best-effort guard: refuse if the old wallet still holds NATIVE on any chain.
-  // Fail CLOSED on an RPC error (can't verify ⇒ don't switch) so a transient read
-  // failure can't wave through a funded wallet.
   for (const ch of chains.enabledChains()) {
     let bal;
-    try { bal = await providerFor(ch.key).getBalance(u.address); }
-    catch (_) { throw new Error(`couldn't verify your balance on ${ch.name} right now — try again in a moment.`); }
-    if (bal > dust) throw new Error(`your current wallet still holds ${Number(ethers.formatEther(bal)).toFixed(5)} ${ch.native} on ${ch.name} — withdraw it (or export the key) first so it isn't lost.`);
+    try { bal = await providerFor(ch.key).getBalance(w.address); }
+    catch (_) { throw new Error(`couldn't verify this wallet's balance on ${ch.name} right now — try again in a moment.`); }
+    if (bal > dust) throw new Error(`this wallet still holds ${Number(ethers.formatEther(bal)).toFixed(5)} ${ch.native} on ${ch.name} — withdraw it (or export the key) first.`);
   }
-  // The native guard can't see ERC20 token bags, so ARCHIVE the old encrypted key
-  // before replacing it — nothing is ever unrecoverable (the key can still be
-  // exported later). Then clear positions/orders (bound to the old wallet).
-  u.oldWallets = u.oldWallets || [];
-  u.oldWallets.push({ address: u.address, enc: u.enc, at: Date.now() });
+  // Re-validate AFTER the async balance loop (the event loop yielded, so a
+  // concurrent removal could have changed the list). This block runs to completion
+  // WITHOUT yielding, so the check-and-mutate is atomic — no race can empty wallets.
+  if (!walletById(u, w.id)) return u.wallets.length;   // already removed by a concurrent call
+  if (u.wallets.length <= 1) throw new Error('you must keep at least one wallet');
+  // Archive the encrypted key before dropping the wallet, so a removed wallet's key
+  // is NEVER irrecoverable (it may still hold ERC20 bags the native guard can't see).
+  u.oldWallets = Array.isArray(u.oldWallets) ? u.oldWallets : [];
+  u.oldWallets.push({ address: w.address, enc: w.enc, at: Date.now() });
   if (u.oldWallets.length > 20) u.oldWallets = u.oldWallets.slice(-20);
-  u.address = w.address; u.enc = encrypt(w.privateKey); u.positions = {}; u.orders = [];
+  u.wallets = u.wallets.filter((x) => x.id !== w.id);
+  if (u.activeWalletId === w.id) u.activeWalletId = u.wallets[0].id;
   saveStoreNow();
-  return u.address;
+  return u.wallets.length;
+}
+function listWallets(chatId) {
+  const u = ensureUser(chatId);
+  return u.wallets.map((w, i) => ({ id: w.id, index: i + 1, address: w.address, active: w.id === u.activeWalletId, orders: (w.orders || []).length }));
 }
 function setChain(chatId, key) {
   const u = ensureUser(chatId);
@@ -318,12 +405,13 @@ function posKey(chainKey, ca) { return chainKey + ':' + ca.toLowerCase(); }
 
 // ---------------------------------------------------------------- trade
 // Buy `ethAmount` (human native) of `ca` on the user's active chain (or chainKey).
-async function buy(chatId, ca, ethAmount, chainKey) {
+async function buy(chatId, ca, ethAmount, chainKey, walletId) {
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
-  return withWalletLock(u.address, async () => {
+  const wal = _resolveWallet(u, walletId);
+  return withWalletLock(wal.address, async () => {
     chainKey = chainKey || userChain(u);
     const chain = chainOf(chainKey);
-    const wallet = signerFor(chatId, chainKey);
+    const wallet = _signer(wal, chainKey);
     const gross = ethers.parseEther(String(ethAmount));
     if (gross <= 0n) throw new Error('amount must be > 0');
     const bal = await ethBalance(wallet.address, chainKey);
@@ -373,23 +461,24 @@ async function buy(chatId, ca, ethAmount, chainKey) {
     if (feeHash) _creditReferral(u, fee, chainKey);
 
     const key = posKey(chainKey, ca);
-    const p = u.positions[key] || { chain: chainKey, ca, name: meta.name, sym: meta.sym, dec: meta.decimals, ethIn: 0, ethOut: 0, realizedEth: 0, tokens: '0' };
+    const p = wal.positions[key] || { chain: chainKey, ca, name: meta.name, sym: meta.sym, dec: meta.decimals, ethIn: 0, ethOut: 0, realizedEth: 0, tokens: '0' };
     p.name = meta.name; p.sym = meta.sym; p.dec = meta.decimals;
     p.ethIn += Number(ethers.formatEther(spend));
     p.tokens = after.toString();
     delete p.closed;
-    u.positions[key] = p; saveStore();
+    wal.positions[key] = p; saveStore();
 
     return { chain: chainKey, native: chain.native, venue, hash, feeHash, spentEth: Number(ethers.formatEther(spend)), feeEth: Number(ethers.formatEther(fee)), gotTokens: Number(ethers.formatUnits(got, meta.decimals)), sym: meta.sym };
   });
 }
 
-async function sell(chatId, ca, pct, chainKey) {
+async function sell(chatId, ca, pct, chainKey, walletId) {
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
-  return withWalletLock(u.address, async () => {
+  const wal = _resolveWallet(u, walletId);
+  return withWalletLock(wal.address, async () => {
     chainKey = chainKey || userChain(u);
     const chain = chainOf(chainKey);
-    const wallet = signerFor(chatId, chainKey);
+    const wallet = _signer(wal, chainKey);
     const erc = new ethers.Contract(ca, ERC20_ABI, wallet);
     const bal = await erc.balanceOf(wallet.address);
     const p = Math.max(1, Math.min(100, Math.round(Number(pct) || 0)));
@@ -436,7 +525,7 @@ async function sell(chatId, ca, pct, chainKey) {
     if (feeHash) _creditReferral(u, fee, chainKey);
 
     const key = posKey(chainKey, ca);
-    const pos = u.positions[key];
+    const pos = wal.positions[key];
     if (pos) {
       pos.ethOut += Number(ethers.formatEther(proceeds - fee));
       pos.tokens = tokAfter.toString();
@@ -448,14 +537,15 @@ async function sell(chatId, ca, pct, chainKey) {
   });
 }
 
-async function withdraw(chatId, to, amount, chainKey) {
+async function withdraw(chatId, to, amount, chainKey, walletId) {
   to = String(to || '').trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('invalid destination address');
   if (/^0x0{40}$/i.test(to)) throw new Error('refusing to send to the zero address');
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
-  return withWalletLock(u.address, async () => {
+  const wal = _resolveWallet(u, walletId);
+  return withWalletLock(wal.address, async () => {
     chainKey = chainKey || userChain(u);
-    const wallet = signerFor(chatId, chainKey);
+    const wallet = _signer(wal, chainKey);
     const bal = await ethBalance(wallet.address, chainKey);
     const gas = await gasOverrides(chainKey);
     let gp = gas.gasPrice;
@@ -473,17 +563,19 @@ async function withdraw(chatId, to, amount, chainKey) {
   });
 }
 
-// Portfolio for the user's ACTIVE chain: live value + PnL per position.
-async function portfolio(chatId) {
+// Portfolio for the ACTIVE (or specified) wallet on its active chain: value + PnL.
+async function portfolio(chatId, walletId) {
   const u = getUser(chatId); if (!u) return { rows: [], totalValueEth: 0, address: null, chain: null };
+  const wal = walletId ? walletById(u, walletId) : activeWallet(u);
+  if (!wal) return { rows: [], totalValueEth: 0, address: null, chain: null };
   const chainKey = userChain(u);
   const chain = chainOf(chainKey);
   const rows = [];
   let totalValueEth = 0;
-  for (const key of Object.keys(u.positions)) {
-    const p = u.positions[key];
+  for (const key of Object.keys(wal.positions || {})) {
+    const p = wal.positions[key];
     if (p.chain !== chainKey) continue;   // show only the active chain
-    const balRaw = await tokenBalance(p.ca, u.address, chainKey);
+    const balRaw = await tokenBalance(p.ca, wal.address, chainKey);
     const bal = Number(ethers.formatUnits(balRaw, p.dec || 18));
     if (bal <= 1e-9 && !(p.ethIn > 0)) continue;
     const snap = await tokenSnapshot(p.ca, chainKey).catch(() => null);
@@ -493,12 +585,13 @@ async function portfolio(chatId) {
     rows.push({ ca: p.ca, name: p.name, sym: p.sym, tokens: bal, valueEth, ethIn: p.ethIn, ethOut: p.ethOut, unrealizedEth: valueEth - (p.ethIn - p.ethOut), realizedEth: p.realizedEth || 0 });
   }
   rows.sort((a, b) => b.valueEth - a.valueEth);
-  return { rows, totalValueEth, address: u.address, chain, native: chain.native };
+  return { rows, totalValueEth, address: wal.address, chain, native: chain.native };
 }
 
 module.exports = {
   CFG, chains, chainOf, userChain, providerFor, FACTORY_ABI, CURVE_ABI, ERC20_ABI,
-  loadStore, saveStore, saveStoreNow, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, replaceWallet, setChain,
+  loadStore, saveStore, saveStoreNow, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, setChain,
+  walletList, walletById, activeWallet, activeAddress, addWallet, switchWallet, removeWallet, listWallets, WALLET_CAP,
   resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, ethUsd, gasOverrides,
   buy, sell, withdraw, portfolio, DB,
 };
