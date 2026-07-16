@@ -367,8 +367,8 @@ async function launchWith(wallet, provider, deployFee, devBuy) {
   // entered the curve (e.g. 0.005 ETH). netOut = deployFee + gas + actualDevBuy.
   const balBefore = await provider.getBalance(wallet.address).catch(() => null);
   let receipt;
-  try { const tx = await factory.createToken(params, { value }); receipt = await tx.wait(); }
-  catch (e) { return { ok: false, name, ticker, creator: wallet.address, error: e.shortMessage || e.reason || e.message }; }
+  try { const tx = await factory.createToken(params, { value }); receipt = await tx.wait(1, 180000); }   // bounded — a stuck launch tx must not hang the bot/lock
+  catch (e) { return { ok: false, name, ticker, creator: wallet.address, error: (e && e.code === 'TIMEOUT') ? 'launch tx sent but not confirmed in 3 min — check the explorer / retry' : (e.shortMessage || e.reason || e.message) }; }
 
   let ca = '', curve = '';
   for (const lg of receipt.logs) { try { const p = factory.interface.parseLog(lg); if (p && p.name === 'TokenCreated') { ca = p.args.token; curve = p.args.curve; break; } } catch (_) {} }
@@ -420,7 +420,7 @@ async function sweepAll(wallets, provider, dest) {
     try {
       const bal = await provider.getBalance(w.address);
       if (bal <= gas) { out.push({ address: w.address, skip: true, bal }); continue; }
-      const tx = await w.sendTransaction({ to: dest, value: bal - gas }); await tx.wait();
+      const tx = await w.sendTransaction({ to: dest, value: bal - gas }); await waitBounded(tx);   // bounded — never hang the bot on a stuck sweep tx
       out.push({ address: w.address, sent: bal - gas, tx: tx.hash });
     } catch (e) { out.push({ address: w.address, error: e.shortMessage || e.message }); }
   }

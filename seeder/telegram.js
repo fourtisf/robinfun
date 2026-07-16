@@ -238,15 +238,18 @@ pm2 restart robinfun-seeder-bot</code>
 
 🚫 Jangan percaya alamat dari situs non-resmi. Salah Inbox = ETH hilang.`;
 
-let bridging = false; // guard: never run two bridge passes at once (double-spend / nonce clash)
+// Guard: never run two bridge passes at once (double-spend / nonce clash). Same
+// stale-lock TTL as the trade lock so a hung bridge pass can't deadlock /bridge forever.
+let bridgingSince = 0;
+function bridgeBusy() { if (!bridgingSince) return false; if (Date.now() - bridgingSince > TRADE_LOCK_TTL) { bridgingSince = 0; return false; } return true; }
 async function doBridgeAll(chatId) {
   if (!l1) { await send(chatId, 'L1_RPC belum aktif.'); return; }
   if (!ethers.isAddress(CFG.l1InboxAddr)) { await send(chatId, 'Inbox belum di-set. Lihat /bridge.'); return; }
   // Claim the lock SYNCHRONOUSLY (before any await) so two rapid taps can't both
   // pass the check — doBridgeAll is now fire-and-forget, so the poll loop no
   // longer serializes it for us.
-  if (bridging) { await send(chatId, '⏳ Bridge sedang berjalan — tunggu selesai dulu.'); return; }
-  bridging = true;
+  if (bridgeBusy()) { await send(chatId, '⏳ Bridge sedang berjalan — tunggu selesai dulu.'); return; }
+  bridgingSince = Date.now();
   try {
     const ver = await verifyInbox(l1, CFG.l1InboxAddr);
     if (!ver.ok) { await send(chatId, `⚠️ Inbox gagal verifikasi: ${esc(ver.reason)}. Bridge dibatalkan demi keamanan.`); return; }
@@ -267,7 +270,7 @@ async function doBridgeAll(chatId) {
       : errored
         ? `Bridge gagal untuk ${errored} wallet — lihat error di atas. Tidak ada ETH yang ter-bridge.`
         : 'Tidak ada wallet dengan cukup ETH di L1 untuk di-bridge.');
-  } finally { bridging = false; }
+  } finally { bridgingSince = 0; }
 }
 
 async function statusMsg() {
@@ -376,12 +379,25 @@ async function doStop(chatId) {
 }
 
 // ---------------- bot trading: buy / sell a token ----------------
-let trading = false; // one on-chain trade at a time (avoid nonce clashes across wallets)
+// One on-chain trade at a time (avoid nonce clashes across wallets). Timestamp-based
+// with a stale-lock TTL: if a trade ever HANGS on an un-timed-out RPC/tx.wait, its
+// finally never runs — the old boolean lock would then stay held FOREVER and deadlock
+// every command with "Ada trade lain jalan". Auto-releasing a lock held longer than the
+// TTL lets the bot recover on its own (worst case a rare nonce retry, never a deadlock).
+let tradingSince = 0;                       // ms when the lock was taken (0 = free)
+const TRADE_LOCK_TTL = 8 * 60 * 1000;       // held longer than this ⇒ presumed hung ⇒ freed
+function tradeBusy() {
+  if (!tradingSince) return false;
+  if (Date.now() - tradingSince > TRADE_LOCK_TTL) { tradingSince = 0; return false; }
+  return true;
+}
+function lockTrade() { tradingSince = Date.now(); }
+function unlockTrade() { tradingSince = 0; }
 async function doBuy(chatId, args) {
   const ca = args[0]; const eth = args[1];
   if (!ca || !ethers.isAddress(ca) || !eth || !(Number(eth) > 0)) { await send(chatId, 'Format: <code>/buy 0xCONTRACT 0.01</code> — beli 0.01 ETH token itu.'); return; }
-  if (trading) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
-  trading = true;
+  if (tradeBusy()) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
+  lockTrade();
   try {
     const need = ethers.parseEther(String(eth)) + gasBuf;
     const bals = await balances();
@@ -392,13 +408,13 @@ async function doBuy(chatId, args) {
     const r = await botBuy(w, provider, ca, eth);
     await send(chatId, `✅ Beli di ${r.venue === 'curve' ? 'bonding curve' : 'Uniswap'}${r.pending ? ' (terkirim, belum konfirmasi)' : ''}\ntx <code>${r.hash}</code>`);
   } catch (e) { await send(chatId, `❌ Buy gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
-  finally { trading = false; }
+  finally { unlockTrade(); }
 }
 async function doSell(chatId, args) {
   const ca = args[0]; const pct = args[1] || '100';
   if (!ca || !ethers.isAddress(ca) || !(Number(pct) > 0 && Number(pct) <= 100)) { await send(chatId, 'Format: <code>/sell 0xCONTRACT 50</code> — jual 50% dari tiap wallet yang punya (default 100%).'); return; }
-  if (trading) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
-  trading = true;
+  if (tradeBusy()) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
+  lockTrade();
   try {
     await send(chatId, `🔴 SELL ${pct}% · <code>${ca.slice(0, 12)}…</code> · dari wallet yang punya…`);
     let done = 0;
@@ -411,7 +427,7 @@ async function doSell(chatId, args) {
       } catch (e) { await send(chatId, `❌ ${w.address.slice(0, 10)}…: ${esc(e.shortMessage || e.reason || e.message)}`); }
     }
     if (!done) await send(chatId, 'Nggak ada wallet yang pegang token ini.');
-  } finally { trading = false; }
+  } finally { unlockTrade(); }
 }
 
 // ---- creator reward (levy fee): view + claim ----
@@ -436,8 +452,8 @@ async function doEarnings(chatId) {
     `\nKetik <code>/claim</code> untuk klaim semua ke wallet creator, lalu <code>/sweep 0xTreasury</code> untuk pindah ke treasury.`);
 }
 async function doClaim(chatId) {
-  if (trading) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
-  trading = true;
+  if (tradeBusy()) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
+  lockTrade();
   try {
     await send(chatId, '💸 Klaim reward creator dari SEMUA token (baca chain)…');
     const res = await claimCreator(wallets, provider);   // chain-truth: all tokens, not just /last
@@ -452,16 +468,16 @@ async function doClaim(chatId) {
     });
     await send(chatId, `💸 <b>Klaim selesai</b> — total <b>${total.toFixed(6)} ETH</b>${u(total)}\n\n${lines.join('\n')}\n\n💡 ETH masuk ke wallet creator. Pindahkan ke treasury: <code>/sweep 0xTreasury</code>.`);
   } catch (e) { await send(chatId, `❌ Claim gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
-  finally { trading = false; }
+  finally { unlockTrade(); }
 }
 // ---- auto-sale: sell holdings across ALL already-created tokens ----
 async function doDumpAll(chatId, args) {
   const pct = args[0] ? Number(args[0]) : 100;
   if (!(pct > 0 && pct <= 100)) { await send(chatId, 'Format: <code>/dumpall 100</code> — jual 100% SEMUA token dari semua wallet.'); return; }
-  if (trading) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
+  if (tradeBusy()) { await send(chatId, '⏳ Ada trade lain jalan — tunggu selesai.'); return; }
   const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
   if (!cas.length) { await send(chatId, 'Belum ada token yang di-launch.'); return; }
-  trading = true;
+  lockTrade();
   try {
     await send(chatId, `🔻 DUMP ALL ${pct}% · ${cas.length} token · dari semua wallet…`);
     const res = await sellAllHoldings(provider, wallets, cas, pct);
@@ -473,7 +489,7 @@ async function doDumpAll(chatId, args) {
       for (const m of rep.messages) await send(chatId, m);
     }
   } catch (e) { await send(chatId, `❌ Dump gagal: ${esc(e.shortMessage || e.reason || e.message)}`); }
-  finally { trading = false; }
+  finally { unlockTrade(); }
 }
 async function doAutoSale(chatId, args) {
   const a = (args[0] || '').toLowerCase();
@@ -855,8 +871,8 @@ async function autoSaleLoop() {
   for (;;) {
     if (!CFG.autoSaleOn) { await sleep(3000); continue; }
     const cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));
-    if (cas.length && !trading) {
-      trading = true;
+    if (cas.length && !tradeBusy()) {
+      lockTrade();
       try {
         const res = await sellAllHoldings(provider, wallets, cas, CFG.autoSalePct);
         const usd = await ethUsd().catch(() => 0);
@@ -866,7 +882,7 @@ async function autoSaleLoop() {
           _lastAutoErrAt = Date.now();
           await broadcast(rep.messages[0] + `\n\n<i>Tidak ada yang terjual siklus ini — cek RPC / likuiditas. Detail: <code>/dumpall</code>.</i>`);
         }
-      } catch (_) {} finally { trading = false; }
+      } catch (_) {} finally { unlockTrade(); }
     }
     await sleep(CFG.autoSaleEverySec * 1000);
   }
@@ -876,8 +892,8 @@ async function autoSaleLoop() {
 async function reactLoop() {
   for (;;) {
     if (!CFG.reactOn) { await sleep(3000); continue; }
-    if (!trading) {
-      trading = true;
+    if (!tradeBusy()) {
+      lockTrade();
       try {
         const { actions } = await reactToBuys(provider, wallets, state.react);
         saveState();
@@ -886,7 +902,7 @@ async function reactLoop() {
           const short = `${a.ca.slice(0, 8)}…`;
           await broadcast(`🟢➡️🔻 Ada pembeli asli di <code>${short}</code> (~$${Math.round(a.realUsd)}) → jual <b>${a.pct}%</b> (hit ${a.hits}/${CFG.reactMaxCount}) untuk recover modal.`);
         }
-      } catch (e) { console.error('react loop error:', e.message); } finally { trading = false; }
+      } catch (e) { console.error('react loop error:', e.message); } finally { unlockTrade(); }
     }
     await sleep(CFG.reactEverySec * 1000);
   }
@@ -896,14 +912,14 @@ async function reactLoop() {
 async function guardLoop() {
   for (;;) {
     if (!CFG.capGuardOn) { await sleep(3000); continue; }
-    if (!trading) {
-      trading = true;
+    if (!tradeBusy()) {
+      lockTrade();
       try {
         const acted = await capGuard(provider, wallets, CFG.capCeilingEth);
         for (const a of acted) {
           await broadcast(`🛡️ <b>Anti-graduate</b> — <code>${a.ca.slice(0, 8)}…</code> pool ≈ <b>${a.collected.toFixed(2)} ETH</b> (cap ${a.target ? a.target.toFixed(1) : '2.6'}). Jual <b>SEMUA</b> (${a.sold} wallet) biar TIDAK graduate / LP ke-burn.`);
         }
-      } catch (e) { console.error('guard loop error:', e.message); } finally { trading = false; }
+      } catch (e) { console.error('guard loop error:', e.message); } finally { unlockTrade(); }
     }
     await sleep(30000);   // check every 30s (keep a safe margin below the cap)
   }
