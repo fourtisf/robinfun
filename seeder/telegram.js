@@ -497,6 +497,10 @@ async function doDumpAll(chatId, args) {
   let cas = (owned || []).map((r) => r.ca).filter((ca) => ca && ethers.isAddress(ca));
   if (!cas.length) cas = state.last.map((t) => t.ca).filter((ca) => ca && ethers.isAddress(ca));   // fallback if the chain read failed
   if (!cas.length) { await send(chatId, 'Belum ada token yang di-launch.'); return; }
+  // Transparency: warn if the chain scan couldn't read every token (a flaky RPC can
+  // drop some even after retries) — never pretend a partial scan covered everything.
+  const scanFailed = (owned && owned.scanFailed) || 0;
+  const scanNote = scanFailed > 0 ? `\n⚠️ <b>${scanFailed} token gagal dibaca</b> (RPC lelet) — belum tentu ke-cek. Ulangi <code>/dumpall</code> sebentar lagi buat pastikan bersih.` : '';
   await takeUserLock();
   try {
     await send(chatId, `🔻 DUMP ALL ${pct}% · ${cas.length} token · dari semua wallet…`);
@@ -504,7 +508,7 @@ async function doDumpAll(chatId, args) {
     const usd = await ethUsd().catch(() => 0);
     const rep = renderSaleReport(res, usd, { title: `🔻 Dump ${pct}%` });
     if (!rep.sold && !rep.errors) {
-      await send(chatId, `Nggak ada wallet yang pegang token ini (semua saldo 0)${rep.skipped ? ` · 💤 ${rep.skipped} dilewati` : ''}${rep.retry ? ` · 🔁 ${rep.retry} retry` : ''}. (${cas.length} token dicek)`);
+      await send(chatId, `Nggak ada wallet yang pegang token ini (semua saldo 0)${rep.skipped ? ` · 💤 ${rep.skipped} dilewati` : ''}${rep.retry ? ` · 🔁 ${rep.retry} retry` : ''}. (${cas.length} token dicek)${scanNote}`);
     } else {
       for (const m of rep.messages) await send(chatId, m);
     }

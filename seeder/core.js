@@ -916,6 +916,14 @@ async function mapLimit(items, limit, fn) {
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, run));
   return out;
 }
+// Retry a flaky read a few times — the Robinhood RPC drops/ times out reads under
+// load, and without a retry a scan silently loses tokens (50 of 171). Throws the
+// last error only after all attempts fail.
+async function retry(fn, tries = 4) {
+  let last;
+  for (let i = 0; i < tries; i++) { try { return await fn(); } catch (e) { last = e; } }
+  throw last;
+}
 
 // Enumerate EVERY token on the factory (via allTokens, not the bot's capped
 // memory), keep those whose on-chain creator() is one of OUR wallets, and read
@@ -925,20 +933,26 @@ async function ownedTokens(provider, wallets) {
   const factory = new ethers.Contract(CFG.factory, FACTORY_ABI, provider);
   const fr = new ethers.Contract(CFG.feeRouter, FEEROUTER_ABI, provider);
   const mine = new Set(wallets.map((w) => w.address.toLowerCase()));
-  let len = 0; try { len = Number(await factory.allTokensLength()); } catch (_) { return []; }
+  let len = 0; try { len = Number(await retry(() => factory.allTokensLength())); } catch (_) { const r = []; Object.defineProperty(r, 'scanFailed', { value: -1, enumerable: false }); Object.defineProperty(r, 'scanTotal', { value: 0, enumerable: false }); return r; }
   const idxs = Array.from({ length: len }, (_, i) => i);
-  const cas = (await mapLimit(idxs, 8, (i) => factory.allTokens(i))).filter(Boolean);
+  let failed = 0;   // reads that still failed after retries → tokens we could NOT check
+  const cas = (await mapLimit(idxs, 8, async (i) => { try { return await retry(() => factory.allTokens(i)); } catch (_) { failed++; return null; } })).filter(Boolean);
   const rows = await mapLimit(cas, 8, async (ca) => {
     try {
       const [creator, owed] = await Promise.all([
-        new ethers.Contract(ca, ['function creator() view returns (address)'], provider).creator(),
-        fr.creatorOwed(ca),
+        retry(() => new ethers.Contract(ca, ['function creator() view returns (address)'], provider).creator()),
+        retry(() => fr.creatorOwed(ca)),
       ]);
       if (!mine.has(String(creator).toLowerCase())) return null;
       return { ca, creator, owedWei: owed };
-    } catch (_) { return null; }
+    } catch (_) { failed++; return null; }
   });
-  return rows.filter(Boolean);
+  const result = rows.filter(Boolean);
+  // Non-enumerable so callers that treat this as a plain array (.map/.filter/.reduce)
+  // are unaffected, but /dumpall & co. can warn when a scan was incomplete.
+  Object.defineProperty(result, 'scanTotal', { value: len, enumerable: false });
+  Object.defineProperty(result, 'scanFailed', { value: failed, enumerable: false });
+  return result;
 }
 
 // Total creator fee OWED across all of our tokens (ETH), chain-truth.
