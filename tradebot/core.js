@@ -17,7 +17,8 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const chains = require('./chains');
-const { providerFor, chainOf, isEnabled, DEFAULT_CHAIN } = chains;
+const { providerFor, chainOf, isEnabled, DEFAULT_CHAIN, isSvm } = chains;
+const solana = require('./solana');   // non-EVM (Solana) adapter — used only on kind:'svm' chains
 const report = require('./report');   // ops reporting to admin channel (never sends secrets)
 
 // Load tradebot/.env (KEY=VALUE lines) into process.env BEFORE config is read.
@@ -234,8 +235,30 @@ function walletFromSecret(secret) {
 }
 function _newWallet(secret) {
   const w = secret ? walletFromSecret(secret) : ethers.Wallet.createRandom();
-  return { id: _walletId(), name: '', address: w.address, enc: encrypt(w.privateKey), createdAt: Date.now(), positions: {}, orders: [], history: [] };
+  // Every wallet is dual-chain: the same secret yields an EVM address AND a Solana
+  // address. Prefer the mnemonic (Phantom-compatible m/44'/501'/0'/0') when we have
+  // one; otherwise derive Solana from the EVM key (domain-separated), so a wallet
+  // always maps to ONE fixed Solana address.
+  const words = String(secret || '').trim().split(/\s+/).filter(Boolean);
+  const mnemonic = [12, 15, 18, 21, 24].includes(words.length) ? words.join(' ')
+    : (!secret && w.mnemonic && w.mnemonic.phrase) ? w.mnemonic.phrase : null;
+  const sol = solana.newWallet(mnemonic || w.privateKey);   // { kind, address, plain }
+  return { id: _walletId(), name: '', address: w.address, enc: encrypt(w.privateKey),
+    solAddress: sol.address, solEnc: encrypt(sol.plain),
+    createdAt: Date.now(), positions: {}, orders: [], history: [] };
 }
+// Backfill a Solana keypair onto a pre-Solana wallet (derived from its EVM key), so
+// every stored wallet gains a fixed Solana address on first use. Idempotent.
+function _ensureSol(w) {
+  if (w && w.solAddress && w.solEnc) return w;
+  const s = solana.newWallet(decrypt(w.enc));   // deriveKeypair(evmPrivKey) → domain-separated Solana key
+  w.solAddress = s.address; w.solEnc = encrypt(s.plain); saveStore();
+  return w;
+}
+function solAddressOf(w) { return _ensureSol(w).solAddress; }
+function _solKeypair(w) { return solana.keypairFromStored(decrypt(_ensureSol(w).solEnc)); }
+// The address a wallet uses ON a given chain: base58 Solana address for svm, else 0x.
+function walletAddress(w, chainKey) { return isSvm(chainKey) ? solAddressOf(w) : w.address; }
 // Display label for a wallet: its custom name, else "Wallet N" (1-based index).
 function walletLabel(w, index) { const n = (w && typeof w.name === 'string') ? w.name.trim() : ''; return n || ('Wallet ' + index); }
 // Rename (Maestro-style). Empty/blank clears back to the default "Wallet N".
@@ -340,12 +363,29 @@ function ensureUser(chatId, referredBy) {
   saveStoreNow();   // write-through: the encrypted key must be durable before we return the address
   return u;
 }
-function _signer(w, chainKey) { return new ethers.Wallet(decrypt(w.enc), providerFor(chainKey)); }
+// A "signer" for a wallet on a chain. EVM → an ethers.Wallet. Solana → a small
+// object { svm, address, keypair, connection } (there is no ethers.Wallet on SVM);
+// the svm buy/sell/withdraw paths use .keypair + .connection directly.
+function _signer(w, chainKey) {
+  if (isSvm(chainKey)) {
+    const kp = _solKeypair(w);
+    return { svm: true, address: kp.publicKey.toBase58(), keypair: kp, connection: providerFor(chainKey) };
+  }
+  return new ethers.Wallet(decrypt(w.enc), providerFor(chainKey));
+}
 function signerFor(chatId, chainKey, walletId) {
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
   return _signer(_resolveWallet(u, walletId), chainKey || userChain(u));
 }
-function exportKey(chatId, walletId) { const u = getUser(chatId); if (!u) throw new Error('no wallet'); return decrypt(_resolveWallet(u, walletId).enc); }
+// Export the wallet's secret for a given chain: the Solana base58 secret on svm
+// (what Phantom/Solflare import), else the EVM 0x private key. Default (no chainKey)
+// stays EVM for backward compatibility.
+function exportKey(chatId, walletId, chainKey) {
+  const u = getUser(chatId); if (!u) throw new Error('no wallet');
+  const w = _resolveWallet(u, walletId);
+  if (isSvm(chainKey)) return decrypt(_ensureSol(w).solEnc);
+  return decrypt(w.enc);
+}
 
 // Add a wallet (generate when secret is undefined, else import a key/seed). Adds
 // to the list (up to WALLET_CAP) and makes it active. Non-destructive — existing
@@ -372,8 +412,11 @@ function switchWallet(chatId, walletId) {
 async function _balanceResilient(chainKey, addr, tries = 3, timeoutMs = 6000) {
   for (let i = 0; i < tries; i++) {
     try {
+      const read = isSvm(chainKey)
+        ? solana.solBalance(providerFor(chainKey), addr)   // lamports (never throws, but keep the race for the timeout)
+        : providerFor(chainKey).getBalance(addr);
       const bal = await Promise.race([
-        providerFor(chainKey).getBalance(addr),
+        read,
         new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), timeoutMs)),
       ]);
       return { ok: true, bal };
@@ -391,11 +434,18 @@ async function removeWallet(chatId, walletId) {
   const u = ensureUser(chatId);
   if (u.wallets.length <= 1) throw new Error('you must keep at least one wallet');
   const w = walletById(u, walletId); if (!w) throw new Error('wallet not found');
-  const dust = ethers.parseEther('0.0002');
   for (const ch of chains.enabledChains()) {
-    const { ok, bal } = await _balanceResilient(ch.key, w.address);
+    const svm = ch.kind === 'svm';
+    const addr = svm ? solAddressOf(w) : w.address;
+    // Dust threshold in the chain's smallest unit: ~0.0002 ETH on EVM, 0.002 SOL on
+    // Solana (a hair above the rent-exempt minimum, so an empty ATA-only wallet frees).
+    const dust = svm ? 2000000n : ethers.parseEther('0.0002');
+    const { ok, bal } = await _balanceResilient(ch.key, addr);
     if (!ok) continue;   // couldn't verify → don't block (key is archived/recoverable)
-    if (bal > dust) throw new Error(`this wallet still holds ${Number(ethers.formatEther(bal)).toFixed(5)} ${ch.native} on ${ch.name} — withdraw it (or export the key) first.`);
+    if (bal > dust) {
+      const human = svm ? solana.lamportsToSol(bal).toFixed(5) : Number(ethers.formatEther(bal)).toFixed(5);
+      throw new Error(`this wallet still holds ${human} ${ch.native} on ${ch.name} — withdraw it (or export the key) first.`);
+    }
   }
   // Re-validate AFTER the async balance loop (the event loop yielded, so a
   // concurrent removal could have changed the list). This block runs to completion
@@ -405,7 +455,9 @@ async function removeWallet(chatId, walletId) {
   // Archive the encrypted key before dropping the wallet, so a removed wallet's key
   // is NEVER irrecoverable (it may still hold ERC20 bags the native guard can't see).
   u.oldWallets = Array.isArray(u.oldWallets) ? u.oldWallets : [];
-  u.oldWallets.push({ address: w.address, enc: w.enc, at: Date.now() });
+  // Archive BOTH keys: a Phantom-path (mnemonic-derived) Solana key can't be rebuilt
+  // from the EVM key alone, so keep solEnc/solAddress or it would be irrecoverable.
+  u.oldWallets.push({ address: w.address, enc: w.enc, solAddress: w.solAddress, solEnc: w.solEnc, at: Date.now() });
   if (u.oldWallets.length > 20) u.oldWallets = u.oldWallets.slice(-20);
   u.wallets = u.wallets.filter((x) => x.id !== w.id);
   if (u.activeWalletId === w.id) u.activeWalletId = u.wallets[0].id;
@@ -591,8 +643,19 @@ async function tokenMeta(ca, chainKey) {
   try { dec = Number(await erc.decimals()); } catch (_) {}
   return { name: String(name).slice(0, 40), sym: String(sym).slice(0, 20), decimals: dec };
 }
-async function ethBalance(addr, chainKey) { try { return await providerFor(chainKey).getBalance(addr); } catch (_) { return 0n; } }
-async function tokenBalance(ca, addr, chainKey) { try { return await new ethers.Contract(ca, ERC20_ABI, providerFor(chainKey)).balanceOf(addr); } catch (_) { return 0n; } }
+// Native balance in the chain's smallest unit (wei on EVM, lamports on Solana),
+// always a BigInt. Solana lamports are 1e9 — callers format with the chain's decimals.
+async function ethBalance(addr, chainKey) {
+  if (isSvm(chainKey)) return solana.solBalance(providerFor(chainKey), addr);
+  try { return await providerFor(chainKey).getBalance(addr); } catch (_) { return 0n; }
+}
+// Raw token balance (BigInt) held by `addr`. On Solana `ca` is an SPL mint and `addr`
+// the owner; splBalance sums the owner's token accounts. Raw units — decimals differ
+// per mint (6 or 9), so callers pair this with tokenDecimals/splBalance().decimals.
+async function tokenBalance(ca, addr, chainKey) {
+  if (isSvm(chainKey)) { const { raw } = await solana.splBalance(providerFor(chainKey), addr, ca); return raw; }
+  try { return await new ethers.Contract(ca, ERC20_ABI, providerFor(chainKey)).balanceOf(addr); } catch (_) { return 0n; }
+}
 // Maestro-style: this token's balance (+ native) across EVERY one of the user's
 // wallets, read LIVE on-chain (so tokens acquired outside the bot — e.g. a token
 // you launched on the site — still show up). Best-effort: a failed read is 0, never
@@ -601,14 +664,21 @@ async function tokenBalance(ca, addr, chainKey) { try { return await new ethers.
 async function tokenAcrossWallets(chatId, ca, chainKey, decimals) {
   const u = getUser(chatId); if (!u) return { rows: [], holderId: null, supply: 0n };
   chainKey = chainKey || userChain(u);
-  const list = walletList(u);
-  const dec = Number.isFinite(decimals) ? decimals : 18;
+  const svm = isSvm(chainKey);
+  const nativeDec = svm ? 9 : 18;                          // lamports vs wei
+  let dec = Number.isFinite(decimals) ? decimals : (svm ? 9 : 18);
   let supply = 0n;
-  try { supply = await new ethers.Contract(ca, ERC20_ABI, providerFor(chainKey)).totalSupply(); } catch (_) {}
+  if (svm) {
+    try { const s = await providerFor(chainKey).getTokenSupply(new (require('@solana/web3.js').PublicKey)(ca)); supply = BigInt(s.value.amount); dec = s.value.decimals; } catch (_) {}
+  } else {
+    try { supply = await new ethers.Contract(ca, ERC20_ABI, providerFor(chainKey)).totalSupply(); } catch (_) {}
+  }
+  const list = walletList(u);
   const rows = await Promise.all(list.map(async (w, i) => {
-    const [tb, eb] = await Promise.all([tokenBalance(ca, w.address, chainKey), ethBalance(w.address, chainKey)]);
+    const addr = walletAddress(w, chainKey);
+    const [tb, eb] = await Promise.all([tokenBalance(ca, addr, chainKey), ethBalance(addr, chainKey)]);
     const pct = supply > 0n ? (Number(tb) / Number(supply)) * 100 : 0;   // ratio only — display precision is fine
-    return { id: w.id, index: i + 1, label: walletLabel(w, i + 1), address: w.address, active: w.id === u.activeWalletId, raw: tb, tokens: Number(ethers.formatUnits(tb, dec)), pctSupply: pct, eth: Number(ethers.formatEther(eb)) };
+    return { id: w.id, index: i + 1, label: walletLabel(w, i + 1), address: addr, active: w.id === u.activeWalletId, raw: tb, tokens: Number(ethers.formatUnits(tb, dec)), pctSupply: pct, eth: Number(ethers.formatUnits(eb, nativeDec)) };
   }));
   let holderId = null, max = 0n;
   for (const r of rows) { if (r.raw > max) { max = r.raw; holderId = r.id; } }
@@ -737,6 +807,7 @@ function _pushHistory(wal, entry) {
 // Buy `ethAmount` (human native) of `ca` on the user's active chain (or chainKey).
 async function buy(chatId, ca, ethAmount, chainKey, walletId) {
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
+  if (isSvm(chainKey || userChain(u))) throw new Error('Solana trading lands in the next update — wallet & balances are live now.');
   const wal = _resolveWallet(u, walletId);
   return withWalletLock(wal.address, async () => {
     chainKey = chainKey || userChain(u);
@@ -814,6 +885,7 @@ async function buy(chatId, ca, ethAmount, chainKey, walletId) {
 
 async function sell(chatId, ca, pct, chainKey, walletId) {
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
+  if (isSvm(chainKey || userChain(u))) throw new Error('Solana trading lands in the next update — wallet & balances are live now.');
   const wal = _resolveWallet(u, walletId);
   return withWalletLock(wal.address, async () => {
     chainKey = chainKey || userChain(u);
@@ -901,10 +973,12 @@ async function sell(chatId, ca, pct, chainKey, walletId) {
 }
 
 async function withdraw(chatId, to, amount, chainKey, walletId) {
+  const u = getUser(chatId); if (!u) throw new Error('no wallet');
+  // Guard svm BEFORE the 0x check — a base58 Solana destination isn't a 0x address.
+  if (isSvm(chainKey || userChain(u))) throw new Error('Solana withdraw lands in the next update — wallet & balances are live now.');
   to = String(to || '').trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('invalid destination address');
   if (/^0x0{40}$/i.test(to)) throw new Error('refusing to send to the zero address');
-  const u = getUser(chatId); if (!u) throw new Error('no wallet');
   const wal = _resolveWallet(u, walletId);
   return withWalletLock(wal.address, async () => {
     chainKey = chainKey || userChain(u);
@@ -983,7 +1057,7 @@ async function portfolio(chatId, walletId) {
   for (const key of Object.keys(wal.positions || {})) {
     const p = wal.positions[key];
     if (p.chain !== chainKey) continue;   // show only the active chain
-    const balRaw = await tokenBalance(p.ca, wal.address, chainKey);
+    const balRaw = await tokenBalance(p.ca, walletAddress(wal, chainKey), chainKey);
     const bal = Number(ethers.formatUnits(balRaw, p.dec || 18));
     if (bal <= 1e-9 && !(p.ethIn > 0)) continue;
     const snap = await tokenSnapshot(p.ca, chainKey).catch(() => null);
@@ -993,7 +1067,7 @@ async function portfolio(chatId, walletId) {
     rows.push({ ca: p.ca, name: p.name, sym: p.sym, tokens: bal, valueEth, ethIn: p.ethIn, ethOut: p.ethOut, unrealizedEth: valueEth - (p.ethIn - p.ethOut), realizedEth: p.realizedEth || 0 });
   }
   rows.sort((a, b) => b.valueEth - a.valueEth);
-  return { rows, totalValueEth, address: wal.address, chain, native: chain.native };
+  return { rows, totalValueEth, address: walletAddress(wal, chainKey), chain, native: chain.native };
 }
 // Maestro-style aggregate portfolio: every token any wallet has a position in on the
 // active chain, summed across ALL wallets (live balances) with a per-wallet breakdown.
@@ -1021,7 +1095,7 @@ async function portfolioAll(chatId) {
     // Live balance summed across every wallet + which wallets hold it.
     let totalTokens = 0; const holders = [];
     for (const wal of list) {
-      const balRaw = await tokenBalance(agg.ca, wal.address, chainKey);
+      const balRaw = await tokenBalance(agg.ca, walletAddress(wal, chainKey), chainKey);
       const bal = Number(ethers.formatUnits(balRaw, agg.dec));
       if (bal > 1e-9) { totalTokens += bal; holders.push({ index: list.indexOf(wal) + 1, label: walletLabel(wal, list.indexOf(wal) + 1), tokens: bal }); }
     }
@@ -1059,7 +1133,7 @@ module.exports = {
   loadStore, saveStore, saveStoreNow, allUsers, getUser, ensureUser, signerFor, exportKey, walletFromSecret, setChain,
   noteUser, findUser, recordTrade, reportSnapshot, resetReportWindow, recapDue, markRecap,
   walletList, walletById, activeWallet, activeAddress, addWallet, switchWallet, removeWallet, listWallets, WALLET_CAP,
-  renameWallet, walletLabel, hasChainPresets,
+  renameWallet, walletLabel, hasChainPresets, solAddressOf, walletAddress,
   buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
   setConfirmBuy, setExpert, setNotify, notifyOn, NOTIFY_TYPES,
   tradeSelection, setTradeAll, toggleTradeWallet, tradeWalletIds,
