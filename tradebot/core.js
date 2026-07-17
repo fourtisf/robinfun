@@ -368,6 +368,7 @@ function ensureUser(chatId, referredBy) {
     if (!u.copy || typeof u.copy !== 'object') { u.copy = { on: false, targets: [] }; ch = true; }   // copy-trading
     if (!Array.isArray(u.copy.targets)) { u.copy.targets = []; ch = true; }
     if (!Array.isArray(u.dca)) { u.dca = []; ch = true; }                                  // scheduled buys (DCA)
+    if (u.lang !== 'id' && u.lang !== 'en') { u.lang = 'en'; ch = true; }                  // UI language
     if (!u.security || typeof u.security !== 'object') { u.security = { withdrawLock: false, whitelist: [], wdTimes: [] }; ch = true; }
     if (typeof u.security.withdrawLock !== 'boolean') { u.security.withdrawLock = false; ch = true; }
     if (!Array.isArray(u.security.whitelist)) { u.security.whitelist = []; ch = true; }
@@ -675,6 +676,8 @@ function setAutoBuy(chatId, on, amount) {
 function setConfirmBuy(chatId, on) { const u = ensureUser(chatId); u.settings.confirmBuy = !!on; saveStore(); return u.settings.confirmBuy; }
 // Expert/fast mode: skip the intermediate "⏳ Buying…" progress messages.
 function setExpert(chatId, on) { const u = ensureUser(chatId); u.settings.expert = !!on; saveStore(); return u.settings.expert; }
+function getLang(chatId) { const u = getUser(chatId); return (u && (u.lang === 'id' || u.lang === 'en')) ? u.lang : 'en'; }
+function setLang(chatId, lang) { const u = ensureUser(chatId); u.lang = (lang === 'id') ? 'id' : 'en'; saveStore(); return u.lang; }
 // Auto-exit: after every buy, auto-place a take-profit at +tpPct and/or a stop-loss at
 // −slPct (0 disables that leg). Clamped to sane ranges.
 function setAutoExit(chatId, tpPct, slPct) {
@@ -1420,7 +1423,7 @@ module.exports = {
   renameWallet, walletLabel, hasChainPresets, solAddressOf, walletAddress,
   getSecurity, setWithdrawLock, addWhitelist, removeWhitelist, MAX_WD_PER_HOUR, backupNow,
   buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
-  setConfirmBuy, setExpert, setAutoExit, setNotify, notifyOn, NOTIFY_TYPES,
+  setConfirmBuy, setExpert, setAutoExit, getLang, setLang, setNotify, notifyOn, NOTIFY_TYPES,
   tradeSelection, setTradeAll, toggleTradeWallet, tradeWalletIds,
   addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
   feePayoutEnabled, payFromFeeWallet,

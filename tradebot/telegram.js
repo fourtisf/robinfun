@@ -264,14 +264,22 @@ async function portfolioScreen(chatId) {
   const pf = await core.portfolioAll(chatId);   // aggregated across ALL wallets (Maestro style)
   const nat = pf.native || 'ETH';
   if (!pf.rows.length) return { text: `📊 <b>Portfolio</b> · ${pf.chain ? pf.chain.emoji + ' ' + esc(pf.chain.name) : ''}\n\nNo holdings on this chain across your wallets. Paste a token contract to buy, or switch chain.`, kb: rows([btn('🌐 Chain', 'chain'), btn('« Menu', 'menu')]) };
-  let body = '', totalUnreal = 0;
+  let body = '', totalUnreal = 0, totalIn = 0, totalOut = 0;
   for (const r of pf.rows) {
-    totalUnreal += r.unrealizedEth;
+    totalUnreal += r.unrealizedEth; totalIn += r.ethIn; totalOut += r.ethOut;
+    // x-multiple on invested = (what it's worth now + what you've already taken out) / put in.
+    const mult = r.ethIn > 0 ? (r.valueEth + r.ethOut) / r.ethIn : 0;
+    const multStr = mult > 0 ? mult.toFixed(2) + '×' : '—';
+    const pnlPct = r.ethIn > 0 ? (mult - 1) * 100 : 0;
     const who = (r.holders && r.holders.length) ? r.holders.map((h) => `${esc(h.label)} ${fmt(h.tokens)}`).join(', ') : '—';
-    body += `<b>$${esc(r.sym)}</b> ${fmt(r.tokens)} · ${usd(r.valueEth, nat)}\n   in ${r.ethIn.toFixed(4)} / out ${r.ethOut.toFixed(4)} ${nat} · PnL ${r.unrealizedEth >= 0 ? '+' : ''}${r.unrealizedEth.toFixed(4)}\n   held by: ${who}\n   <code>${r.ca}</code>\n`;
+    body += `<b>$${esc(r.sym)}</b> · ${usd(r.valueEth, nat)} · <b>${multStr}</b> ${r.ethIn > 0 ? `(${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(0)}%)` : ''}\n   ${fmt(r.tokens)} · in ${r.ethIn.toFixed(4)} → now ${r.valueEth.toFixed(4)} ${nat} · PnL <b>${r.unrealizedEth >= 0 ? '+' : ''}${r.unrealizedEth.toFixed(4)}</b>\n   held: ${who}\n   <code>${r.ca}</code>\n`;
   }
-  const text = `📊 <b>Portfolio</b> · ${pf.chain.emoji} ${esc(pf.chain.name)} · all wallets · value ${usd(pf.totalValueEth, nat)}\n\n${body}\nUnrealized PnL: <b>${totalUnreal >= 0 ? '+' : ''}${totalUnreal.toFixed(4)} ${nat}</b>`;
-  return { text, kb: rows([btn('🔄 Refresh', 'pos'), btn('🌐 Chain', 'chain'), btn('« Menu', 'menu')]) };
+  const pMult = totalIn > 0 ? (pf.totalValueEth + totalOut) / totalIn : 0;
+  const pPct = totalIn > 0 ? (pMult - 1) * 100 : 0;
+  const text = `📊 <b>Portfolio</b> · ${pf.chain.emoji} ${esc(pf.chain.name)} · all wallets\n` +
+    `Value <b>${usd(pf.totalValueEth, nat)}</b> · ${pf.totalValueEth.toFixed(4)} ${nat}${totalIn > 0 ? ` · <b>${pMult.toFixed(2)}×</b> (${pPct >= 0 ? '+' : ''}${pPct.toFixed(0)}%)` : ''}\n\n${body}\n` +
+    `Invested <b>${totalIn.toFixed(4)}</b> · out <b>${totalOut.toFixed(4)}</b> ${nat}\nUnrealized PnL: <b>${totalUnreal >= 0 ? '+' : ''}${totalUnreal.toFixed(4)} ${nat}</b> (${usd(Math.abs(totalUnreal), nat)})`;
+  return { text, kb: rows([btn('🔄 Refresh', 'pos'), btn('🧾 History', 'hist'), btn('🌐 Chain', 'chain'), btn('« Menu', 'menu')]) };
 }
 function historyScreen(chatId) {
   const u = core.ensureUser(chatId);
@@ -406,7 +414,7 @@ function settingsScreen(chatId) {
       [btn('🌐 Chain', 'chain'), btn('📉 Slippage', 'setslip'), btn(`⚡ Buy amounts`, 'setbp')],
       [btn(`${s.confirmBuy ? '🔴 Confirm buy OFF' : '🟢 Confirm buy ON'}`, 'cbtog'), btn(`${s.expert ? '🔴 Fast mode OFF' : '🟢 Fast mode ON'}`, 'extog')],
       [btn(s.autoBuy ? '🔴 Auto-buy OFF' : '🟢 Auto-buy ON', 'abtog'), btn('✏️ Auto-buy amount', 'abamt')],
-      [btn('🎯 Auto-exit (TP/SL)', 'aex')],
+      [btn('🎯 Auto-exit (TP/SL)', 'aex'), btn('🌐 Bahasa / Language', 'lang')],
       [btn('🔐 Security', 'usec'), btn('🔔 Notifications', 'ntf')],
       [btn('❔ Help', 'help'), btn('« Menu', 'menu')],
     ),
@@ -689,7 +697,8 @@ async function onMessage(m) {
   }
   if (text.startsWith('/userkey')) return adminUserKey(chatId, text.split(/\s+/)[1]);
   if (text.startsWith('/stats')) return adminStats(chatId);
-  if (text === '/menu' || text === '/help') return send(chatId, helpText(), mainMenu());
+  if (text === '/menu' || text === '/help') return send(chatId, helpText(chatId), mainMenu());
+  if (text === '/bahasa' || text === '/lang' || text === '/language') { const s = langScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text.startsWith('/buy')) { const [, ca, amt] = text.split(/\s+/); if (isCa(ca) && amt) return requestBuy(chatId, ca, amt); return send(chatId, 'Usage: <code>/buy &lt;contract&gt; &lt;amount&gt;</code> — or paste a contract address.'); }
   if (text.startsWith('/sell')) { const [, ca, pct] = text.split(/\s+/); if (isCa(ca) && pct) return doSell(chatId, ca, Number(pct)); return send(chatId, 'Usage: <code>/sell &lt;contract&gt; &lt;pct&gt;</code>'); }
 
@@ -745,8 +754,10 @@ async function onCallback(q) {
     try { await send(chatId, '⏳ Sending…'); const r = await core.withdraw(chatId, pp.to, pp.amt, pp.chain); return send(chatId, `✅ Sent <b>${r.sentEth} ${r.native}</b>\n${txLink(pp.chain, r.hash)}`); }
     catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e))); }
   }
-  if (data === 'menu') return edit(chatId, mid, '🏠 <b>Robinfun Trade Bot</b>\n\nPaste a contract address to trade, or pick:', mainMenu());
-  if (data === 'help') return edit(chatId, mid, helpText(), mainMenu());
+  if (data === 'menu') return edit(chatId, mid, menuGreeting(chatId), mainMenu());
+  if (data === 'help') return edit(chatId, mid, helpText(chatId), mainMenu());
+  if (data === 'lang') { const s = langScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (k === 'lang') { core.setLang(chatId, ca); const s = langScreen(chatId); await edit(chatId, mid, s.text, s.kb); return send(chatId, ca === 'id' ? '✅ Bahasa disetel ke <b>Indonesia</b>.' : '✅ Language set to <b>English</b>.', mainMenu()); }
   if (data === 'wal') { const w = await walletScreen(chatId); return edit(chatId, mid, w.text, w.kb); }
   if (data === 'chain') { const s = chainScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (k === 'setch') { try { core.setChain(chatId, ca); } catch (_) {} const w = await walletScreen(chatId); return edit(chatId, mid, w.text, w.kb); }
@@ -1012,21 +1023,43 @@ async function adminStats(chatId) {
   if (!core.CFG.admins.includes(String(chatId))) return send(chatId, 'Not authorized.');
   return send(chatId, statsText(core.reportSnapshot(), core.allUsers().length));
 }
-function helpText() {
+function langOf(chatId) { return core.getLang(chatId); }
+function menuGreeting(chatId) {
+  return langOf(chatId) === 'id'
+    ? '🏠 <b>Robinfun Trade Bot</b>\n\nTempel alamat kontrak (CA/mint) untuk trading, atau pilih menu:'
+    : '🏠 <b>Robinfun Trade Bot</b>\n\nPaste a contract address to trade, or pick:';
+}
+function langScreen(chatId) {
+  const cur = langOf(chatId);
+  return { text: '🌐 <b>Language / Bahasa</b>\n\nChoose your language. / Pilih bahasa kamu.', kb: rows([btn(`${cur === 'en' ? '✓ ' : ''}🇬🇧 English`, 'lang:en'), btn(`${cur === 'id' ? '✓ ' : ''}🇮🇩 Indonesia`, 'lang:id')], [btn('« Menu', 'menu')]) };
+}
+function helpText(chatId) {
+  const fee = (core.CFG.feeBps / 100).toFixed(2), ref = (core.CFG.refShareBps / 100).toFixed(0);
+  if (langOf(chatId) === 'id') return (
+    `🤖 <b>Robinfun Trade Bot — bantuan</b>\n\n` +
+    `• Tempel <b>alamat kontrak / mint</b> → kartu live, buy/sell satu-tap\n` +
+    `• <b>/chain</b> — ganti chain (Robinhood, Ethereum, Base, BNB, Arbitrum, Solana)\n` +
+    `• <b>/wallet</b> — hingga ${core.WALLET_CAP} wallet: saldo, deposit/withdraw, import/export, ganti\n` +
+    `• <b>/portfolio</b> — posisi & PnL · <b>/history</b> — riwayat trade\n` +
+    `• <b>/snipe</b> — auto-beli launch baru · <b>/copy</b> — tiru buy wallet lain\n` +
+    `• <b>/orders</b> — TP / SL / trailing / limit · <b>/dca</b> — beli terjadwal · <b>/alerts</b> — alert harga\n` +
+    `• <b>⚙️ Settings → 🔐 Security</b> — kunci withdraw & whitelist alamat\n` +
+    `• <b>/referral</b> — dapat ${ref}% fee dari undangan · <b>/bahasa</b> — ganti bahasa\n` +
+    `• <b>/buy &lt;ca&gt; &lt;jml&gt;</b>, <b>/sell &lt;ca&gt; &lt;%&gt;</b>, <b>/send &lt;token&gt; &lt;tujuan&gt; &lt;jml&gt;</b>, <b>/cancel</b>\n\n` +
+    `Fee bot: <b>${fee}%</b> per trade. Hanya deposit yang kamu sanggup rugi.`
+  );
   return (
     `🤖 <b>Robinfun Trade Bot — help</b>\n\n` +
-    `• Paste a <b>contract address</b> → live card with one-tap buy/sell\n` +
-    `• <b>/chain</b> — switch chain (Robinhood, Ethereum, Base, BNB, Arbitrum)\n` +
+    `• Paste a <b>contract address / mint</b> → live card with one-tap buy/sell\n` +
+    `• <b>/chain</b> — switch chain (Robinhood, Ethereum, Base, BNB, Arbitrum, Solana)\n` +
     `• <b>/wallet</b> — up to ${core.WALLET_CAP} wallets: balance, deposit/withdraw, import/export, switch\n` +
-    `• <b>/portfolio</b> — positions & PnL (active chain) · <b>/history</b> — trade log\n` +
-    `• <b>/snipe</b> — auto-buy new launches (Robinhood + new DEX pairs)\n` +
-    `• <b>/orders</b> — take-profit / stop-loss / limit buys · <b>/alerts</b> — price pings\n` +
-    `• <b>/copy</b> — mirror a wallet's buys (beta)\n` +
-    `• <b>/referral</b> — earn ${(core.CFG.refShareBps / 100).toFixed(0)}% of the bot fee from invites\n` +
-    `• <b>/settings</b> — slippage, quick-buy amounts, auto-buy on paste\n` +
-    `• 🛡 <b>Safety</b> — on a token card (Ethereum/Base/BNB/Arbitrum): honeypot, tax, mint, LP checks\n` +
-    `• <b>/buy &lt;ca&gt; &lt;amt&gt;</b>, <b>/sell &lt;ca&gt; &lt;pct&gt;</b>, <b>/cancel</b>\n\n` +
-    `Bot fee: <b>${(core.CFG.feeBps / 100).toFixed(2)}%</b> per trade. Only deposit what you can afford to lose.`
+    `• <b>/portfolio</b> — positions & PnL · <b>/history</b> — trade log\n` +
+    `• <b>/snipe</b> — auto-buy new launches · <b>/copy</b> — mirror a wallet's buys\n` +
+    `• <b>/orders</b> — TP / SL / trailing / limit · <b>/dca</b> — scheduled buys · <b>/alerts</b> — price pings\n` +
+    `• <b>⚙️ Settings → 🔐 Security</b> — withdraw lock & address whitelist\n` +
+    `• <b>/referral</b> — earn ${ref}% of the bot fee from invites · <b>/bahasa</b> — language\n` +
+    `• <b>/buy &lt;ca&gt; &lt;amt&gt;</b>, <b>/sell &lt;ca&gt; &lt;pct&gt;</b>, <b>/send &lt;token&gt; &lt;dest&gt; &lt;amt&gt;</b>, <b>/cancel</b>\n\n` +
+    `Bot fee: <b>${fee}%</b> per trade. Only deposit what you can afford to lose.`
   );
 }
 
@@ -1083,5 +1116,5 @@ async function start() {
   }
 }
 
-module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, securityScreen, ordersScreen, dcaScreen, statsText, walletPickScreen, tradeTargets, tokenCard, PRICES, isCa, fmtNat, wAddr, isAddrFor, _placeAutoExit } };
+module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, securityScreen, ordersScreen, dcaScreen, portfolioScreen, helpText, langScreen, statsText, walletPickScreen, tradeTargets, tokenCard, PRICES, isCa, fmtNat, wAddr, isAddrFor, _placeAutoExit } };
 if (require.main === module) start();
