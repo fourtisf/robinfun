@@ -525,6 +525,10 @@ async function payoutCycle() {
     const dest = core.activeAddress(u); if (!dest) continue;
     for (const ck of Object.keys(owed)) {
       const ch = core.chainOf(ck); if (!ch) continue;
+      // Auto-payout is an EVM hot-key feature (ethers). Solana referral debt accrues in
+      // lamports and is settled MANUALLY — never try to pay it with an ethers wallet
+      // (that would throw) and never compare lamports against a wei threshold.
+      if (core.chains.isSvm(ck)) continue;
       let wei; try { wei = BigInt(owed[ck] || '0'); } catch (_) { continue; }
       if (wei < minWei) continue;
       // Deduct BEFORE paying so a crash can never overpay.

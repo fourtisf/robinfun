@@ -5,10 +5,13 @@ A **custodial, Maestro-style, multi-chain Telegram trading bot** for
 website, no wallet extension.
 
 **Chains:** Robinhood Chain (Robinfun bonding curves), Ethereum, Base, BNB Chain,
-Arbitrum. One EVM key is the **same address on every chain** — switch with `/chain`.
-On Robinhood Chain trades route to the Robinfun curve (then its DEX after
-graduation); on every other chain they route to that chain's Uniswap-V2/PancakeSwap
-DEX (any token, by contract address). Solana / non-EVM is a separate future module.
+Arbitrum, and **Solana**. One EVM key is the **same address on every EVM chain**;
+the same custodial secret also derives one fixed **Solana** address (Phantom-path for
+seed-phrase wallets) — switch with `/chain`. On Robinhood Chain trades route to the
+Robinfun curve (then its DEX after graduation); on other EVM chains to that chain's
+Uniswap-V2/PancakeSwap DEX; on **Solana** to the **Jupiter** aggregator (any SPL mint,
+by base58 address). Solana is **off by default** — enable it by adding `solana` to
+`ENABLED_CHAINS` and setting `SOLANA_RPC` (a private RPC is strongly recommended).
 
 ## Features
 
@@ -23,25 +26,34 @@ DEX (any token, by contract address). Solana / non-EVM is a separate future modu
 - **Buy / Sell by CA** — paste a contract address → live card (price, mcap,
   graduation %, your bag & PnL) with one-tap buy/sell. Routes to the bonding curve
   while listed, and to Uniswap V2 once graduated — same path as the website.
-- **Rich token scan** — paste a CA for a Maestro-style card: price, market cap,
-  liquidity/raised, 24h volume, holders, LP status, buy/sell tax, honeypot, age
-  and socials (on-chain + Robinfun API + GoPlus), with a HIGH-RISK banner.
+- **Rich token scan** — paste a CA/mint for a Maestro-style card: price, market cap,
+  liquidity/raised, 24h volume, holders, LP status, and safety. **EVM** safety is
+  GoPlus (buy/sell tax, honeypot, owner footguns); **Solana** safety is **RugCheck**
+  (mint/freeze authority, LP locked/burned, holder concentration, "rugged" flag),
+  both surfaced as a HIGH-RISK banner.
 - **Portfolio + History** — open positions with live value and unrealized PnL, a
-  per-wallet trade log, and realized PnL.
-- **Snipe (multi-chain)** — auto-buy every new Robinfun launch, and (opt-in per
-  chain) every new Uniswap/Pancake pair on ETH/Base/BNB/Arbitrum; honeypots skipped.
+  per-wallet trade log, and realized PnL (SOL-denominated on Solana).
+- **Snipe (multi-chain)** — auto-buy every new Robinfun launch, every new
+  Uniswap/Pancake pair on ETH/Base/BNB/Arbitrum, and every new **pump.fun** launch on
+  Solana (discovery via the pump.fun feed, buy via Jupiter); DANGER-flagged tokens
+  skipped. Opt-in per chain.
 - **Limit / TP / SL + Price alerts** — set a USD target; the bot polls the price
-  and executes (orders) or just pings you (alerts, notify-only) when crossed.
+  and executes (orders) or just pings you (alerts, notify-only) when crossed. Works on
+  every chain, Solana included (DexScreener pricing).
 - **Copy-trading (beta)** — follow a wallet and mirror its BUYS with your active
-  wallet; honeypots skipped and total spend per target is hard-capped (bounded loss).
+  wallet. EVM watches the token's WETH-pair swaps; **Solana** polls the target's
+  signatures and mirrors a SOL-funded SPL buy. DANGER tokens skipped; total spend per
+  target is hard-capped (bounded loss).
 - **Referrals** — share a `?start=<code>` link; referrers earn `REF_SHARE_BPS` of
   the bot fee. Auto-paid from `FEE_WALLET` when `FEE_WALLET_KEY` is set (else manual).
 
 ## Revenue
 
-A flat `BOT_FEE_BPS` (default **1%**) of each trade's ETH value is sent to
-`FEE_WALLET`. Referrers get `REF_SHARE_BPS` (default 30%) of that fee, accrued in
-the store (`_refOwedWei`) for you to settle.
+A flat `BOT_FEE_BPS` (default **1%**) of each trade's native value is sent to
+`FEE_WALLET` (EVM) or `SOL_FEE_WALLET` (Solana — a separate SOL transfer after the
+swap; leave empty to waive). Referrers get `REF_SHARE_BPS` (default 30%) of that fee,
+accrued per chain in the store for you to settle. EVM referral debt can be auto-paid
+when `FEE_WALLET_KEY` is set; Solana referral debt is always settled manually.
 
 ## Run
 
@@ -68,7 +80,12 @@ On the VPS it runs under pm2 as `robinfun-tradebot` (see `deploy/update-all.sh`)
 
 | file | role |
 |------|------|
-| `core.js` | chain + custody + trading engine + referrals |
-| `watchers.js` | snipe + limit/TP-SL background loops |
+| `core.js` | chain + custody + trading engine (EVM + Solana) + referrals |
+| `chains.js` | multi-chain registry (EVM + Solana `kind:'svm'`) |
+| `solana.js` | Solana adapter — keypairs, Jupiter swaps, SOL/SPL, DexScreener, pump.fun |
+| `watchers.js` | snipe + copy + limit/TP-SL/alert background loops (EVM + Solana) |
+| `tokeninfo.js` | rich token scan (price/liquidity/volume/safety aggregation) |
+| `goplus.js` / `rugcheck.js` | token safety — GoPlus (EVM) / RugCheck (Solana) |
+| `safety.js` | chain-aware safety dispatcher |
 | `telegram.js` | Telegram UI (commands, inline buttons, flows) |
 | `index.js` | entrypoint |
