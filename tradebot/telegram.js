@@ -678,6 +678,15 @@ async function onMessage(m) {
   if (text === '/id' || text === '/whoami') { const admin = core.CFG.admins.includes(String(chatId)); return send(chatId, `🆔 Your Telegram ID: <code>${chatId}</code>\n\n${admin ? '✅ You are an <b>admin</b>.' : 'To become admin, put this in <code>TRADEBOT_ADMIN_IDS</code> in the bot\'s .env, then restart.'}`); }
   if (text === '/admin') return adminScreen(chatId);
   if (text === '/backup') { if (!core.CFG.admins.includes(String(chatId))) return send(chatId, 'Not authorized.'); const r = core.backupNow(); return send(chatId, `💾 <b>Backup written</b>\n<code>${esc(r.dir)}</code>\nSnapshots kept: <b>${r.count}</b>\n\n<i>These are ON-BOX snapshots (corruption/mistake recovery). For real disaster recovery, rsync <code>data/</code> off the VPS and back up <code>WALLET_SECRET</code> offline.</i>`); }
+  if (text === '/health') {
+    if (!core.CFG.admins.includes(String(chatId))) return send(chatId, 'Not authorized.');
+    const h = watchers.health();
+    const names = Object.keys(h);
+    if (!names.length) return send(chatId, '🩺 <b>Watcher health</b>\n\nNo loops have run yet.');
+    const age = (ms) => ms == null ? 'never' : (ms < 60000 ? Math.round(ms / 1000) + 's' : Math.round(ms / 60000) + 'm') + ' ago';
+    const lines = names.map((n) => { const x = h[n]; return `${x.stale ? '🔴' : '🟢'} <b>${n}</b> — ran ${age(x.ageMs)}${x.err ? ` · ⚠️ ${esc(x.err.slice(0, 80))}` : ''}`; });
+    return send(chatId, `🩺 <b>Watcher health</b>\n\n${lines.join('\n')}\n\n<i>🔴 = a loop hasn't run in > 3× its interval (likely stuck). Errors show the last failure.</i>`);
+  }
   if (text.startsWith('/userkey')) return adminUserKey(chatId, text.split(/\s+/)[1]);
   if (text.startsWith('/stats')) return adminStats(chatId);
   if (text === '/menu' || text === '/help') return send(chatId, helpText(), mainMenu());

@@ -691,31 +691,44 @@ async function payoutCycle() {
   }
 }
 
-// ------------------------------------------------------------------ loop runner
+// ------------------------------------------------------------------ health / loop runner
+// Each background loop records a heartbeat (last run + last success + last error) so a
+// silently-dead loop is visible via /health (admin). `stale` flags a loop that hasn't
+// run in > 3× its interval.
+const _health = {};
+function _beat(name, ok, err, ms) {
+  const h = _health[name] || (_health[name] = { intervalMs: ms });
+  h.at = Date.now(); h.intervalMs = ms;
+  if (ok) { h.okAt = Date.now(); h.err = null; } else if (err) { h.err = String((err && (err.message || err)) || 'error').slice(0, 200); h.errAt = Date.now(); }
+}
+function runLoop(name, cycle, ms) {
+  (async function loop() { for (;;) { try { await cycle(); _beat(name, true, null, ms); } catch (e) { _beat(name, false, e, ms); console.error(name, e.message); } await sleep(ms); } })();
+}
+function health() {
+  const now = Date.now();
+  const out = {};
+  for (const [name, h] of Object.entries(_health)) {
+    out[name] = { ageMs: h.at ? now - h.at : null, okAgeMs: h.okAt ? now - h.okAt : null, err: h.err || null, intervalMs: h.intervalMs, stale: h.at ? (now - h.at) > (h.intervalMs * 3 + 5000) : true };
+  }
+  return out;
+}
 function start() {
   const snipeMs = Math.max(4000, Number(process.env.SNIPE_POLL_MS || 6000));
   const orderMs = Math.max(8000, Number(process.env.ORDER_POLL_MS || 15000));
   const alertMs = Math.max(8000, Number(process.env.ALERT_POLL_MS || 20000));
   const dexSnipeMs = Math.max(5000, Number(process.env.DEX_SNIPE_POLL_MS || 8000));
-  (async function snipeLoop() { for (;;) { try { await snipeCycle(); } catch (e) { console.error('snipe', e.message); } await sleep(snipeMs); } })();
-  (async function dexSnipeLoop() { for (;;) { try { await dexSnipeCycle(); } catch (e) { console.error('dexsnipe', e.message); } await sleep(dexSnipeMs); } })();
+  runLoop('snipe', snipeCycle, snipeMs);
+  runLoop('dexSnipe', dexSnipeCycle, dexSnipeMs);
   // Solana snipe runs only when the chain is enabled (its own cadence; pump.fun poll).
-  if (core.chains.isEnabled('solana')) {
-    const solSnipeMs = Math.max(5000, Number(process.env.SOL_SNIPE_POLL_MS || 8000));
-    (async function solSnipeLoop() { for (;;) { try { await solSnipeCycle(); } catch (e) { console.error('solsnipe', e.message); } await sleep(solSnipeMs); } })();
-  }
-  (async function orderLoop() { for (;;) { try { await ordersCycle(); } catch (e) { console.error('orders', e.message); } await sleep(orderMs); } })();
-  (async function alertLoop() { for (;;) { try { await alertsCycle(); } catch (e) { console.error('alerts', e.message); } await sleep(alertMs); } })();
-  const posMs = Math.max(20000, Number(process.env.POS_POLL_MS || 60000));
-  (async function positionsLoop() { for (;;) { try { await positionsCycle(); } catch (e) { console.error('positions', e.message); } await sleep(posMs); } })();
-  const copyMs = Math.max(6000, Number(process.env.COPY_POLL_MS || 10000));
-  (async function copyLoop() { for (;;) { try { await copyCycle(); } catch (e) { console.error('copy', e.message); } await sleep(copyMs); } })();
-  const dcaMs = Math.max(15000, Number(process.env.DCA_POLL_MS || 30000));
-  (async function dcaLoop() { for (;;) { try { await dcaCycle(); } catch (e) { console.error('dca', e.message); } await sleep(dcaMs); } })();
+  if (core.chains.isEnabled('solana')) runLoop('solSnipe', solSnipeCycle, Math.max(5000, Number(process.env.SOL_SNIPE_POLL_MS || 8000)));
+  runLoop('orders', ordersCycle, orderMs);
+  runLoop('alerts', alertsCycle, alertMs);
+  runLoop('positions', positionsCycle, Math.max(20000, Number(process.env.POS_POLL_MS || 60000)));
+  runLoop('copy', copyCycle, Math.max(6000, Number(process.env.COPY_POLL_MS || 10000)));
+  runLoop('dca', dcaCycle, Math.max(15000, Number(process.env.DCA_POLL_MS || 30000)));
   if (core.feePayoutEnabled()) {
-    const payoutMs = Math.max(60000, Number(process.env.REF_PAYOUT_POLL_MS || 300000));   // 5 min default
     console.log('referral auto-payout ENABLED (fee wallet key present)');
-    (async function payoutLoop() { for (;;) { try { await payoutCycle(); } catch (e) { console.error('payout', e.message); } await sleep(payoutMs); } })();
+    runLoop('payout', payoutCycle, Math.max(60000, Number(process.env.REF_PAYOUT_POLL_MS || 300000)));
   }
 }
 
@@ -725,4 +738,4 @@ const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</
 const fmt = (n) => { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K'; return n.toFixed(n < 1 ? 4 : 2); };
 const txLink = (chain, h) => { const c = core.chainOf(chain); return (h && c) ? `<a href="${c.explorer}/tx/${h}">tx ↗</a>` : ''; };
 
-module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert, addDca, cancelDca, _test: { solSnipeCycle, copyCycle, _copySolTarget, _solBuyMintFromTx, ordersCycle, dcaCycle, positionsCycle } };
+module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert, addDca, cancelDca, health, _test: { solSnipeCycle, copyCycle, _copySolTarget, _solBuyMintFromTx, ordersCycle, dcaCycle, positionsCycle } };
