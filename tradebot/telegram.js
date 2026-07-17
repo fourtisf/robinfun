@@ -219,7 +219,7 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   // NOTE: the buy callback below `b:${chainKey}:${wi}:${ca}:${amt}` must stay ≤64 bytes
   // (Telegram limit). Worst case ≈ 64 with chain "robinhood", wi≤99, 42-char ca, and a
   // 6-char preset (capped in setBuyPresets). Keep those caps if you touch this.
-  const lastRow = [btn('🔔 Alert', `alt:${chainKey}:${wi}:${ca}`), btn('🔄 Refresh', `tok:${chainKey}:${wi}:${ca}`), btn('« Menu', 'menu')];
+  const lastRow = [btn('🔁 DCA', `dca:${chainKey}:${wi}:${ca}`), btn('🔔 Alert', `alt:${chainKey}:${wi}:${ca}`), btn('🔄 Refresh', `tok:${chainKey}:${wi}:${ca}`), btn('« Menu', 'menu')];
   if (safety.supported(chainKey)) lastRow.unshift(btn('🛡 Safety', `sec:${chainKey}:${ca}`));   // GoPlus (EVM) / RugCheck (Solana)
   // Multi-wallet users get a picker row: choose one / several / ALL wallets to trade from.
   const selLabel = sel.all ? `👛 Trading: ALL ${list.length} wallets` : (selN >= 1 ? `👛 Trading: ${selN} wallet${selN > 1 ? 's' : ''}` : `👛 Trade from: ${core.walletLabel(w, wi)}`);
@@ -325,6 +325,21 @@ function ordersScreen(chatId) {
   }
   kbRows.push([btn('« Menu', 'menu')]);
   return { text: `📋 <b>Active orders</b>\n\n${body}`, kb: { inline_keyboard: kbRows } };
+}
+function dcaScreen(chatId) {
+  const u = core.ensureUser(chatId);
+  const list = u.dca || [];
+  if (!list.length) return { text: '🔁 <b>DCA — scheduled buys</b>\n\nNo active plans. Open a token card and tap 🔁 DCA to buy a fixed amount on a repeating schedule.', kb: rows([btn('« Menu', 'menu')]) };
+  let body = ''; const kbRows = [];
+  const wl = core.walletList(u);
+  for (const p of list) {
+    const c = core.chainOf(p.chain) || { emoji: '', native: '' };
+    const wi = (wl.findIndex((w) => w.id === p.walletId) + 1) || 1;
+    body += `${c.emoji} <b>$${esc(p.sym || '')}</b> · ${esc(p.amount)} ${c.native} every ${p.intervalMin}m · <b>${p.roundsLeft}/${p.rounds}</b> left${wl.length > 1 ? ' · W' + wi : ''}\n`;
+    kbRows.push([btn(`✖ Cancel $${p.sym || ''} DCA`, `dcac:${p.id}`)]);
+  }
+  kbRows.push([btn('« Menu', 'menu')]);
+  return { text: `🔁 <b>Active DCA plans</b>\n\n${body}`, kb: { inline_keyboard: kbRows } };
 }
 function alertsScreen(chatId) {
   const u = core.ensureUser(chatId);
@@ -649,6 +664,7 @@ async function onMessage(m) {
   if (text === '/orders') { const s = ordersScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/alerts') { const s = alertsScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/copy') { const s = copyScreen(chatId); return send(chatId, s.text, s.kb); }
+  if (text === '/dca') { const s = dcaScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/referral' || text === '/refer') { const s = referralScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/settings') { const s = settingsScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/withdraw') { setPending(chatId, { action: 'wd_addr' }); return send(chatId, '📤 Send the <b>destination address</b> to withdraw to:'); }
@@ -729,6 +745,8 @@ async function onCallback(q) {
   if (data === 'hist') { const s = historyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'snipe') { const s = snipeScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'orders') { const s = ordersScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'dcas') { const s = dcaScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (k === 'dcac') { watchers.cancelDca(chatId, ca); const s = dcaScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'ref') { const s = referralScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'set') { const s = settingsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'setslip') { setPending(chatId, { action: 'slip_val' }); return send(chatId, 'Send your <b>slippage %</b> (e.g. <code>5</code>). <code>0</code> = default (5%). Max 50.'); }
@@ -778,7 +796,7 @@ async function onCallback(q) {
   if (data === 'snamt') { setPending(chatId, { action: 'snipe_amt' }); return send(chatId, 'Send the amount to buy per snipe in native token (e.g. <code>0.01</code>):'); }
 
   // Trade actions encode the CARD's chain: k:chain:ca[:arg]
-  if (k === 'tok' || k === 'b' || k === 's' || k === 'bx' || k === 'sx' || k === 'tp' || k === 'sl' || k === 'lb' || k === 'alt' || k === 'trl' || k === 'wt') {
+  if (k === 'tok' || k === 'b' || k === 's' || k === 'bx' || k === 'sx' || k === 'tp' || k === 'sl' || k === 'lb' || k === 'alt' || k === 'trl' || k === 'wt' || k === 'dca') {
     const parts = data.split(':'); const ch = parts[1], wi = parts[2], tca = parts[3], a = parts[4];
     const wobj = core.walletList(core.ensureUser(chatId))[Number(wi) - 1];
     const wid = wobj ? wobj.id : undefined;   // stale/removed index → fall back to the active wallet
@@ -793,6 +811,7 @@ async function onCallback(q) {
     if (k === 'lb') { setPending(chatId, { action: 'lb_price', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Limit buy: send <b>&lt;usd_price&gt; &lt;amount&gt;</b> (e.g. <code>0.002 0.05</code>) — buy when price drops to that:`); }
     if (k === 'alt') { setPending(chatId, { action: 'alert_price', ca: tca, chain: ch }); return send(chatId, `🔔 Alert: send the target <b>USD price</b> — I'll ping you when <code>${short(tca)}</code> crosses it:`); }
     if (k === 'wt') { setPending(chatId, { action: 'wtok_addr', ca: tca, chain: ch, walletId: wid }); const cn = core.chainOf(ch) || {}; return send(chatId, `📤 <b>Send token</b> <code>${short(tca)}</code> out of the bot\n\nPaste the <b>destination ${core.chains.isSvm(ch) ? 'Solana (base58)' : (cn.native || '') + ' (0x)'} address</b> to send to:`); }
+    if (k === 'dca') { setPending(chatId, { action: 'dca_new', ca: tca, chain: ch, walletId: wid }); const cn = core.chainOf(ch) || {}; return send(chatId, `🔁 <b>DCA (scheduled buys)</b> for <code>${short(tca)}</code>\n\nSend <b>&lt;amount&gt; &lt;every_minutes&gt; &lt;rounds&gt;</b> in ${cn.native || ''}, e.g.\n<code>0.05 60 10</code> → buy 0.05 every 60 min, 10 times.\n\n<i>Runs on this wallet; each round is a normal buy (fee applies). Cancel anytime in 🔁 DCA.</i>`); }
   }
   if (k === 'wtokok') {
     const pp = pending.get(chatId);
@@ -872,6 +891,17 @@ async function resolvePending(chatId, p, text, m) {
       const r = core.setAutoExit(chatId, tp, sl);
       const desc = (r.autoTpPct > 0 || r.autoSlPct > 0) ? [(r.autoTpPct > 0 ? 'TP +' + r.autoTpPct + '%' : ''), (r.autoSlPct > 0 ? 'SL −' + r.autoSlPct + '%' : '')].filter(Boolean).join(' · ') : 'OFF';
       return send(chatId, `✅ Auto-exit: <b>${desc}</b>.`, settingsScreen(chatId).kb);
+    }
+    if (p.action === 'dca_new') {
+      const parts = String(t).trim().split(/\s+/);
+      const amount = Number(parts[0]), interval = Number(parts[1]), rounds = Number(parts[2]);
+      if (!(amount > 0) || !(interval >= 1) || !(rounds >= 1)) return send(chatId, 'Send <b>&lt;amount&gt; &lt;every_minutes&gt; &lt;rounds&gt;</b>, e.g. <code>0.05 60 10</code>.');
+      const ch = (p.chain && core.chainOf(p.chain)) || activeChain(chatId);
+      try {
+        const meta = await core.tokenMeta(p.ca, ch.key);
+        const plan = watchers.addDca(chatId, { ca: p.ca, sym: meta.sym, chain: ch.key, amount, intervalMin: interval, rounds }, p.walletId);
+        return send(chatId, `✅ <b>DCA started</b> — buy <b>${esc(String(amount))} ${ch.native}</b> of $${esc(meta.sym)} every <b>${plan.intervalMin} min</b>, <b>${plan.rounds}×</b>.\nFirst buy within a minute. Total ≈ ${(amount * plan.rounds).toPrecision(3)} ${ch.native}.`, rows([btn('🔁 My DCA', 'dcas'), btn('« Menu', 'menu')]));
+      } catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e))); }
     }
     if (p.action === 'trail_pct') {
       const pct = Number(t);
@@ -1044,5 +1074,5 @@ async function start() {
   }
 }
 
-module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, securityScreen, ordersScreen, statsText, walletPickScreen, tradeTargets, tokenCard, PRICES, isCa, fmtNat, wAddr, isAddrFor, _placeAutoExit } };
+module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, securityScreen, ordersScreen, dcaScreen, statsText, walletPickScreen, tradeTargets, tokenCard, PRICES, isCa, fmtNat, wAddr, isAddrFor, _placeAutoExit } };
 if (require.main === module) start();

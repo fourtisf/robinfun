@@ -364,6 +364,7 @@ function ensureUser(chatId, referredBy) {
     if (!Array.isArray(u.alerts)) { u.alerts = []; ch = true; }                            // price alerts (notify-only)
     if (!u.copy || typeof u.copy !== 'object') { u.copy = { on: false, targets: [] }; ch = true; }   // copy-trading
     if (!Array.isArray(u.copy.targets)) { u.copy.targets = []; ch = true; }
+    if (!Array.isArray(u.dca)) { u.dca = []; ch = true; }                                  // scheduled buys (DCA)
     if (!u.security || typeof u.security !== 'object') { u.security = { withdrawLock: false, whitelist: [], wdTimes: [] }; ch = true; }
     if (typeof u.security.withdrawLock !== 'boolean') { u.security.withdrawLock = false; ch = true; }
     if (!Array.isArray(u.security.whitelist)) { u.security.whitelist = []; ch = true; }
@@ -393,7 +394,7 @@ function ensureUser(chatId, referredBy) {
     activeChain: DEFAULT_CHAIN,
     wallets: [w], activeWalletId: w.id,   // each wallet: { id, address, enc, positions, orders, history }
     snipe: { ethAmount: '0.01', chains: { robinhood: false } },
-    alerts: [], copy: { on: false, targets: [] },
+    alerts: [], copy: { on: false, targets: [] }, dca: [],
     security: { withdrawLock: false, whitelist: [], wdTimes: [] },
     refEarnedEth: 0,
     settings: { slippage: 0, buyPresets: DEFAULT_BUY_PRESETS.slice(), autoBuy: false, autoBuyAmount: '0.01', confirmBuy: false, expert: false, notify: { snipe: true, copy: true, alerts: true }, autoTpPct: 0, autoSlPct: 0, presetsByChain: {} },

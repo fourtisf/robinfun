@@ -541,6 +541,63 @@ async function solSnipeCycle() {
   }
 }
 
+// ------------------------------------------------------------------ DCA (scheduled buys)
+// A DCA plan buys `amount` of a token every `intervalMin` minutes for `rounds` rounds
+// (and/or until an optional budget is spent), on the wallet it was created with. Each
+// round advances the schedule + persists BEFORE the buy, so a crash can't double-buy.
+let _did = 1;
+const MAX_DCA_PER_USER = Math.max(1, Number(process.env.MAX_DCA_PER_USER || 10));
+function addDca(chatId, plan, walletId) {
+  const u = core.getUser(chatId); if (!u) throw new Error('no wallet');
+  const w = (walletId && core.walletById(u, walletId)) || core.activeWallet(u); if (!w) throw new Error('no wallet');
+  u.dca = Array.isArray(u.dca) ? u.dca : [];
+  if (u.dca.length >= MAX_DCA_PER_USER) throw new Error(`DCA plan limit (${MAX_DCA_PER_USER}) reached — cancel one first`);
+  const amount = Number(plan.amount), intervalMin = Math.max(1, Math.round(Number(plan.intervalMin) || 0)), rounds = Math.max(1, Math.round(Number(plan.rounds) || 0));
+  if (!(amount > 0)) throw new Error('amount must be > 0');
+  const p = {
+    id: 'dca' + (_did++) + Date.now().toString(36),
+    ca: plan.ca, sym: plan.sym || '', chain: plan.chain || core.userChain(u), walletId: w.id,
+    amount: String(amount), intervalMin, roundsLeft: rounds, rounds,
+    budget: Number(plan.budget) > 0 ? Number(plan.budget) : 0, spent: 0,
+    nextAt: Date.now(), createdAt: Date.now(),   // first buy on the next cycle
+  };
+  u.dca.push(p); core.saveStoreNow();
+  return p;
+}
+function cancelDca(chatId, id) {
+  const u = core.getUser(chatId); if (!u || !Array.isArray(u.dca)) return false;
+  const before = u.dca.length;
+  u.dca = u.dca.filter((p) => p.id !== id);
+  if (u.dca.length !== before) { core.saveStore(); return true; }
+  return false;
+}
+async function dcaCycle() {
+  const now = Date.now();
+  const due = [];
+  for (const u of core.allUsers()) for (const p of (u.dca || [])) if ((p.nextAt || 0) <= now) due.push({ u, p });
+  if (!due.length) return;
+  await mapLimit(due, SNIPE_CONCURRENCY, async ({ u, p }) => {
+    if (!Array.isArray(u.dca) || !u.dca.some((x) => x.id === p.id)) return;   // cancelled since
+    // Advance the schedule + decrement the round + persist BEFORE the buy (crash-safe:
+    // a restart can't replay this round). Remove the plan when it's exhausted.
+    p.roundsLeft = Math.max(0, (p.roundsLeft || 0) - 1);
+    p.nextAt = now + p.intervalMin * 60000;
+    const willFinish = p.roundsLeft <= 0 || (p.budget > 0 && (Number(p.spent) + Number(p.amount)) >= p.budget - 1e-12);
+    if (willFinish) u.dca = u.dca.filter((x) => x.id !== p.id);
+    core.saveStoreNow();
+    try {
+      const r = await core.buy(u.chatId, p.ca, p.amount, p.chain, p.walletId);
+      p.spent = Number(p.spent) + Number(r.spentEth || p.amount);
+      core.saveStore();
+      const left = willFinish ? 'plan complete' : `${p.roundsLeft} round${p.roundsLeft === 1 ? '' : 's'} left`;
+      _notify(u.chatId, `🔁 <b>DCA buy</b> $${esc(r.sym || p.sym || '')}\nBought ${fmt(r.gotTokens)} for ${r.spentEth} ${r.native} · ${left}\n${txLink(p.chain, r.hash)}`, undefined, 'copy');
+    } catch (err) {
+      const now2 = Date.now(), key = u.chatId + ':dca:' + p.id;
+      if (now2 - (_snipeFailAt.get(key) || 0) > 300000) { _snipeFailAt.set(key, now2); _notify(u.chatId, `⚠️ A DCA buy of $${esc(p.sym || '')} failed: ${esc(err.message || String(err))} (round skipped; muted 5 min)`, undefined, 'copy'); }
+    }
+  });
+}
+
 // ------------------------------------------------------------------ referral auto-payout (opt-in)
 const REF_PAYOUT_MIN = Math.max(0, Number(process.env.REF_PAYOUT_MIN_ETH || 0.005));   // min owed before paying (dust/gas guard)
 async function payoutCycle() {
@@ -599,6 +656,8 @@ function start() {
   (async function alertLoop() { for (;;) { try { await alertsCycle(); } catch (e) { console.error('alerts', e.message); } await sleep(alertMs); } })();
   const copyMs = Math.max(6000, Number(process.env.COPY_POLL_MS || 10000));
   (async function copyLoop() { for (;;) { try { await copyCycle(); } catch (e) { console.error('copy', e.message); } await sleep(copyMs); } })();
+  const dcaMs = Math.max(15000, Number(process.env.DCA_POLL_MS || 30000));
+  (async function dcaLoop() { for (;;) { try { await dcaCycle(); } catch (e) { console.error('dca', e.message); } await sleep(dcaMs); } })();
   if (core.feePayoutEnabled()) {
     const payoutMs = Math.max(60000, Number(process.env.REF_PAYOUT_POLL_MS || 300000));   // 5 min default
     console.log('referral auto-payout ENABLED (fee wallet key present)');
@@ -612,4 +671,4 @@ const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</
 const fmt = (n) => { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K'; return n.toFixed(n < 1 ? 4 : 2); };
 const txLink = (chain, h) => { const c = core.chainOf(chain); return (h && c) ? `<a href="${c.explorer}/tx/${h}">tx ↗</a>` : ''; };
 
-module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert, _test: { solSnipeCycle, copyCycle, _copySolTarget, _solBuyMintFromTx, ordersCycle } };
+module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert, addDca, cancelDca, _test: { solSnipeCycle, copyCycle, _copySolTarget, _solBuyMintFromTx, ordersCycle, dcaCycle } };
