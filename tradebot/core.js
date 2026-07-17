@@ -86,6 +86,7 @@ const ROUTER_ABI = [
 ];
 const ERC20_ABI = [
   'function balanceOf(address) view returns (uint256)',
+  'function transfer(address to, uint256 amount) returns (bool)',
   'function approve(address spender, uint256 amount) returns (bool)',
   'function allowance(address owner, address spender) view returns (uint256)',
   'function name() view returns (string)',
@@ -1222,6 +1223,52 @@ async function withdraw(chatId, to, amount, chainKey, walletId) {
   });
 }
 
+// Withdraw a HELD TOKEN (ERC20 on EVM, SPL on Solana) to an external address. Same
+// security guards as native withdraw (vault lock / whitelist / rate limit). `amount`
+// is human units or 'max'. On Solana the sender pays ~0.002 SOL to open the recipient's
+// token account if it doesn't exist yet.
+async function withdrawToken(chatId, ca, to, amount, chainKey, walletId) {
+  const u = getUser(chatId); if (!u) throw new Error('no wallet');
+  chainKey = chainKey || userChain(u);
+  ca = String(ca || '').trim(); to = String(to || '').trim();
+  const svm = isSvm(chainKey);
+  if (svm) {
+    if (!solana.isSolAddress(ca)) throw new Error('invalid token mint');
+    if (!solana.isSolAddress(to)) throw new Error('invalid Solana destination address');
+  } else {
+    if (!/^0x[0-9a-fA-F]{40}$/.test(ca)) throw new Error('invalid token address');
+    if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('invalid destination address');
+    if (/^0x0{40}$/i.test(to)) throw new Error('refusing to send to the zero address');
+  }
+  _guardWithdraw(u, to, chainKey);   // vault lock / whitelist / rate limit
+  const wal = _resolveWallet(u, walletId);
+  return withWalletLock(wal.address, async () => {
+    const meta = await tokenMeta(ca, chainKey);
+    const dec = meta.decimals;
+    const addr = walletAddress(wal, chainKey);
+    const balRaw = await tokenBalance(ca, addr, chainKey);
+    if (balRaw <= 0n) throw new Error('no ' + meta.sym + ' in this wallet to withdraw');
+    let raw;
+    if (String(amount).toLowerCase() === 'max') raw = balRaw;
+    else raw = svm ? solana.toRaw(amount, dec) : ethers.parseUnits(String(amount), dec);
+    if (raw <= 0n) throw new Error('amount must be > 0');
+    if (raw > balRaw) throw new Error(`amount exceeds your ${meta.sym} balance (${Number(ethers.formatUnits(balRaw, dec))})`);
+    _noteWithdraw(u);
+    if (svm) {
+      const signer = _signer(wal, chainKey);
+      const sig = await solana.sendSplToken(signer.connection, signer.keypair, ca, to, raw, dec);
+      return { hash: sig, sym: meta.sym, amount: Number(solana.fmtUnits(raw, dec)), native: 'SOL', ca, chain: chainKey };
+    }
+    // EVM: ERC20.transfer via raw broadcast (bypass the quirky-RPC estimateGas path).
+    const wallet = _signer(wal, chainKey);
+    const data = new ethers.Contract(ca, ERC20_ABI, wallet).interface.encodeFunctionData('transfer', [to, raw]);
+    const hash = await rawSend(wallet, chainKey, ca, data, 120000n);
+    const trc = await waitHash(hash, chainKey);
+    if (trc && trc.status === 0) throw new Error('the token transfer reverted on-chain. Tx: ' + hash);
+    return { hash, sym: meta.sym, amount: Number(ethers.formatUnits(raw, dec)), native: (chainOf(chainKey) || {}).native, ca, chain: chainKey };
+  });
+}
+
 // ---------------------------------------------------------------- referral auto-payout (opt-in)
 // Enabled only if FEE_WALLET_KEY is set AND it derives FEE_WALLET (so a wrong key
 // can never move funds). This is a HOT key — off unless the operator opts in.
@@ -1363,5 +1410,5 @@ module.exports = {
   addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
   feePayoutEnabled, payFromFeeWallet,
   resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, tokenAcrossWallets, ethUsd, gasOverrides, rawSend, posKey,
-  buy, sell, withdraw, portfolio, portfolioAll, DB,
+  buy, sell, withdraw, withdrawToken, portfolio, portfolioAll, DB,
 };

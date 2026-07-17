@@ -224,16 +224,16 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   // Multi-wallet users get a picker row: choose one / several / ALL wallets to trade from.
   const selLabel = sel.all ? `👛 Trading: ALL ${list.length} wallets` : (selN >= 1 ? `👛 Trading: ${selN} wallet${selN > 1 ? 's' : ''}` : `👛 Trade from: ${core.walletLabel(w, wi)}`);
   const walletRow = list.length > 1 ? [[btn(selLabel, `wsel:${chainKey}:${ca}`)]] : [];
-  const kb = {
-    inline_keyboard: [
-      ...walletRow,
-      [btn(`Buy ${bp[0]}`, `b:${chainKey}:${wi}:${ca}:${bp[0]}`), btn(`Buy ${bp[1]}`, `b:${chainKey}:${wi}:${ca}:${bp[1]}`), btn(`Buy ${bp[2]}`, `b:${chainKey}:${wi}:${ca}:${bp[2]}`), btn('Buy X', `bx:${chainKey}:${wi}:${ca}`)],
-      [btn('Sell 25%', `s:${chainKey}:${wi}:${ca}:25`), btn('Sell 50%', `s:${chainKey}:${wi}:${ca}:50`), btn('Sell 75%', `s:${chainKey}:${wi}:${ca}:75`), btn('Sell 100%', `s:${chainKey}:${wi}:${ca}:100`)],
-      [btn('Sell X%', `sx:${chainKey}:${wi}:${ca}`), btn('🎯 TP', `tp:${chainKey}:${wi}:${ca}`), btn('🛑 SL', `sl:${chainKey}:${wi}:${ca}`), btn('⏳ Limit', `lb:${chainKey}:${wi}:${ca}`)],
-      lastRow,
-    ],
-  };
-  return { text, kb };
+  const ikb = [
+    ...walletRow,
+    [btn(`Buy ${bp[0]}`, `b:${chainKey}:${wi}:${ca}:${bp[0]}`), btn(`Buy ${bp[1]}`, `b:${chainKey}:${wi}:${ca}:${bp[1]}`), btn(`Buy ${bp[2]}`, `b:${chainKey}:${wi}:${ca}:${bp[2]}`), btn('Buy X', `bx:${chainKey}:${wi}:${ca}`)],
+    [btn('Sell 25%', `s:${chainKey}:${wi}:${ca}:25`), btn('Sell 50%', `s:${chainKey}:${wi}:${ca}:50`), btn('Sell 75%', `s:${chainKey}:${wi}:${ca}:75`), btn('Sell 100%', `s:${chainKey}:${wi}:${ca}:100`)],
+    [btn('Sell X%', `sx:${chainKey}:${wi}:${ca}`), btn('🎯 TP', `tp:${chainKey}:${wi}:${ca}`), btn('🛑 SL', `sl:${chainKey}:${wi}:${ca}`), btn('⏳ Limit', `lb:${chainKey}:${wi}:${ca}`)],
+  ];
+  // Offer "send this token out" only when the bound wallet actually holds a bag.
+  if (bal > 1e-9) ikb.push([btn(`📤 Send $${esc(sym)}`, `wt:${chainKey}:${wi}:${ca}`)]);
+  ikb.push(lastRow);
+  return { text, kb: { inline_keyboard: ikb } };
 }
 // Multi-wallet trade picker (Maestro style): choose one / several / ALL wallets that
 // every Buy / Sell tap acts on. Shows each wallet's live balance of THIS token so the
@@ -630,6 +630,12 @@ async function onMessage(m) {
   if (text === '/referral' || text === '/refer') { const s = referralScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/settings') { const s = settingsScreen(chatId); return send(chatId, s.text, s.kb); }
   if (text === '/withdraw') { setPending(chatId, { action: 'wd_addr' }); return send(chatId, '📤 Send the <b>destination address</b> to withdraw to:'); }
+  if (text.startsWith('/send')) {
+    const [, ca, to, amt] = text.split(/\s+/);
+    if (!isCa(ca) || !to || !amt) return send(chatId, 'Usage: <code>/send &lt;token&gt; &lt;destination&gt; &lt;amount|max&gt;</code> — sends a held token out. Or open the token card and tap 📤 Send.');
+    try { await send(chatId, '⏳ Sending…'); const r = await core.withdrawToken(chatId, ca, to, amt); return send(chatId, `✅ <b>Sent</b> ${fmt(r.amount)} $${esc(r.sym)}\nto <code>${esc(to)}</code>\n${txLink(r.chain, r.hash)}`); }
+    catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e))); }
+  }
   if (text === '/export') return askExport(chatId);
   if (text === '/id' || text === '/whoami') { const admin = core.CFG.admins.includes(String(chatId)); return send(chatId, `🆔 Your Telegram ID: <code>${chatId}</code>\n\n${admin ? '✅ You are an <b>admin</b>.' : 'To become admin, put this in <code>TRADEBOT_ADMIN_IDS</code> in the bot\'s .env, then restart.'}`); }
   if (text === '/admin') return adminScreen(chatId);
@@ -762,7 +768,16 @@ async function onCallback(q) {
     if (k === 'sl') { setPending(chatId, { action: 'sl_price', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Stop-loss: send the target <b>USD price</b> to sell 100% at:`); }
     if (k === 'lb') { setPending(chatId, { action: 'lb_price', ca: tca, chain: ch, walletId: wid }); return send(chatId, `Limit buy: send <b>&lt;usd_price&gt; &lt;amount&gt;</b> (e.g. <code>0.002 0.05</code>) — buy when price drops to that:`); }
     if (k === 'alt') { setPending(chatId, { action: 'alert_price', ca: tca, chain: ch }); return send(chatId, `🔔 Alert: send the target <b>USD price</b> — I'll ping you when <code>${short(tca)}</code> crosses it:`); }
+    if (k === 'wt') { setPending(chatId, { action: 'wtok_addr', ca: tca, chain: ch, walletId: wid }); const cn = core.chainOf(ch) || {}; return send(chatId, `📤 <b>Send token</b> <code>${short(tca)}</code> out of the bot\n\nPaste the <b>destination ${core.chains.isSvm(ch) ? 'Solana (base58)' : (cn.native || '') + ' (0x)'} address</b> to send to:`); }
   }
+  if (k === 'wtokok') {
+    const pp = pending.get(chatId);
+    if (!pp || pp.action !== 'wtok_confirm' || Date.now() - (pp.ts || 0) > PENDING_TTL) return send(chatId, 'That confirmation expired — start again from the token card.');
+    pending.delete(chatId);
+    try { await send(chatId, '⏳ Sending…'); const r = await core.withdrawToken(chatId, pp.ca, pp.to, pp.amt, pp.chain, pp.walletId); return send(chatId, `✅ <b>Sent</b> ${fmt(r.amount)} $${esc(r.sym)}\nto <code>${esc(pp.to)}</code>\n${txLink(pp.chain, r.hash)}`); }
+    catch (e) { return send(chatId, '❌ ' + esc(e.message || String(e))); }
+  }
+  if (k === 'wtokcancel') { const pp = pending.get(chatId); if (pp && (pp.action || '').startsWith('wtok')) pending.delete(chatId); return edit(chatId, mid, 'Send cancelled.', mainMenu()); }
   if (data === 'alerts') { const s = alertsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (k === 'al') { const okc = watchers.cancelAlert(chatId, ca); await answer(q.id, okc ? 'Cancelled' : 'Not found'); const s = alertsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'copy') { const s = copyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
@@ -796,6 +811,14 @@ async function resolvePending(chatId, p, text, m) {
       return send(chatId, `⚠️ <b>Confirm withdrawal</b> · ${ch.emoji} ${esc(ch.name)}\n\nSend <b>${esc(t)} ${ch.native}</b> to:\n<code>${esc(p.to)}</code>\n\nThis is <b>irreversible</b>. Double-check the address.`, rows([btn('✅ Yes, send', 'wdok'), btn('✖ Cancel', 'wdcancel')]));
     }
     if (p.action === 'wd_confirm') { setPending(chatId, p); return send(chatId, 'Please tap ✅ Yes or ✖ Cancel above, or /cancel.'); }
+    if (p.action === 'wtok_addr') { const wch = (p.chain && core.chainOf(p.chain)) || activeChain(chatId); if (!isAddrFor(t, wch.key)) return send(chatId, `❌ Not a valid ${esc(wch.name)} address. Start again from the token card.`); setPending(chatId, { action: 'wtok_amt', ca: p.ca, chain: p.chain, walletId: p.walletId, to: t }); return send(chatId, `Amount of the token to send to <code>${short(t)}</code> — a number, or <code>max</code>:`); }
+    if (p.action === 'wtok_amt') {
+      if (!(String(t).toLowerCase() === 'max' || Number(t) > 0)) return send(chatId, 'Send a positive amount, or <code>max</code>.');
+      const wch = (p.chain && core.chainOf(p.chain)) || activeChain(chatId);
+      setPending(chatId, { action: 'wtok_confirm', ca: p.ca, chain: p.chain, walletId: p.walletId, to: p.to, amt: t });
+      return send(chatId, `⚠️ <b>Confirm token send</b> · ${wch.emoji} ${esc(wch.name)}\n\nSend <b>${esc(t)}</b> of <code>${short(p.ca)}</code>\nto <code>${esc(p.to)}</code>\n\nThis is <b>irreversible</b>. On Solana a new recipient account costs ~0.002 SOL from your wallet.`, rows([btn('✅ Yes, send', 'wtokok'), btn('✖ Cancel', 'wtokcancel')]));
+    }
+    if (p.action === 'wtok_confirm') { setPending(chatId, p); return send(chatId, 'Please tap ✅ Yes or ✖ Cancel above, or /cancel.'); }
     if (p.action === 'tp_price' || p.action === 'sl_price') {
       const usdPrice = Number(t); if (!(usdPrice > 0)) return send(chatId, 'Send a positive USD price.');
       const ch = (p.chain && core.chainOf(p.chain)) || activeChain(chatId); if (!(nativeUsd(ch.native) > 0)) return send(chatId, 'Price feed unavailable — try again shortly.');

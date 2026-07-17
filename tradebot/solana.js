@@ -247,6 +247,33 @@ async function sendSol(conn, keypair, toBase58, lamports) {
   return sig;
 }
 
+// ---------------------------------------------------------------- SPL transfer (withdraw)
+
+// Transfer `rawAmount` (base units) of SPL `mint` from the keypair to `toBase58`.
+// Creates the recipient's associated token account if missing (sender pays ~0.002 SOL
+// rent). Uses transferChecked (decimals-verified). Returns the signature. Lazy-requires
+// @solana/spl-token so the EVM path never loads it.
+async function sendSplToken(conn, keypair, mint, toBase58, rawAmount, decimals) {
+  const spl = require('@solana/spl-token');
+  const owner = keypair.publicKey;
+  const mintPk = new PublicKey(mint);
+  const dest = new PublicKey(toBase58);
+  const srcAta = await spl.getAssociatedTokenAddress(mintPk, owner);
+  const dstAta = await spl.getAssociatedTokenAddress(mintPk, dest);
+  const tx = new Transaction();
+  let needAta = false;
+  try { await spl.getAccount(conn, dstAta); } catch (_) { needAta = true; }
+  if (needAta) tx.add(spl.createAssociatedTokenAccountInstruction(owner, dstAta, dest, mintPk));
+  tx.add(spl.createTransferCheckedInstruction(srcAta, mintPk, dstAta, owner, BigInt(rawAmount), Number(decimals)));
+  const bh = await conn.getLatestBlockhash('confirmed');
+  tx.recentBlockhash = bh.blockhash; tx.feePayer = owner;
+  tx.sign(keypair);
+  const sig = await conn.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
+  const conf = await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+  if (conf && conf.value && conf.value.err) throw new Error('SPL transfer failed: ' + JSON.stringify(conf.value.err));
+  return sig;
+}
+
 // ---------------------------------------------------------------- SPL metadata
 
 // Mint decimals straight from the mint account (authoritative; name/symbol live in
@@ -335,6 +362,6 @@ module.exports = {
   deriveKeypair, secretToBase58, keypairFromStored, newWallet,
   solToLamports, lamportsToSol, fmtUnits, toRaw,
   quoteUrl, swapBody, parseQuote, feeLamports,
-  getConnection, solBalance, splBalance, sendJupiterSwap,
+  getConnection, solBalance, splBalance, sendJupiterSwap, sendSplToken,
   getQuote, getSwapTx, swap, sendSol, splDecimals, jupTokenMeta, splMeta, dexScreener, pumpfunNew,
 };
