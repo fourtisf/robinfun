@@ -168,10 +168,11 @@ const ORDER_MAX_READS = Math.max(20, Number(process.env.ORDER_MAX_READS || 300))
 const ORDER_CONCURRENCY = Math.max(1, Number(process.env.ORDER_CONCURRENCY || 4));
 const ORDER_READ_TIMEOUT_MS = Math.max(1000, Number(process.env.ORDER_READ_TIMEOUT_MS || 3500));
 
-// Shared bounded price reader: de-dups concurrent reads (caches the in-flight
-// Promise), caps total distinct reads per cycle, and hard-times-out each read —
-// so a hostile/unpriceable token can neither stall a cycle nor drain the RPC.
-function priceReader() {
+// Shared bounded SNAPSHOT reader: de-dups concurrent reads (caches the in-flight
+// Promise), caps total distinct reads per cycle, and hard-times-out each read — so a
+// hostile/unpriceable token can neither stall a cycle nor drain the RPC. Returns the
+// full snapshot (price + mcap) so orders can target either metric.
+function snapReader() {
   const cache = new Map(); let reads = 0;
   return (chain, ca) => {
     const k = chain + ':' + (core.chains.isSvm(chain) ? String(ca) : String(ca).toLowerCase());
@@ -180,7 +181,7 @@ function priceReader() {
     const p = Promise.race([
       core.tokenSnapshot(ca, chain).catch(() => null),
       new Promise((r) => setTimeout(() => r(null), ORDER_READ_TIMEOUT_MS)),
-    ]).then((snap) => (snap ? snap.priceEth : null));
+    ]);
     cache.set(k, p);
     return p;
   };
@@ -224,18 +225,29 @@ async function ordersCycle() {
     }
   }
   if (!items.length) return;
-  const priceOf = priceReader();   // bounded, de-duped, timeout-guarded reads
+  const snapOf = snapReader();   // bounded, de-duped, timeout-guarded snapshot reads
+  let trailDirty = false;
   // Process concurrently (bounded) so one slow trade/user can't starve the rest.
   await mapLimit(items, ORDER_CONCURRENCY, async ({ u, w, o }) => {
     if (!Array.isArray(w.orders) || !w.orders.some((x) => x.id === o.id)) return;   // already filled/cancelled
     const chain = o.chain || SNIPE_CHAIN;
-    let px;
-    try { px = await priceOf(chain, o.ca); } catch (_) { return; }
-    if (px == null || !(px > 0)) return;
-    const hit =
-      (o.type === 'tp'       && px >= o.targetPriceEth) ||
-      (o.type === 'sl'       && px <= o.targetPriceEth) ||
-      (o.type === 'limitbuy' && px <= o.targetPriceEth);
+    let snap;
+    try { snap = await snapOf(chain, o.ca); } catch (_) { return; }
+    if (!snap) return;
+    const px = snap.priceEth;
+    if (!(px > 0)) return;
+    // tp/sl/limitbuy compare either PRICE or MARKET CAP (o.metric), both in native units.
+    const val = o.metric === 'mcap' ? (snap.mcapEth || 0) : px;
+    let hit = false;
+    if (o.type === 'trail') {
+      // Trailing stop on PRICE: track the running peak; fire when price falls trailPct
+      // below it. A rising price only ratchets the peak up (never triggers).
+      if (!(o.peakEth > 0) || px > o.peakEth) { o.peakEth = px; trailDirty = true; }
+      hit = px <= o.peakEth * (1 - (Number(o.trailPct) || 0) / 100);
+    } else if (o.type === 'tp') hit = val >= o.targetPriceEth;
+    else if (o.type === 'sl') hit = val <= o.targetPriceEth;
+    else if (o.type === 'limitbuy') hit = val <= o.targetPriceEth;
+    if (o.metric === 'mcap' && !(val > 0)) return;   // couldn't read mcap this cycle → wait
     if (!hit) return;
     // ONE-SHOT: remove + persist SYNCHRONOUSLY before the trade, so a crash can
     // never replay this fill on restart.
@@ -249,13 +261,14 @@ async function ordersCycle() {
         _notify(u.chatId, `✅ <b>Limit buy filled</b> $${esc(r.sym)}\nBought ${fmt(r.gotTokens)} for ${r.spentEth} ${r.native}\n${txLink(chain, r.hash)}`);
       } else {
         const r = await core.sell(u.chatId, o.ca, o.sellPct || 100, chain, w.id);
-        const label = o.type === 'tp' ? 'Take-profit' : 'Stop-loss';
+        const label = o.type === 'tp' ? 'Take-profit' : o.type === 'trail' ? 'Trailing stop' : 'Stop-loss';
         _notify(u.chatId, `✅ <b>${label} filled</b> $${esc(o.sym || '')}\nSold ${r.soldPct}% for ${r.proceedsEth} ${r.native}\n${txLink(chain, r.hash)}`);
       }
     } catch (err) {
       _notify(u.chatId, `⚠️ Order on $${esc(o.sym || '')} triggered but failed: ${esc(err.message || String(err))}\nIt was removed — re-create it if you still want it.`);
     }
   });
+  if (trailDirty) core.saveStore();   // persist ratcheted trailing peaks (debounced)
 }
 
 // ------------------------------------------------------------------ price alerts (notify-only)
@@ -283,11 +296,12 @@ async function alertsCycle() {
   const items = [];
   for (const u of core.allUsers()) for (const a of (u.alerts || [])) items.push({ u, a });
   if (!items.length) return;
-  const priceOf = priceReader();
+  const snapOf = snapReader();
   await mapLimit(items, ORDER_CONCURRENCY, async ({ u, a }) => {
     if (!Array.isArray(u.alerts) || !u.alerts.some((x) => x.id === a.id)) return;   // cancelled since
     const chain = a.chain || SNIPE_CHAIN;
-    let px; try { px = await priceOf(chain, a.ca); } catch (_) { return; }
+    let snap; try { snap = await snapOf(chain, a.ca); } catch (_) { return; }
+    const px = snap ? snap.priceEth : null;
     if (px == null || !(px > 0)) return;
     const hit = (a.dir === 'above' && px >= a.targetPriceEth) || (a.dir === 'below' && px <= a.targetPriceEth);
     if (!hit) return;
@@ -598,4 +612,4 @@ const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</
 const fmt = (n) => { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K'; return n.toFixed(n < 1 ? 4 : 2); };
 const txLink = (chain, h) => { const c = core.chainOf(chain); return (h && c) ? `<a href="${c.explorer}/tx/${h}">tx ↗</a>` : ''; };
 
-module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert, _test: { solSnipeCycle, copyCycle, _copySolTarget, _solBuyMintFromTx } };
+module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert, _test: { solSnipeCycle, copyCycle, _copySolTarget, _solBuyMintFromTx, ordersCycle } };

@@ -377,6 +377,8 @@ function ensureUser(chatId, referredBy) {
       if (typeof s.confirmBuy !== 'boolean') { s.confirmBuy = false; ch = true; }
       if (typeof s.expert !== 'boolean') { s.expert = false; ch = true; }
       if (!s.notify || typeof s.notify !== 'object') { s.notify = { snipe: true, copy: true, alerts: true }; ch = true; }
+      if (typeof s.autoTpPct !== 'number') { s.autoTpPct = 0; ch = true; }   // 0 = off; else auto take-profit at +X% on every buy
+      if (typeof s.autoSlPct !== 'number') { s.autoSlPct = 0; ch = true; }   // 0 = off; else auto stop-loss at −X%
       if (!s.presetsByChain || typeof s.presetsByChain !== 'object') { s.presetsByChain = {}; ch = true; } }
     // Write THROUGH if we just minted a key in the backfill (durability), else debounce.
     if (minted) saveStoreNow(); else if (ch) saveStore();
@@ -394,7 +396,7 @@ function ensureUser(chatId, referredBy) {
     alerts: [], copy: { on: false, targets: [] },
     security: { withdrawLock: false, whitelist: [], wdTimes: [] },
     refEarnedEth: 0,
-    settings: { slippage: 0, buyPresets: DEFAULT_BUY_PRESETS.slice(), autoBuy: false, autoBuyAmount: '0.01', confirmBuy: false, expert: false, notify: { snipe: true, copy: true, alerts: true }, presetsByChain: {} },
+    settings: { slippage: 0, buyPresets: DEFAULT_BUY_PRESETS.slice(), autoBuy: false, autoBuyAmount: '0.01', confirmBuy: false, expert: false, notify: { snipe: true, copy: true, alerts: true }, autoTpPct: 0, autoSlPct: 0, presetsByChain: {} },
   };
   DB.users[id] = u; DB.refByCode[code] = id;
   saveStoreNow();   // write-through: the encrypted key must be durable before we return the address
@@ -669,6 +671,15 @@ function setAutoBuy(chatId, on, amount) {
 function setConfirmBuy(chatId, on) { const u = ensureUser(chatId); u.settings.confirmBuy = !!on; saveStore(); return u.settings.confirmBuy; }
 // Expert/fast mode: skip the intermediate "⏳ Buying…" progress messages.
 function setExpert(chatId, on) { const u = ensureUser(chatId); u.settings.expert = !!on; saveStore(); return u.settings.expert; }
+// Auto-exit: after every buy, auto-place a take-profit at +tpPct and/or a stop-loss at
+// −slPct (0 disables that leg). Clamped to sane ranges.
+function setAutoExit(chatId, tpPct, slPct) {
+  const u = ensureUser(chatId);
+  const tp = Math.max(0, Math.min(100000, Math.round(Number(tpPct) || 0)));   // +% gain
+  const sl = Math.max(0, Math.min(99, Math.round(Number(slPct) || 0)));       // −% loss (can't be ≥100%)
+  u.settings.autoTpPct = tp; u.settings.autoSlPct = sl; saveStore();
+  return { autoTpPct: tp, autoSlPct: sl };
+}
 // Per-type notification toggles for PASSIVE bot actions (snipe / copy). User-created
 // signals — price alerts and your own limit/TP/SL fills — always notify (muting a
 // one-shot alert would silently delete the very signal you asked for).
@@ -1405,7 +1416,7 @@ module.exports = {
   renameWallet, walletLabel, hasChainPresets, solAddressOf, walletAddress,
   getSecurity, setWithdrawLock, addWhitelist, removeWhitelist, MAX_WD_PER_HOUR, backupNow,
   buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
-  setConfirmBuy, setExpert, setNotify, notifyOn, NOTIFY_TYPES,
+  setConfirmBuy, setExpert, setAutoExit, setNotify, notifyOn, NOTIFY_TYPES,
   tradeSelection, setTradeAll, toggleTradeWallet, tradeWalletIds,
   addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
   feePayoutEnabled, payFromFeeWallet,
