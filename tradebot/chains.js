@@ -54,6 +54,18 @@ const CHAINS = {
     weth: env('ARBITRUM_WETH', '0x82aF49447D8a07e3bd95BD0d56f35241523fBab1'),
     explorer: 'https://arbiscan.io',
   },
+  // Solana — NON-EVM (kind:'svm'). No chainId/router/weth/factory; swaps route through
+  // the Jupiter aggregator, wrapped-native is the WSOL mint, decimals are 9 (lamports).
+  // All Solana logic lives in solana.js; EVM code must branch on `kind === 'svm'` and
+  // never build an ethers provider/contract for it. Kept OUT of the default enabled set
+  // until the core/telegram Solana branches land (see ENABLED_CHAINS below).
+  solana: {
+    key: 'solana', name: 'Solana', emoji: '🟣', kind: 'svm', native: 'SOL', decimals: 9, curve: false,
+    rpc: env('SOLANA_RPC', 'https://api.mainnet-beta.solana.com'),
+    weth: 'So11111111111111111111111111111111111111112',   // WSOL mint (the "wrapped native")
+    jupBase: env('JUP_BASE', 'https://quote-api.jup.ag/v6'),
+    explorer: 'https://solscan.io',
+  },
 };
 
 // Enabled set (default all). Operators can limit with ENABLED_CHAINS=robinhood,base
@@ -61,13 +73,22 @@ const ENABLED = env('ENABLED_CHAINS', 'robinhood,ethereum,base,bsc,arbitrum')
   .split(',').map((s) => s.trim()).filter((k) => CHAINS[k]);
 const DEFAULT_CHAIN = ENABLED.includes('robinhood') ? 'robinhood' : (ENABLED[0] || 'robinhood');
 
+const kindOf = (key) => (CHAINS[key] && CHAINS[key].kind) || 'evm';
+const isSvm = (key) => kindOf(key) === 'svm';
+
 const _providers = {};
 function providerFor(key) {
   const ch = CHAINS[key];
   if (!ch) throw new Error('unknown chain: ' + key);
   if (!_providers[key]) {
-    const net = new ethers.Network(ch.name, ch.chainId);
-    _providers[key] = new ethers.JsonRpcProvider(ch.rpc, net, { batchMaxCount: 1, staticNetwork: net });
+    if (ch.kind === 'svm') {
+      // Solana: a @solana/web3.js Connection, NOT an ethers provider. Lazy-require so
+      // the EVM path never loads the Solana deps.
+      _providers[key] = require('./solana').getConnection(ch.rpc);
+    } else {
+      const net = new ethers.Network(ch.name, ch.chainId);
+      _providers[key] = new ethers.JsonRpcProvider(ch.rpc, net, { batchMaxCount: 1, staticNetwork: net });
+    }
   }
   return _providers[key];
 }
@@ -75,4 +96,4 @@ function chainOf(key) { return CHAINS[key] || null; }
 function isEnabled(key) { return ENABLED.includes(key); }
 function enabledChains() { return ENABLED.map((k) => CHAINS[k]); }
 
-module.exports = { CHAINS, ENABLED, DEFAULT_CHAIN, providerFor, chainOf, isEnabled, enabledChains };
+module.exports = { CHAINS, ENABLED, DEFAULT_CHAIN, providerFor, chainOf, isEnabled, enabledChains, kindOf, isSvm };

@@ -1,0 +1,200 @@
+'use strict';
+/*
+ * solana.js — Solana (SVM) adapter for the Robinfun Trade Bot.
+ *
+ * The rest of the bot is 100% EVM (ethers). Solana is a different world — ed25519
+ * keypairs, base58 addresses, lamports (9 decimals), SPL tokens, and swaps through
+ * the Jupiter aggregator HTTP API instead of a Uniswap router. ALL of that lives
+ * here so the EVM path in core.js/telegram.js stays untouched; callers branch on
+ * `chain.kind === 'svm'` and delegate to these functions.
+ *
+ * This module is split into:
+ *   - PURE helpers (derivation, validation, unit math, Jupiter request builders) —
+ *     fully unit-testable offline;
+ *   - LIVE helpers (Connection reads, swap execution) — thin wrappers over
+ *     @solana/web3.js + fetch, exercised against a real RPC in production.
+ */
+const crypto = require('crypto');
+const web3 = require('@solana/web3.js');
+const { Keypair, PublicKey, Connection, VersionedTransaction, LAMPORTS_PER_SOL } = web3;
+const _bs58 = require('bs58');
+const bs58 = _bs58 && _bs58.encode ? _bs58 : (_bs58 && _bs58.default) ? _bs58.default : _bs58;
+const bip39 = require('bip39');
+const { derivePath } = require('ed25519-hd-key');
+
+const KIND = 'svm';
+// Wrapped SOL — the "native" mint Jupiter routes through for SOL<->token swaps.
+const WSOL_MINT = 'So11111111111111111111111111111111111111112';
+// Phantom / Solflare standard derivation path for the first account.
+const SOL_PATH = "m/44'/501'/0'/0'";
+const JUP_BASE = (process.env.JUP_BASE || 'https://quote-api.jup.ag/v6').replace(/\/+$/, '');
+
+// ---------------------------------------------------------------- validation
+
+// A base58-encoded 32-byte ed25519 public key (a wallet address or an SPL mint).
+// PublicKey validates the length + base58 alphabet; on-curve isn't required (mints
+// and PDAs are valid addresses too).
+function isSolAddress(s) {
+  if (typeof s !== 'string') return false;
+  s = s.trim();
+  if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(s)) return false;   // base58, no 0/O/I/l
+  try { const b = bs58.decode(s); return b.length === 32; } catch (_) { return false; }
+}
+// A Solana SECRET key the user might import: base58 of 64 bytes (~87–88 chars),
+// or a JSON byte array "[12,34,...]" of length 64.
+function isSolSecretKey(s) {
+  if (typeof s !== 'string') return false;
+  s = s.trim();
+  if (/^\[\s*\d/.test(s)) { try { const a = JSON.parse(s); return Array.isArray(a) && a.length === 64; } catch (_) { return false; } }
+  if (/^[1-9A-HJ-NP-Za-km-z]{80,90}$/.test(s)) { try { return bs58.decode(s).length === 64; } catch (_) { return false; } }
+  return false;
+}
+
+// ---------------------------------------------------------------- keypair
+
+// Build a Keypair from whatever the user has. Deterministic where it matters, so a
+// user's existing generate/import flow yields a STABLE Solana address:
+//   - a BIP39 mnemonic  → Phantom-compatible m/44'/501'/0'/0' derivation;
+//   - a Solana secret   → the key itself (base58 64-byte or JSON array);
+//   - an EVM 0x privkey → a domain-separated ed25519 seed (so an EVM-only wallet
+//                          still maps to ONE fixed Solana address, distinct from EVM);
+//   - nothing           → a fresh random keypair.
+function deriveKeypair(secret) {
+  secret = String(secret == null ? '' : secret).trim();
+  if (!secret) return Keypair.generate();
+  // Solana secret key (JSON array or base58 64-byte)
+  if (isSolSecretKey(secret)) {
+    const bytes = /^\[/.test(secret) ? Uint8Array.from(JSON.parse(secret)) : bs58.decode(secret);
+    return Keypair.fromSecretKey(bytes);
+  }
+  const words = secret.split(/\s+/).filter(Boolean);
+  if ([12, 15, 18, 21, 24].includes(words.length) && bip39.validateMnemonic(words.join(' '))) {
+    const seed = bip39.mnemonicToSeedSync(words.join(' '));                 // 64-byte BIP39 seed
+    const { key } = derivePath(SOL_PATH, seed.toString('hex'));             // 32-byte ed25519 seed
+    return Keypair.fromSeed(Uint8Array.from(key));
+  }
+  // EVM private key (64 hex, optional 0x): derive a SEPARATE, deterministic Solana
+  // seed. Domain-separated so it can never collide with the EVM key's own bytes.
+  if (/^(0x)?[0-9a-fA-F]{64}$/.test(secret)) {
+    const raw = Buffer.from(secret.replace(/^0x/, ''), 'hex');
+    const seed = crypto.createHash('sha512').update(Buffer.concat([Buffer.from('robinfun:solana:v1'), raw])).digest().subarray(0, 32);
+    return Keypair.fromSeed(Uint8Array.from(seed));
+  }
+  throw new Error('not a Solana key, EVM key, or seed phrase');
+}
+// The stored (encrypted) plaintext for a Solana wallet: base58 of the 64-byte secret
+// key — exactly what Phantom/Solflare import. Round-trips via deriveKeypair.
+function secretToBase58(keypair) { return bs58.encode(keypair.secretKey); }
+function keypairFromStored(plain) {
+  const bytes = /^\[/.test(String(plain).trim()) ? Uint8Array.from(JSON.parse(plain)) : bs58.decode(String(plain).trim());
+  return Keypair.fromSecretKey(bytes);
+}
+// New Solana wallet material (encryption is core.js's job). `plain` is what gets
+// stored (encrypted); `address` is the public base58.
+function newWallet(secret) {
+  const kp = deriveKeypair(secret);
+  return { kind: KIND, address: kp.publicKey.toBase58(), plain: secretToBase58(kp) };
+}
+
+// ---------------------------------------------------------------- unit math
+
+const solToLamports = (sol) => BigInt(Math.round(Number(sol) * LAMPORTS_PER_SOL));
+const lamportsToSol = (lamports) => Number(lamports) / LAMPORTS_PER_SOL;
+// Format a raw u64 token amount with its mint decimals (SPL mints are 6 or 9, never
+// assume 18). Returns a JS number for display.
+function fmtUnits(raw, decimals) {
+  const d = Number.isFinite(decimals) ? decimals : 9;
+  return Number(BigInt(raw)) / Math.pow(10, d);
+}
+function toRaw(amount, decimals) {
+  const d = Number.isFinite(decimals) ? decimals : 9;
+  return BigInt(Math.round(Number(amount) * Math.pow(10, d)));
+}
+
+// ---------------------------------------------------------------- Jupiter (pure builders)
+
+// GET .../quote URL. amountRaw is the input amount in the input mint's base units
+// (lamports for WSOL). platformFeeBps (optional) is the bot's cut Jupiter withholds.
+function quoteUrl({ inputMint, outputMint, amountRaw, slippageBps = 100, platformFeeBps }) {
+  const p = new URLSearchParams({
+    inputMint, outputMint, amount: String(amountRaw),
+    slippageBps: String(slippageBps), swapMode: 'ExactIn',
+    onlyDirectRoutes: 'false', asLegacyTransaction: 'false',
+  });
+  if (platformFeeBps > 0) p.set('platformFeeBps', String(platformFeeBps));
+  return `${JUP_BASE}/quote?${p.toString()}`;
+}
+// POST .../swap body. `quoteResponse` is the JSON object returned by /quote.
+function swapBody(quoteResponse, userPublicKey, { feeAccount, priorityLamports } = {}) {
+  const body = {
+    quoteResponse,
+    userPublicKey,
+    wrapAndUnwrapSol: true,
+    dynamicComputeUnitLimit: true,
+    dynamicSlippage: false,
+  };
+  if (feeAccount) body.feeAccount = feeAccount;                                   // ATA that receives the platform fee
+  if (priorityLamports > 0) body.prioritizationFeeLamports = Math.floor(priorityLamports);
+  else body.prioritizationFeeLamports = 'auto';
+  return body;
+}
+// Pull the headline numbers out of a /quote response (defensive).
+function parseQuote(q) {
+  if (!q || q.error) return null;
+  return {
+    inAmount: BigInt(q.inAmount || 0),
+    outAmount: BigInt(q.outAmount || 0),
+    minOut: BigInt(q.otherAmountThreshold || 0),        // after slippage
+    priceImpactPct: Number(q.priceImpactPct || 0),
+    raw: q,
+  };
+}
+// Bot fee in bps applied to an ETH/SOL-denominated notional (mirrors EVM BOT_FEE_BPS).
+function feeLamports(notionalLamports, feeBps) {
+  return (BigInt(notionalLamports) * BigInt(Math.max(0, Math.round(feeBps || 0)))) / 10000n;
+}
+
+// ---------------------------------------------------------------- live RPC (production)
+
+const _conns = {};
+function getConnection(rpc) {
+  const url = rpc || (process.env.SOLANA_RPC || 'https://api.mainnet-beta.solana.com');
+  if (!_conns[url]) _conns[url] = new Connection(url, { commitment: 'confirmed' });
+  return _conns[url];
+}
+async function solBalance(conn, address) {
+  try { return BigInt(await conn.getBalance(new PublicKey(address), 'confirmed')); } catch (_) { return 0n; }
+}
+// SPL balance of `mint` held by `owner`. Sums all token accounts (usually one ATA).
+async function splBalance(conn, owner, mint) {
+  try {
+    const res = await conn.getParsedTokenAccountsByOwner(new PublicKey(owner), { mint: new PublicKey(mint) }, 'confirmed');
+    let raw = 0n, decimals = 9;
+    for (const it of (res.value || [])) {
+      const info = it.account.data.parsed.info.tokenAmount;
+      raw += BigInt(info.amount); decimals = info.decimals;
+    }
+    return { raw, decimals };
+  } catch (_) { return { raw: 0n, decimals: 9 }; }
+}
+// Execute a Jupiter swap: deserialize the base64 tx, sign with the keypair, send,
+// confirm. Returns the base58 signature. Throws with a readable reason on failure.
+async function sendJupiterSwap(conn, keypair, swapTransactionB64) {
+  const tx = VersionedTransaction.deserialize(Buffer.from(swapTransactionB64, 'base64'));
+  tx.sign([keypair]);
+  const raw = tx.serialize();
+  const sig = await conn.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 3 });
+  const bh = await conn.getLatestBlockhash('confirmed');
+  const conf = await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+  if (conf && conf.value && conf.value.err) throw new Error('swap reverted on-chain: ' + JSON.stringify(conf.value.err));
+  return sig;
+}
+
+module.exports = {
+  KIND, WSOL_MINT, SOL_PATH, LAMPORTS_PER_SOL, JUP_BASE,
+  isSolAddress, isSolSecretKey,
+  deriveKeypair, secretToBase58, keypairFromStored, newWallet,
+  solToLamports, lamportsToSol, fmtUnits, toRaw,
+  quoteUrl, swapBody, parseQuote, feeLamports,
+  getConnection, solBalance, splBalance, sendJupiterSwap,
+};
