@@ -265,6 +265,35 @@ async function splMeta(conn, mint) {
   return { name: (j && j.name) || shortMint, sym: (j && j.sym) || shortMint, decimals: (j && Number.isFinite(j.decimals)) ? j.decimals : dec };
 }
 
+// ---------------------------------------------------------------- market data (DexScreener)
+
+// Best Solana market for `mint` from DexScreener (the deepest-liquidity pair). Gives
+// price (USD + native), liquidity, 24h volume, market cap, and token identity — all a
+// card needs. null when the token isn't indexed / has no pool. Never throws.
+async function dexScreener(mint) {
+  try {
+    const r = await _fetch('https://api.dexscreener.com/latest/dex/tokens/' + mint, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    const pairs = ((j && j.pairs) || []).filter((p) => p && p.chainId === 'solana' && Number(p.priceUsd) > 0);
+    if (!pairs.length) return null;
+    pairs.sort((a, b) => (Number(b.liquidity && b.liquidity.usd) || 0) - (Number(a.liquidity && a.liquidity.usd) || 0));
+    const p = pairs[0], base = p.baseToken || {};
+    return {
+      priceUsd: Number(p.priceUsd) || 0,
+      priceNative: Number(p.priceNative) || 0,               // price in the quote token (SOL for SOL-quoted pairs)
+      quoteSym: (p.quoteToken && p.quoteToken.symbol) || '',
+      liquidityUsd: Number(p.liquidity && p.liquidity.usd) || 0,
+      volH24Usd: Number(p.volume && p.volume.h24) || 0,
+      mcapUsd: Number(p.marketCap) || Number(p.fdv) || 0,
+      fdvUsd: Number(p.fdv) || 0,
+      name: String(base.name || '').slice(0, 40),
+      symbol: String(base.symbol || '').slice(0, 20),
+      dexId: p.dexId || '',
+    };
+  } catch (_) { return null; }
+}
+
 module.exports = {
   KIND, WSOL_MINT, SOL_PATH, LAMPORTS_PER_SOL, JUP_BASE,
   isSolAddress, isSolSecretKey,
@@ -272,5 +301,5 @@ module.exports = {
   solToLamports, lamportsToSol, fmtUnits, toRaw,
   quoteUrl, swapBody, parseQuote, feeLamports,
   getConnection, solBalance, splBalance, sendJupiterSwap,
-  getQuote, getSwapTx, swap, sendSol, splDecimals, jupTokenMeta, splMeta,
+  getQuote, getSwapTx, swap, sendSol, splDecimals, jupTokenMeta, splMeta, dexScreener,
 };

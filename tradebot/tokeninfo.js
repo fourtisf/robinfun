@@ -64,6 +64,14 @@ async function enrich(ca, chainKey) {
   const snap = await core.tokenSnapshot(ca, chainKey).catch(() => null);
   if (!snap) return null;
   const info = { ...snap, chainKey, native: chain.native };
+  // Solana: the DexScreener snapshot already carries liquidity + volume + identity, so
+  // there's no router/curve/GoPlus leg — shape those fields into what the card reads.
+  // (Token safety on Solana would come from a RugCheck integration; not wired yet.)
+  if (core.chains.isSvm(chainKey)) {
+    info.liquidityNative = (snap.liquiditySol != null) ? snap.liquiditySol : null;
+    info.api = { name: snap.name, symbol: snap.sym, volume: { h24Usd: snap.volH24Usd != null ? snap.volH24Usd : null, totalUsd: null }, marketCapUsd: snap.mcapUsd || null };
+    return info;
+  }
   const tasks = [];
   const onCurve = !!(chain.curve && snap.curve && !snap.graduated);
   if (onCurve) tasks.push(curveRaised(snap.curve, chainKey).then((v) => { if (v) { info.raised = v.raised; info.target = v.target; } }));

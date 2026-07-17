@@ -690,14 +690,28 @@ async function tokenAcrossWallets(chatId, ca, chainKey, decimals) {
   return { rows, holderId, supply };
 }
 async function ethUsd(chainKey) {
-  // Robinhood + ETH-native chains price in ETH; BSC prices in BNB.
-  const sym = (chainOf(chainKey) || {}).native === 'BNB' ? 'BNB' : 'ETH';
+  // Price the chain's native in USD: BNB, SOL, or ETH (default). Coinbase has spot for all.
+  const nat = (chainOf(chainKey) || {}).native;
+  const sym = nat === 'BNB' ? 'BNB' : nat === 'SOL' ? 'SOL' : 'ETH';
   try { const r = await fetch(`https://api.coinbase.com/v2/prices/${sym}-USD/spot`, { signal: AbortSignal.timeout(6000) }); const j = await r.json(); const p = Number(j?.data?.amount); return p > 0 ? p : 0; }
   catch (_) { return 0; }
 }
 // Live token snapshot on a given chain: price (native), mcap (native), curve state.
 async function tokenSnapshot(ca, chainKey) {
   const chain = chainOf(chainKey); if (!chain) return null;
+  // Solana: no router/curve — price + depth come from DexScreener (deepest pool). We keep
+  // priceEth/mcapEth in SOL (native) so the card/USD math is identical to EVM, and pass
+  // through the USD figures + liquidity/volume that enrich() surfaces.
+  if (isSvm(chainKey)) {
+    const d = await solana.dexScreener(ca);
+    if (!d || !(d.priceUsd > 0)) return null;
+    let solUsd = 0; try { solUsd = await ethUsd(chainKey); } catch (_) {}
+    const priceEth = solUsd > 0 ? d.priceUsd / solUsd : (d.priceNative || 0);
+    const mcapEth = solUsd > 0 ? d.mcapUsd / solUsd : 0;
+    const liquiditySol = solUsd > 0 ? d.liquidityUsd / solUsd : 0;
+    return { ca, curve: '', priceEth, priceUsd: d.priceUsd, mcapEth, mcapUsd: d.mcapUsd, graduated: true, progressPct: 100,
+      decimals: 9, dex: true, liquiditySol, liquidityUsd: d.liquidityUsd, volH24Usd: d.volH24Usd, name: d.name, sym: d.symbol };
+  }
   const prov = providerFor(chainKey);
   if (chain.curve) {
     const curve = await resolveCurve(ca, chainKey);

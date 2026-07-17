@@ -13,11 +13,12 @@ const report = require('./report');   // ops reporting to admin channel (never s
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const goplus = require('./goplus');
 const tokeninfo = require('./tokeninfo');
+const solana = require('./solana');   // base58 address validation + SVM helpers
 
 const API = `https://api.telegram.org/bot${core.CFG.tgToken}`;
 const pending = new Map();      // chatId -> { action, ..., ts }
 const PENDING_TTL = 5 * 60 * 1000;
-const PRICES = { ETH: 0, BNB: 0 };
+const PRICES = { ETH: 0, BNB: 0, SOL: 0 };
 let BOT_USERNAME = '';
 
 // ------------------------------------------------------------ telegram api
@@ -45,11 +46,21 @@ const btn = (text, data) => ({ text, callback_data: data });
 const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 const short = (a) => a ? a.slice(0, 6) + '…' + a.slice(-4) : '';
 const fmt = (n) => { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K'; return n.toFixed(n < 1 ? 4 : 2); };
-const isCa = (s) => /^0x[0-9a-fA-F]{40}$/.test(String(s || '').trim());
+// A "contract" the user can paste: a 0x EVM address OR a base58 Solana mint. Both
+// map to a token card (scoped to the active chain), and a withdraw destination.
+const isEvmCa = (s) => /^0x[0-9a-fA-F]{40}$/.test(String(s || '').trim());
+const isCa = (s) => isEvmCa(s) || solana.isSolAddress(s);
 const nativeUsd = (native) => PRICES[native] || 0;
 const usd = (amount, native) => nativeUsd(native) > 0 ? '$' + fmt(Number(amount) * nativeUsd(native)) : '—';
 const txLink = (chainKey, h) => { const c = core.chainOf(chainKey); return (h && c) ? `<a href="${c.explorer}/tx/${h}">tx ↗</a>` : ''; };
+// Native decimals: SOL is 9 (lamports), EVM is 18 (wei). Format a raw balance for a chain.
+const natDec = (chainKey) => core.chains.isSvm(chainKey) ? 9 : 18;
 const fmtEth = (wei) => { try { return Number(ethers.formatEther(wei)).toFixed(5); } catch (_) { return '0'; } };
+const fmtNat = (raw, chainKey) => { try { return Number(ethers.formatUnits(BigInt(raw || 0), natDec(chainKey))).toFixed(5); } catch (_) { return '0'; } };
+// The address a wallet uses on a chain (base58 on Solana, 0x elsewhere).
+const wAddr = (w, chainKey) => core.walletAddress(w, chainKey);
+// A valid destination FOR a specific chain (base58 on Solana, 0x on EVM).
+const isAddrFor = (s, chainKey) => core.chains.isSvm(chainKey) ? solana.isSolAddress(s) : isEvmCa(s);
 const taxStr = (t) => (t == null ? '?' : (Math.round(t * 10) / 10) + '%');
 function fmtAge(ms) { const s = Math.max(0, Math.floor((Date.now() - ms) / 1000)); if (s < 3600) return Math.floor(s / 60) + 'm'; if (s < 86400) return Math.floor(s / 3600) + 'h'; return Math.floor(s / 86400) + 'd'; }
 function setPending(chatId, obj) { obj.ts = Date.now(); pending.set(chatId, obj); }
@@ -71,7 +82,7 @@ async function walletScreen(chatId) {
   const u = core.ensureUser(chatId);
   const ch = core.chainOf(core.userChain(u));
   const list = core.walletList(u);
-  const bals = await Promise.all(list.map((w) => core.ethBalance(w.address, ch.key).catch(() => 0n)));
+  const bals = await Promise.all(list.map((w) => core.ethBalance(wAddr(w, ch.key), ch.key).catch(() => 0n)));
   const total = bals.reduce((a, b) => a + b, 0n);
   const allEmpty = total <= 0n;
   let body = '';
@@ -80,7 +91,7 @@ async function walletScreen(chatId) {
     const active = w.id === u.activeWalletId;
     const label = core.walletLabel(w, i + 1);
     const nOrders = (w.orders && w.orders.length) || 0;
-    body += `${active ? '✅' : '▫️'} <b>${esc(label)}</b>${active ? ' <i>· active</i>' : ''} · <b>${fmtEth(bals[i])} ${ch.native}</b> (${usd(fmtEth(bals[i]), ch.native)})${nOrders ? ' · ' + nOrders + ' order' + (nOrders > 1 ? 's' : '') : ''}\n<code>${w.address}</code>\n\n`;
+    body += `${active ? '✅' : '▫️'} <b>${esc(label)}</b>${active ? ' <i>· active</i>' : ''} · <b>${fmtNat(bals[i], ch.key)} ${ch.native}</b> (${usd(fmtNat(bals[i], ch.key), ch.native)})${nOrders ? ' · ' + nOrders + ' order' + (nOrders > 1 ? 's' : '') : ''}\n<code>${wAddr(w, ch.key)}</code>\n\n`;
     const row = [btn(`${active ? '✓ ' : '⚪ '}${label}`.slice(0, 26), active ? 'wal' : 'sw:' + w.id), btn('✏️', 'rnw:' + w.id), btn('📥', 'qrw:' + w.id)];
     if (list.length > 1) row.push(btn('🗑', 'rmw:' + w.id));
     kbRows.push(row);
@@ -88,9 +99,9 @@ async function walletScreen(chatId) {
   if (list.length < core.WALLET_CAP) kbRows.push([btn('➕ Generate wallet', 'neww'), btn('📩 Import', 'imp')]);
   kbRows.push([btn('🔑 Export (active)', 'exp'), btn('📤 Withdraw (active)', 'wd')]);
   kbRows.push([btn('🌐 Chain', 'chain'), btn('🔄 Refresh', 'wal'), btn('« Menu', 'menu')]);
-  const head = `💼 <b>Your Wallets</b> · ${ch.emoji} ${esc(ch.name)}\n${list.length}/${core.WALLET_CAP} wallets · total <b>${fmtEth(total)} ${ch.native}</b> (${usd(fmtEth(total), ch.native)})\n\n`;
+  const head = `💼 <b>Your Wallets</b> · ${ch.emoji} ${esc(ch.name)}\n${list.length}/${core.WALLET_CAP} wallets · total <b>${fmtNat(total, ch.key)} ${ch.native}</b> (${usd(fmtNat(total, ch.key), ch.native)})\n\n`;
   const guide = allEmpty
-    ? `<b>Start in 3 steps 👇</b>\n1️⃣ Deposit ${ch.native} to a wallet — tap <b>📥</b> on it for the address/QR.\n2️⃣ Tap <b>🔄 Refresh</b> to see it land.\n3️⃣ Paste any token contract → live card → one-tap buy.\n\n<i>Tap a name to switch · ✏️ rename · 📥 deposit · 🗑 remove. Same address on every chain (switch with 🌐).</i>`
+    ? `<b>Start in 3 steps 👇</b>\n1️⃣ Deposit ${ch.native} to a wallet — tap <b>📥</b> on it for the address/QR.\n2️⃣ Tap <b>🔄 Refresh</b> to see it land.\n3️⃣ Paste any token contract → live card → one-tap buy.\n\n<i>Tap a name to switch · ✏️ rename · 📥 deposit · 🗑 remove. One key per wallet on every chain — EVM shares one 0x address, Solana has its own (switch with 🌐).</i>`
     : `<i>Tap a name to switch the active wallet · ✏️ rename · 📥 deposit QR · 🗑 remove. Export/Withdraw act on the ✅ active wallet. Balances shown for ${esc(ch.name)}; positions &amp; orders are per-wallet.</i>`;
   return { text: head + body + guide, kb: { inline_keyboard: kbRows } };
 }
@@ -101,9 +112,11 @@ async function depositScreen(chatId, w) {
   const ch = core.chainOf(core.userChain(u));
   const idx = core.walletList(u).findIndex((x) => x.id === w.id) + 1;
   const label = core.walletLabel(w, idx);
-  const caption = `📥 <b>Deposit ${ch.native}</b> · ${esc(label)}\n${ch.emoji} <b>${esc(ch.name)}</b>\n\n<code>${w.address}</code>\n\nScan the QR or copy the address. Same address on every chain — switch with 🌐 to deposit elsewhere. Then paste a token contract to buy.`;
+  const addr = wAddr(w, ch.key);
+  const sameNote = core.chains.isSvm(ch.key) ? 'This is your Solana address (different from your EVM one).' : 'Shared across every EVM chain.';
+  const caption = `📥 <b>Deposit ${ch.native}</b> · ${esc(label)}\n${ch.emoji} <b>${esc(ch.name)}</b>\n\n<code>${addr}</code>\n\nScan the QR or copy the address. ${sameNote} Switch with 🌐 to deposit elsewhere. Then paste a token contract to buy.`;
   const kb = rows([btn('🔄 Refresh balance', 'wal'), btn('🌐 Chain', 'chain')], [btn('👛 Wallets', 'wallets'), btn('« Menu', 'menu')]);
-  const url = qrUrl(w.address);
+  const url = qrUrl(addr);
   if (url) { const r = await sendPhoto(chatId, url, caption, kb).catch(() => null); if (r && r.ok) return r; }
   return send(chatId, caption, kb);   // QR disabled/failed → text address (still fully usable)
 }
@@ -136,7 +149,7 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   const wi = list.findIndex((x) => x.id === w.id) + 1;   // 1-based wallet index, encoded in every action
   const myRow = across.rows.find((r) => r.id === w.id);
   const autoSwitched = !explicit && !!myRow && !myRow.active && (myRow.tokens > 1e-9);
-  const balRaw = myRow ? myRow.raw : await core.tokenBalance(ca, w.address, chainKey);
+  const balRaw = myRow ? myRow.raw : await core.tokenBalance(ca, wAddr(w, chainKey), chainKey);
   const bal = myRow ? myRow.tokens : Number(ethers.formatUnits(balRaw, meta.decimals));
   const pos = (w.positions || {})[chainKey + ':' + ca.toLowerCase()];
   const nat = ch.native;
@@ -725,7 +738,7 @@ async function resolvePending(chatId, p, text, m) {
     if (p.action === 'bp_val') { const arr = core.setBuyPresets(chatId, t, p.chain); const cn = core.chainOf(p.chain); return send(chatId, `✅ Quick-buy for <b>${cn ? esc(cn.name) : 'this chain'}</b>: <b>${arr.join(' · ')}${cn ? ' ' + cn.native : ''}</b>.`, settingsScreen(chatId).kb); }
     if (p.action === 'ab_amt') { const r = core.setAutoBuy(chatId, undefined, t); return send(chatId, `✅ Auto-buy amount: <b>${esc(r.autoBuyAmount)}</b>.`, settingsScreen(chatId).kb); }
     if (p.action === 'snipe_amt') { if (!(Number(t) > 0)) return send(chatId, 'Send a positive number.'); core.setSnipeAmount(chatId, t); const s = snipeScreen(chatId); return send(chatId, s.text, s.kb); }
-    if (p.action === 'wd_addr') { if (!isCa(t)) return send(chatId, '❌ Not a valid address. Try /withdraw again.'); setPending(chatId, { action: 'wd_amt', to: t }); return send(chatId, `Amount to send to <code>${short(t)}</code> — a number, or <code>max</code>:`); }
+    if (p.action === 'wd_addr') { const wch = activeChain(chatId); if (!isAddrFor(t, wch.key)) return send(chatId, `❌ Not a valid ${esc(wch.name)} address (${core.chains.isSvm(wch.key) ? 'base58' : '0x…'}). Try /withdraw again.`); setPending(chatId, { action: 'wd_amt', to: t }); return send(chatId, `Amount to send to <code>${short(t)}</code> — a number, or <code>max</code>:`); }
     if (p.action === 'wd_amt') {
       if (!(String(t).toLowerCase() === 'max' || Number(t) > 0)) return send(chatId, 'Send a positive amount, or <code>max</code>.');
       const ch = activeChain(chatId);
@@ -854,7 +867,7 @@ function helpText() {
 
 // ------------------------------------------------------------ startup + poll
 async function refreshPrices() {
-  for (const sym of ['ETH', 'BNB']) {
+  for (const sym of ['ETH', 'BNB', 'SOL']) {
     try { const r = await fetch(`https://api.coinbase.com/v2/prices/${sym}-USD/spot`, { signal: AbortSignal.timeout(6000) }); const j = await r.json(); const p = Number(j?.data?.amount); if (p > 0) PRICES[sym] = p; } catch (_) {}
   }
 }
@@ -905,5 +918,5 @@ async function start() {
   }
 }
 
-module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, statsText, walletPickScreen, tradeTargets, tokenCard, PRICES } };
+module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, statsText, walletPickScreen, tradeTargets, tokenCard, PRICES, isCa, fmtNat, wAddr, isAddrFor } };
 if (require.main === module) start();
