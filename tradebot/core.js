@@ -820,7 +820,10 @@ function _creditReferral(user, feeWei, chainKey) {
   ref.refOwed[chainKey] = ((BigInt(ref.refOwed[chainKey] || '0')) + share).toString();
   saveStoreNow();   // write-through: the fee already moved on-chain; don't lose the credit in the debounce window
 }
-function posKey(chainKey, ca) { return chainKey + ':' + ca.toLowerCase(); }
+// Position/map key. EVM addresses are case-insensitive (lowercase for a stable key);
+// Solana base58 mints are CASE-SENSITIVE, so keep their original case — lowercasing
+// could collide two distinct mints onto one position.
+function posKey(chainKey, ca) { return chainKey + ':' + (isSvm(chainKey) ? String(ca) : String(ca).toLowerCase()); }
 // Append a trade to a wallet's history (newest last), bounded so the store can't grow forever.
 function _pushHistory(wal, entry) {
   if (!Array.isArray(wal.history)) wal.history = [];
@@ -859,7 +862,7 @@ async function _buySol(u, ca, amount, chainKey, walletId) {
     const meta = await tokenMeta(ca, chainKey);
     let sig, quote;
     try { ({ sig, quote } = await solana.swap(conn, kp, { inputMint: solana.WSOL_MINT, outputMint: ca, amountRaw: spend, slippageBps: slip })); }
-    catch (e) { throw new Error('buy failed on Solana: ' + (e.message || e)); }
+    catch (e) { const err = new Error('buy failed on Solana: ' + (e.message || e)); if (e && e.broadcast) { err.broadcast = true; err.sig = e.sig; } throw err; }
     const after = (await solana.splBalance(conn, signer.address, ca)).raw;
     const got = after > before ? after - before : (quote ? quote.outAmount : 0n);
     const feeSig = await _chargeFeeSol(conn, kp, fee);
@@ -896,7 +899,7 @@ async function _sellSol(u, ca, pct, chainKey, walletId) {
     const solBefore = await solana.solBalance(conn, signer.address);
     let sig, quote;
     try { ({ sig, quote } = await solana.swap(conn, kp, { inputMint: ca, outputMint: solana.WSOL_MINT, amountRaw: amount, slippageBps: slip })); }
-    catch (e) { throw new Error('sell failed on Solana: ' + (e.message || e)); }
+    catch (e) { const err = new Error('sell failed on Solana: ' + (e.message || e)); if (e && e.broadcast) { err.broadcast = true; err.sig = e.sig; } throw err; }
     const solAfter = await solana.solBalance(conn, signer.address);
     // Net SOL received (swap tx fee already netted out, exactly like EVM ethAfter-ethBefore).
     const proceeds = solAfter > solBefore ? solAfter - solBefore : (quote ? quote.outAmount : 0n);
@@ -1278,6 +1281,6 @@ module.exports = {
   tradeSelection, setTradeAll, toggleTradeWallet, tradeWalletIds,
   addCopyTarget, removeCopyTarget, setCopyOn, MAX_COPY_TARGETS,
   feePayoutEnabled, payFromFeeWallet,
-  resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, tokenAcrossWallets, ethUsd, gasOverrides, rawSend,
+  resolveCurve, isGraduated, tokenMeta, tokenDecimals, tokenSnapshot, ethBalance, tokenBalance, tokenAcrossWallets, ethUsd, gasOverrides, rawSend, posKey,
   buy, sell, withdraw, portfolio, portfolioAll, DB,
 };

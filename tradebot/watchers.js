@@ -174,7 +174,7 @@ const ORDER_READ_TIMEOUT_MS = Math.max(1000, Number(process.env.ORDER_READ_TIMEO
 function priceReader() {
   const cache = new Map(); let reads = 0;
   return (chain, ca) => {
-    const k = chain + ':' + String(ca).toLowerCase();
+    const k = chain + ':' + (core.chains.isSvm(chain) ? String(ca) : String(ca).toLowerCase());
     if (cache.has(k)) return cache.get(k);
     if (reads++ >= ORDER_MAX_READS) { const p = Promise.resolve(null); cache.set(k, p); return p; }
     const p = Promise.race([
@@ -395,7 +395,12 @@ async function copyCycle() {
 // or a transfer-in). Same crash-safe budget/dedup commit as the EVM path; sells stay
 // the user's job. Stablecoins + WSOL are ignored.
 const COPY_SOL_SIG_LIMIT = Math.max(5, Number(process.env.COPY_SOL_SIG_LIMIT || 25));
-const COPY_SOL_MIN_SPEND = 1000000n;   // target must have spent >0.001 SOL for it to count as a buy
+// The target must have spent MORE SOL than mere fees + a new token-account rent
+// (~0.00204 SOL) for a token increase to count as a real SOL-funded BUY. Below this we
+// treat it as an airdrop / token→token swap / claim (target signed & paid only rent) and
+// do NOT mirror. 0.005 SOL cleanly clears rent+priority-fees while still catching any
+// meaningful buy. Override via COPY_SOL_MIN_SPEND_LAMPORTS.
+const COPY_SOL_MIN_SPEND = BigInt(process.env.COPY_SOL_MIN_SPEND_LAMPORTS || 5000000);
 const _solStable = new Set([
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',   // USDC
   'Es9vMFrzaCERmJfrF4H2FYD4KConky11Mc6mzwtQKPa',    // USDT
@@ -407,24 +412,31 @@ async function _solBuyMintFromTx(conn, sig, targetAddr) {
   const tx = await conn.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
   if (!tx || !tx.meta) return null;
   const pre = tx.meta.preTokenBalances || [], post = tx.meta.postTokenBalances || [];
+  // pre balances for the target owner, keyed by mint (raw amount + decimals).
   const preMap = new Map();
-  for (const b of pre) { if (b && b.owner === targetAddr) { try { preMap.set(b.mint, BigInt(b.uiTokenAmount.amount)); } catch (_) {} } }
-  let boughtMint = null, bestDelta = 0n;
+  for (const b of pre) { if (b && b.owner === targetAddr && b.uiTokenAmount) { try { preMap.set(b.mint, BigInt(b.uiTokenAmount.amount)); } catch (_) {} } }
+  // Largest INCREASE, compared in DECIMALS-NORMALIZED units so a high-decimal dust token
+  // can't outrank the real acquisition (mints have different decimals).
+  let boughtMint = null, bestNorm = 0;
   for (const b of post) {
-    if (!b || b.owner !== targetAddr) continue;
+    if (!b || b.owner !== targetAddr || !b.uiTokenAmount) continue;
     let after; try { after = BigInt(b.uiTokenAmount.amount); } catch (_) { continue; }
-    const delta = after - (preMap.get(b.mint) || 0n);
-    if (delta > bestDelta) { bestDelta = delta; boughtMint = b.mint; }
+    const deltaRaw = after - (preMap.get(b.mint) || 0n);
+    if (deltaRaw <= 0n) continue;
+    const dec = Number(b.uiTokenAmount.decimals) || 0;
+    const norm = Number(deltaRaw) / Math.pow(10, dec);
+    if (norm > bestNorm) { bestNorm = norm; boughtMint = b.mint; }
   }
-  if (!boughtMint || bestDelta <= 0n) return null;
-  // Confirm the target PAID SOL (buy), not received tokens for free (airdrop/transfer).
+  if (!boughtMint) return null;
+  // Confirm the target actually PAID SOL for it (a real buy), not received tokens for
+  // free / via a token→token swap where it only paid fees + ATA rent. FAIL CLOSED: if we
+  // can't locate the target's SOL balance in the tx, do NOT mirror (safer than assuming).
   const keys = tx.transaction.message.accountKeys || [];
   let idx = -1;
   for (let i = 0; i < keys.length; i++) { const k = keys[i]; const pk = (k && (k.pubkey ? k.pubkey.toString() : String(k))) || ''; if (pk === targetAddr) { idx = i; break; } }
-  if (idx >= 0 && Array.isArray(tx.meta.preBalances) && Array.isArray(tx.meta.postBalances)) {
-    const solDelta = BigInt(tx.meta.postBalances[idx]) - BigInt(tx.meta.preBalances[idx]);
-    if (solDelta >= -COPY_SOL_MIN_SPEND) return null;   // spent ≤0.001 SOL → not a SOL-funded buy
-  }
+  if (idx < 0 || !Array.isArray(tx.meta.preBalances) || !Array.isArray(tx.meta.postBalances)) return null;
+  let solDelta; try { solDelta = BigInt(tx.meta.postBalances[idx]) - BigInt(tx.meta.preBalances[idx]); } catch (_) { return null; }
+  if (solDelta >= -COPY_SOL_MIN_SPEND) return null;   // didn't spend > ~0.005 SOL → not a SOL-funded buy
   return boughtMint;
 }
 async function _copySolTarget(u, t) {

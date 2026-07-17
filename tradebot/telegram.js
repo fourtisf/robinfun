@@ -152,7 +152,7 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   const autoSwitched = !explicit && !!myRow && !myRow.active && (myRow.tokens > 1e-9);
   const balRaw = myRow ? myRow.raw : await core.tokenBalance(ca, wAddr(w, chainKey), chainKey);
   const bal = myRow ? myRow.tokens : Number(ethers.formatUnits(balRaw, meta.decimals));
-  const pos = (w.positions || {})[chainKey + ':' + ca.toLowerCase()];
+  const pos = (w.positions || {})[core.posKey(chainKey, ca)];
   const nat = ch.native;
   const api = info.api, sec = info.security;
   const px = info.priceEth || 0;
@@ -357,7 +357,7 @@ function referralScreen(chatId) {
   const link = `https://t.me/${BOT_USERNAME}?start=${u.refCode}`;
   const owed = u.refOwed || {};
   const earned = Object.keys(owed).length
-    ? Object.entries(owed).map(([ck, wei]) => { const c = core.chainOf(ck) || { native: 'ETH' }; return `${Number(ethers.formatEther(BigInt(wei || '0'))).toFixed(5)} ${c.native}`; }).join(' · ')
+    ? Object.entries(owed).map(([ck, wei]) => { const c = core.chainOf(ck) || { native: 'ETH' }; return `${fmtNat(wei || '0', ck)} ${c.native}`; }).join(' · ')
     : '0';
   return {
     text: `🎁 <b>Referrals</b>\n\nShare your link — you earn <b>${(core.CFG.refShareBps / 100).toFixed(0)}%</b> of the bot fee on every trade your referrals make.\n\n<code>${link}</code>\n\nEarned so far: <b>${earned}</b>\n<i>${core.feePayoutEnabled() ? 'Auto-paid to your active wallet once it clears the minimum.' : 'Settled manually by the team.'}</i>`,
@@ -815,7 +815,7 @@ function adminScreen(chatId) {
   const users = core.allUsers();
   const byChain = {};
   for (const u of users) { const o = u.refOwed || {}; for (const [ck, wei] of Object.entries(o)) { try { byChain[ck] = (BigInt(byChain[ck] || '0') + BigInt(wei || '0')).toString(); } catch (_) {} } }
-  const owedLines = Object.entries(byChain).map(([ck, wei]) => { const c = core.chainOf(ck) || { native: 'ETH', name: ck }; return `  ${c.name}: <b>${Number(ethers.formatEther(BigInt(wei))).toFixed(5)} ${c.native}</b>`; }).join('\n') || '  none';
+  const owedLines = Object.entries(byChain).map(([ck, wei]) => { const c = core.chainOf(ck) || { native: 'ETH', name: ck }; return `  ${c.name}: <b>${fmtNat(wei, ck)} ${c.native}</b>`; }).join('\n') || '  none';
   return send(chatId, `🛠 <b>Admin</b>\n\nUsers: <b>${users.length}</b>\nReferral owed (unsettled), per chain:\n${owedLines}\n\nSettle manually from FEE_WALLET on each chain (refOwed[chain] in the store).\n\n<code>/userkey &lt;@user or id&gt;</code> — recover a user's key (support)\n<code>/stats</code> — volume &amp; fees`);
 }
 // Admin-only, ON-DEMAND key recovery for support. Decrypts the target user's wallet

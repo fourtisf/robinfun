@@ -184,8 +184,17 @@ async function sendJupiterSwap(conn, keypair, swapTransactionB64) {
   tx.sign([keypair]);
   const raw = tx.serialize();
   const sig = await conn.sendRawTransaction(raw, { skipPreflight: false, maxRetries: 3 });
-  const bh = await conn.getLatestBlockhash('confirmed');
-  const conf = await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+  // Past this point the tx is BROADCAST. A confirmation that reverts is atomic (Jupiter
+  // swaps don't half-execute) → safe to treat as "didn't spend". But a confirmation that
+  // THROWS (timeout / blockheight exceeded) is ambiguous — the tx may still land — so we
+  // tag the error `.broadcast` + `.sig` and callers must NOT roll back budget/dedup.
+  let conf;
+  try {
+    const bh = await conn.getLatestBlockhash('confirmed');
+    conf = await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+  } catch (e) {
+    throw Object.assign(new Error('swap broadcast but not confirmed yet: ' + sig), { broadcast: true, sig });
+  }
   if (conf && conf.value && conf.value.err) throw new Error('swap reverted on-chain: ' + JSON.stringify(conf.value.err));
   return sig;
 }
