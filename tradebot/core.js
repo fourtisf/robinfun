@@ -63,6 +63,9 @@ const CFG = {
   // Solana: reserve for the swap's tx fee + ATA rent (creating the token account costs
   // ~0.002 SOL) so a buy is never left unable to pay for its own swap. 9-decimal SOL.
   solGasBuffer: String(process.env.SOL_GAS_BUFFER || '0.003'),
+  // Solana priority fee (lamports) added to every swap so buys/snipes land under load.
+  // 0 = let Jupiter pick ('auto'). A few hundred-thousand lamports is competitive.
+  solPriorityLamports: Math.max(0, Math.round(Number(process.env.SOL_PRIORITY_LAMPORTS || 0))),
 };
 
 const FACTORY_ABI = [
@@ -950,7 +953,7 @@ async function _buySol(u, ca, amount, chainKey, walletId) {
     const before = (await solana.splBalance(conn, signer.address, ca)).raw;
     const meta = await tokenMeta(ca, chainKey);
     let sig, quote;
-    try { ({ sig, quote } = await solana.swap(conn, kp, { inputMint: solana.WSOL_MINT, outputMint: ca, amountRaw: spend, slippageBps: slip })); }
+    try { ({ sig, quote } = await solana.swap(conn, kp, { inputMint: solana.WSOL_MINT, outputMint: ca, amountRaw: spend, slippageBps: slip, priorityLamports: CFG.solPriorityLamports })); }
     catch (e) { const err = new Error('buy failed on Solana: ' + (e.message || e)); if (e && e.broadcast) { err.broadcast = true; err.sig = e.sig; } throw err; }
     const after = (await solana.splBalance(conn, signer.address, ca)).raw;
     const got = after > before ? after - before : (quote ? quote.outAmount : 0n);
@@ -987,7 +990,7 @@ async function _sellSol(u, ca, pct, chainKey, walletId) {
     const slip = Number(slipBps(u));
     const solBefore = await solana.solBalance(conn, signer.address);
     let sig, quote;
-    try { ({ sig, quote } = await solana.swap(conn, kp, { inputMint: ca, outputMint: solana.WSOL_MINT, amountRaw: amount, slippageBps: slip })); }
+    try { ({ sig, quote } = await solana.swap(conn, kp, { inputMint: ca, outputMint: solana.WSOL_MINT, amountRaw: amount, slippageBps: slip, priorityLamports: CFG.solPriorityLamports })); }
     catch (e) { const err = new Error('sell failed on Solana: ' + (e.message || e)); if (e && e.broadcast) { err.broadcast = true; err.sig = e.sig; } throw err; }
     const solAfter = await solana.solBalance(conn, signer.address);
     // Net SOL received (swap tx fee already netted out, exactly like EVM ethAfter-ethBefore).

@@ -315,6 +315,58 @@ async function alertsCycle() {
   });
 }
 
+// ------------------------------------------------------------------ held-position alerts
+// Watch every open position and ping the holder on big moves — profit milestones (2×, 5×,
+// …) and a possible rug/dump (value collapsed from its peak). Uses the bot-tracked bag
+// (p.tokens) so it's cheap; notified milestones are remembered per position to avoid
+// spam. Gated by the user's 🔔 alerts toggle.
+const POS_MILESTONES = [2, 5, 10, 25, 50, 100];
+const RUG_MIN_PEAK = Math.max(0, Number(process.env.POS_RUG_MIN_PEAK || 0.01));   // native; ignore dust positions
+const RUG_DROP = Math.min(0.9, Math.max(0.01, Number(process.env.POS_RUG_DROP || 0.15)));   // value ≤ 15% of peak = rug-ish
+async function positionsCycle() {
+  const items = [];
+  for (const u of core.allUsers()) {
+    if (!core.notifyOn(u.chatId, 'alerts')) continue;
+    for (const w of core.walletList(u)) {
+      for (const key of Object.keys(w.positions || {})) {
+        const p = w.positions[key];
+        if (!p || p.closed || !(Number(p.ethIn) > 0)) continue;
+        let heldRaw = 0n; try { heldRaw = BigInt(p.tokens || '0'); } catch (_) {}
+        if (heldRaw <= 0n) continue;
+        items.push({ u, w, p, heldRaw });
+      }
+    }
+  }
+  if (!items.length) return;
+  const snapOf = snapReader();
+  let dirty = false;
+  await mapLimit(items, ORDER_CONCURRENCY, async ({ u, w, p, heldRaw }) => {
+    let snap; try { snap = await snapOf(p.chain, p.ca); } catch (_) { return; }
+    if (!snap || !(snap.priceEth > 0)) return;
+    const c = core.chainOf(p.chain) || { native: 'ETH', emoji: '' };
+    const held = Number(ethers.formatUnits(heldRaw, p.dec || 18));
+    const valueEth = held * snap.priceEth;
+    p.notified = (p.notified && typeof p.notified === 'object') ? p.notified : {};
+    if (!(p.peakValueEth > 0) || valueEth > p.peakValueEth) { p.peakValueEth = valueEth; dirty = true; }
+    const wi = (core.walletList(u).findIndex((x) => x.id === w.id) + 1) || 1;
+    const kb = { inline_keyboard: [[{ text: '📈 Trade', callback_data: `tok:${p.chain}:${wi}:${p.ca}` }]] };
+    // profit milestone: notify the HIGHEST newly-crossed multiple, marking all below it seen.
+    const mult = (valueEth + Number(p.ethOut || 0)) / Number(p.ethIn);
+    let hi = 0; for (const m of POS_MILESTONES) if (mult >= m) hi = m;
+    if (hi && !p.notified['x' + hi]) {
+      for (const m of POS_MILESTONES) if (m <= hi) p.notified['x' + m] = true;
+      dirty = true;
+      _notify(u.chatId, `🚀 <b>$${esc(p.sym || '')} is up ${hi}×</b> on your entry!\nBag ≈ <b>${valueEth.toFixed(4)} ${c.native}</b> · consider taking profit.`, kb, 'alerts');
+    }
+    // rug/dump: value fell to ≤RUG_DROP of a meaningful peak (once).
+    if (!p.notified.rug && p.peakValueEth >= RUG_MIN_PEAK && valueEth <= p.peakValueEth * RUG_DROP) {
+      p.notified.rug = true; dirty = true;
+      _notify(u.chatId, `⚠️ <b>Possible rug / dump: $${esc(p.sym || '')}</b>\nValue fell to ≈ <b>${valueEth.toFixed(4)} ${c.native}</b> from a peak of ≈ ${p.peakValueEth.toFixed(4)}. Check the chart / your safety.`, kb, 'alerts');
+    }
+  });
+  if (dirty) core.saveStore();
+}
+
 // ------------------------------------------------------------------ copy-trading (copy-BUY only)
 // Mirror a followed wallet's BUYS: watch ERC20 Transfer logs TO the target, and
 // only mirror when the token came FROM its own WETH pair (i.e. a real swap-buy,
@@ -654,6 +706,8 @@ function start() {
   }
   (async function orderLoop() { for (;;) { try { await ordersCycle(); } catch (e) { console.error('orders', e.message); } await sleep(orderMs); } })();
   (async function alertLoop() { for (;;) { try { await alertsCycle(); } catch (e) { console.error('alerts', e.message); } await sleep(alertMs); } })();
+  const posMs = Math.max(20000, Number(process.env.POS_POLL_MS || 60000));
+  (async function positionsLoop() { for (;;) { try { await positionsCycle(); } catch (e) { console.error('positions', e.message); } await sleep(posMs); } })();
   const copyMs = Math.max(6000, Number(process.env.COPY_POLL_MS || 10000));
   (async function copyLoop() { for (;;) { try { await copyCycle(); } catch (e) { console.error('copy', e.message); } await sleep(copyMs); } })();
   const dcaMs = Math.max(15000, Number(process.env.DCA_POLL_MS || 30000));
@@ -671,4 +725,4 @@ const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</
 const fmt = (n) => { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K'; return n.toFixed(n < 1 ? 4 : 2); };
 const txLink = (chain, h) => { const c = core.chainOf(chain); return (h && c) ? `<a href="${c.explorer}/tx/${h}">tx ↗</a>` : ''; };
 
-module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert, addDca, cancelDca, _test: { solSnipeCycle, copyCycle, _copySolTarget, _solBuyMintFromTx, ordersCycle, dcaCycle } };
+module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert, addDca, cancelDca, _test: { solSnipeCycle, copyCycle, _copySolTarget, _solBuyMintFromTx, ordersCycle, dcaCycle, positionsCycle } };
