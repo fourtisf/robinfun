@@ -16,7 +16,7 @@
  */
 const crypto = require('crypto');
 const web3 = require('@solana/web3.js');
-const { Keypair, PublicKey, Connection, VersionedTransaction, LAMPORTS_PER_SOL } = web3;
+const { Keypair, PublicKey, Connection, VersionedTransaction, Transaction, SystemProgram, LAMPORTS_PER_SOL } = web3;
 const _bs58 = require('bs58');
 const bs58 = _bs58 && _bs58.encode ? _bs58 : (_bs58 && _bs58.default) ? _bs58.default : _bs58;
 const bip39 = require('bip39');
@@ -190,6 +190,81 @@ async function sendJupiterSwap(conn, keypair, swapTransactionB64) {
   return sig;
 }
 
+// ---------------------------------------------------------------- Jupiter (live HTTP)
+
+const _fetch = (...a) => (global.fetch ? global.fetch(...a) : Promise.reject(new Error('fetch unavailable')));
+// GET a Jupiter quote and return the parsed headline numbers + the raw object (which
+// the /swap endpoint requires verbatim). Throws a readable reason when there's no route.
+async function getQuote({ inputMint, outputMint, amountRaw, slippageBps = 100, platformFeeBps }) {
+  const url = quoteUrl({ inputMint, outputMint, amountRaw, slippageBps, platformFeeBps });
+  const r = await _fetch(url, { signal: AbortSignal.timeout(12000) });
+  if (!r.ok) throw new Error('Jupiter quote failed (' + r.status + ')');
+  const j = await r.json();
+  const q = parseQuote(j);
+  if (!q || q.outAmount <= 0n) throw new Error('no route / no liquidity for this token on Jupiter');
+  return q;   // { inAmount, outAmount, minOut, priceImpactPct, raw }
+}
+// POST the quote back to /swap and get the base64 VersionedTransaction to sign.
+async function getSwapTx(quoteRaw, userPublicKey, { feeAccount, priorityLamports } = {}) {
+  const body = swapBody(quoteRaw, userPublicKey, { feeAccount, priorityLamports });
+  const r = await _fetch(JUP_BASE + '/swap', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(12000) });
+  if (!r.ok) throw new Error('Jupiter swap-build failed (' + r.status + ')');
+  const j = await r.json();
+  if (!j || !j.swapTransaction) throw new Error('Jupiter returned no swap transaction');
+  return j.swapTransaction;   // base64
+}
+// One-shot: quote → build → sign → send → confirm. Returns { sig, quote }.
+async function swap(conn, keypair, { inputMint, outputMint, amountRaw, slippageBps, priorityLamports }) {
+  const quote = await getQuote({ inputMint, outputMint, amountRaw, slippageBps });
+  const txB64 = await getSwapTx(quote.raw, keypair.publicKey.toBase58(), { priorityLamports });
+  const sig = await sendJupiterSwap(conn, keypair, txB64);
+  return { sig, quote };
+}
+
+// ---------------------------------------------------------------- native SOL transfer
+
+// Send `lamports` SOL from `keypair` to `toBase58`. Used for the bot fee and for
+// withdrawals. Confirms and returns the base58 signature.
+async function sendSol(conn, keypair, toBase58, lamports) {
+  const tx = new Transaction().add(SystemProgram.transfer({
+    fromPubkey: keypair.publicKey, toPubkey: new PublicKey(toBase58), lamports: BigInt(lamports),
+  }));
+  const bh = await conn.getLatestBlockhash('confirmed');
+  tx.recentBlockhash = bh.blockhash; tx.feePayer = keypair.publicKey;
+  tx.sign(keypair);
+  const sig = await conn.sendRawTransaction(tx.serialize(), { skipPreflight: false, maxRetries: 3 });
+  const conf = await conn.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+  if (conf && conf.value && conf.value.err) throw new Error('SOL transfer failed: ' + JSON.stringify(conf.value.err));
+  return sig;
+}
+
+// ---------------------------------------------------------------- SPL metadata
+
+// Mint decimals straight from the mint account (authoritative; name/symbol live in
+// Metaplex metadata, fetched best-effort below).
+async function splDecimals(conn, mint) {
+  try { const s = await conn.getTokenSupply(new PublicKey(mint)); return Number(s.value.decimals); } catch (_) { return 9; }
+}
+// Best-effort token identity from Jupiter's token registry (name/symbol/decimals).
+// Returns null on any failure — callers fall back to a shortened mint. Never throws.
+async function jupTokenMeta(mint) {
+  try {
+    const r = await _fetch('https://tokens.jup.ag/token/' + mint, { signal: AbortSignal.timeout(8000) });
+    if (!r.ok) return null;
+    const j = await r.json();
+    if (!j || (!j.symbol && !j.name)) return null;
+    return { name: String(j.name || j.symbol || 'Token').slice(0, 40), sym: String(j.symbol || 'TOKEN').slice(0, 20), decimals: Number.isFinite(j.decimals) ? Number(j.decimals) : undefined };
+  } catch (_) { return null; }
+}
+// Combined SPL meta: decimals from the chain (authoritative), name/symbol from Jupiter
+// (best-effort). Always resolves to a usable object so a trade can be recorded.
+async function splMeta(conn, mint) {
+  const dec = await splDecimals(conn, mint);
+  const j = await jupTokenMeta(mint);
+  const shortMint = mint.slice(0, 4) + '…' + mint.slice(-4);
+  return { name: (j && j.name) || shortMint, sym: (j && j.sym) || shortMint, decimals: (j && Number.isFinite(j.decimals)) ? j.decimals : dec };
+}
+
 module.exports = {
   KIND, WSOL_MINT, SOL_PATH, LAMPORTS_PER_SOL, JUP_BASE,
   isSolAddress, isSolSecretKey,
@@ -197,4 +272,5 @@ module.exports = {
   solToLamports, lamportsToSol, fmtUnits, toRaw,
   quoteUrl, swapBody, parseQuote, feeLamports,
   getConnection, solBalance, splBalance, sendJupiterSwap,
+  getQuote, getSwapTx, swap, sendSol, splDecimals, jupTokenMeta, splMeta,
 };

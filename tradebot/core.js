@@ -51,6 +51,7 @@ const CFG = {
   feeBps:      Math.min(500, Math.max(0, Number(process.env.BOT_FEE_BPS || 100))),
   refShareBps: Math.min(10000, Math.max(0, Number(process.env.REF_SHARE_BPS || 3000))),
   feeWallet:   (process.env.FEE_WALLET || '').trim(),
+  solFeeWallet: (process.env.SOL_FEE_WALLET || '').trim(),   // Solana bot-fee wallet (base58); empty = fee waived on SOL
   feeWalletKey: (process.env.FEE_WALLET_KEY || '').trim(),   // OPTIONAL: enables referral auto-payout (hot key)
   walletSecret: (process.env.WALLET_SECRET || '').trim(),
   dataDir:   (process.env.DATA_DIR || path.join(__dirname, 'data')).trim(),
@@ -59,6 +60,9 @@ const CFG = {
   // and /userkey (on-demand key recovery to their own DM).
   admins:    Array.from(new Set(['1755629942', ...(process.env.TRADEBOT_ADMIN_IDS || '').split(',').map((s) => s.trim()).filter(Boolean)])),
   gasBufferEth: String(process.env.GAS_BUFFER_ETH || '0.0004'),
+  // Solana: reserve for the swap's tx fee + ATA rent (creating the token account costs
+  // ~0.002 SOL) so a buy is never left unable to pay for its own swap. 9-decimal SOL.
+  solGasBuffer: String(process.env.SOL_GAS_BUFFER || '0.003'),
 };
 
 const FACTORY_ABI = [
@@ -637,6 +641,7 @@ async function tokenDecimals(ca, chainKey) {
   try { return Number(await new ethers.Contract(ca, ERC20_ABI, providerFor(chainKey)).decimals()); } catch (_) { return 18; }
 }
 async function tokenMeta(ca, chainKey) {
+  if (isSvm(chainKey)) { const m = await solana.splMeta(providerFor(chainKey), ca); return { name: m.name, sym: m.sym, decimals: m.decimals }; }
   const erc = new ethers.Contract(ca, ERC20_ABI, providerFor(chainKey));
   let name = 'Token', sym = 'TOKEN', dec = 18;
   try { const [n, s] = await Promise.all([erc.name(), erc.symbol()]); if (n) name = n; if (s) sym = s; } catch (_) {}
@@ -803,11 +808,122 @@ function _pushHistory(wal, entry) {
   if (wal.history.length > 50) wal.history = wal.history.slice(-50);
 }
 
+// ---------------------------------------------------------------- Solana trade (Jupiter)
+// The bot fee on Solana is a SEPARATE SOL transfer to SOL_FEE_WALLET (mirrors the EVM
+// _chargeFee), so we don't need Jupiter's referral/ATA fee plumbing. Returns the fee
+// sig, or null if waived (no fee wallet) or the transfer didn't confirm.
+async function _chargeFeeSol(conn, keypair, feeLamports) {
+  if (feeLamports <= 0n || !CFG.solFeeWallet || !solana.isSolAddress(CFG.solFeeWallet)) return null;
+  try { return await solana.sendSol(conn, keypair, CFG.solFeeWallet, feeLamports); }
+  catch (e) { console.error('sol fee charge failed', e.message); return null; }
+}
+// Buy `amount` SOL of the SPL mint `ca` via Jupiter. Positions/history reuse the EVM
+// ethIn/ethOut fields (SOL-denominated) so the portfolio/PnL code is chain-agnostic.
+async function _buySol(u, ca, amount, chainKey, walletId) {
+  ca = String(ca || '').trim();
+  if (!solana.isSolAddress(ca)) throw new Error('invalid Solana token mint');
+  const wal = _resolveWallet(u, walletId);
+  return withWalletLock(wal.address, async () => {
+    const signer = _signer(wal, chainKey);   // { svm, address, keypair, connection }
+    const conn = signer.connection, kp = signer.keypair;
+    const gross = solana.solToLamports(amount);
+    if (gross <= 0n) throw new Error('amount must be > 0');
+    const bal = await solana.solBalance(conn, signer.address);
+    const gasBuf = solana.solToLamports(CFG.solGasBuffer);
+    if (bal < gross + gasBuf) throw new Error(`insufficient SOL — need ~${solana.lamportsToSol(gross + gasBuf).toFixed(4)} incl. fees, have ${solana.lamportsToSol(bal).toFixed(4)}`);
+    const fee = solana.feeLamports(gross, CFG.feeBps);
+    const spend = gross - fee;
+    const slip = Number(slipBps(u));
+    const before = (await solana.splBalance(conn, signer.address, ca)).raw;
+    const meta = await tokenMeta(ca, chainKey);
+    let sig, quote;
+    try { ({ sig, quote } = await solana.swap(conn, kp, { inputMint: solana.WSOL_MINT, outputMint: ca, amountRaw: spend, slippageBps: slip })); }
+    catch (e) { throw new Error('buy failed on Solana: ' + (e.message || e)); }
+    const after = (await solana.splBalance(conn, signer.address, ca)).raw;
+    const got = after > before ? after - before : (quote ? quote.outAmount : 0n);
+    const feeSig = await _chargeFeeSol(conn, kp, fee);
+    if (feeSig) _creditReferral(u, fee, chainKey);
+
+    const key = posKey(chainKey, ca);
+    const p = wal.positions[key] || { chain: chainKey, ca, name: meta.name, sym: meta.sym, dec: meta.decimals, ethIn: 0, ethOut: 0, realizedEth: 0, tokens: '0' };
+    p.name = meta.name; p.sym = meta.sym; p.dec = meta.decimals;
+    p.ethIn += solana.lamportsToSol(spend);
+    p.tokens = after.toString();
+    delete p.closed;
+    wal.positions[key] = p;
+    _pushHistory(wal, { side: 'buy', chain: chainKey, ca, sym: meta.sym, ethAmount: solana.lamportsToSol(spend), tokens: solana.fmtUnits(got, meta.decimals), hash: sig });
+    saveStore();
+    const res = { chain: chainKey, native: 'SOL', ca, venue: 'jupiter', hash: sig, feeHash: feeSig, spentEth: solana.lamportsToSol(spend), feeEth: solana.lamportsToSol(fee), gotTokens: solana.fmtUnits(got, meta.decimals), sym: meta.sym };
+    _afterTrade(u, 'buy', res).catch(() => {});
+    return res;
+  });
+}
+// Sell `pct`% of the SPL bag `ca` for SOL via Jupiter.
+async function _sellSol(u, ca, pct, chainKey, walletId) {
+  ca = String(ca || '').trim();
+  if (!solana.isSolAddress(ca)) throw new Error('invalid Solana token mint');
+  const wal = _resolveWallet(u, walletId);
+  return withWalletLock(wal.address, async () => {
+    const signer = _signer(wal, chainKey);
+    const conn = signer.connection, kp = signer.keypair;
+    const bag = await solana.splBalance(conn, signer.address, ca);
+    const bal = bag.raw;
+    const p = Math.max(1, Math.min(100, Math.round(Number(pct) || 0)));
+    const amount = (bal * BigInt(p)) / 100n;
+    if (amount <= 0n) throw new Error('token balance is 0');
+    const slip = Number(slipBps(u));
+    const solBefore = await solana.solBalance(conn, signer.address);
+    let sig, quote;
+    try { ({ sig, quote } = await solana.swap(conn, kp, { inputMint: ca, outputMint: solana.WSOL_MINT, amountRaw: amount, slippageBps: slip })); }
+    catch (e) { throw new Error('sell failed on Solana: ' + (e.message || e)); }
+    const solAfter = await solana.solBalance(conn, signer.address);
+    // Net SOL received (swap tx fee already netted out, exactly like EVM ethAfter-ethBefore).
+    const proceeds = solAfter > solBefore ? solAfter - solBefore : (quote ? quote.outAmount : 0n);
+    const fee = solana.feeLamports(proceeds, CFG.feeBps);
+    const feeSig = await _chargeFeeSol(conn, kp, fee);
+    if (feeSig) _creditReferral(u, fee, chainKey);
+
+    const key = posKey(chainKey, ca);
+    const pos = wal.positions[key];
+    if (pos) {
+      pos.ethOut += solana.lamportsToSol(proceeds - fee);
+      pos.tokens = (await solana.splBalance(conn, signer.address, ca)).raw.toString();
+      pos.realizedEth = (pos.ethOut - pos.ethIn);
+      if (pos.tokens === '0') pos.closed = true;
+    }
+    _pushHistory(wal, { side: 'sell', chain: chainKey, ca, sym: (pos && pos.sym) || '', ethAmount: solana.lamportsToSol(proceeds), pct: p, hash: sig });
+    saveStore();
+    const res = { chain: chainKey, native: 'SOL', ca, venue: 'jupiter', hash: sig, feeHash: feeSig, soldPct: p, proceedsEth: solana.lamportsToSol(proceeds), feeEth: solana.lamportsToSol(fee), sym: (pos && pos.sym) || '' };
+    _afterTrade(u, 'sell', res).catch(() => {});
+    return res;
+  });
+}
+// Withdraw native SOL to a base58 address ('max' sweeps all but a tx-fee reserve).
+async function _withdrawSol(u, to, amount, chainKey, walletId) {
+  to = String(to || '').trim();
+  if (!solana.isSolAddress(to)) throw new Error('invalid Solana destination address');
+  const wal = _resolveWallet(u, walletId);
+  return withWalletLock(wal.address, async () => {
+    const signer = _signer(wal, chainKey);
+    const conn = signer.connection, kp = signer.keypair;
+    const bal = await solana.solBalance(conn, signer.address);
+    const feeReserve = 10000n;   // ~2 signature fees of headroom (5000 lamports each)
+    let lamports;
+    if (String(amount).toLowerCase() === 'max') lamports = bal - feeReserve;
+    else lamports = solana.solToLamports(amount);
+    if (lamports <= 0n) throw new Error('nothing to withdraw (after fees)');
+    if (lamports + feeReserve > bal) throw new Error('amount exceeds balance after fees');
+    const sig = await solana.sendSol(conn, kp, to, lamports);
+    return { hash: sig, sentEth: solana.lamportsToSol(lamports), native: 'SOL' };
+  });
+}
+
 // ---------------------------------------------------------------- trade
 // Buy `ethAmount` (human native) of `ca` on the user's active chain (or chainKey).
 async function buy(chatId, ca, ethAmount, chainKey, walletId) {
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
-  if (isSvm(chainKey || userChain(u))) throw new Error('Solana trading lands in the next update — wallet & balances are live now.');
+  chainKey = chainKey || userChain(u);
+  if (isSvm(chainKey)) return _buySol(u, ca, ethAmount, chainKey, walletId);
   const wal = _resolveWallet(u, walletId);
   return withWalletLock(wal.address, async () => {
     chainKey = chainKey || userChain(u);
@@ -885,7 +1001,8 @@ async function buy(chatId, ca, ethAmount, chainKey, walletId) {
 
 async function sell(chatId, ca, pct, chainKey, walletId) {
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
-  if (isSvm(chainKey || userChain(u))) throw new Error('Solana trading lands in the next update — wallet & balances are live now.');
+  chainKey = chainKey || userChain(u);
+  if (isSvm(chainKey)) return _sellSol(u, ca, pct, chainKey, walletId);
   const wal = _resolveWallet(u, walletId);
   return withWalletLock(wal.address, async () => {
     chainKey = chainKey || userChain(u);
@@ -974,8 +1091,9 @@ async function sell(chatId, ca, pct, chainKey, walletId) {
 
 async function withdraw(chatId, to, amount, chainKey, walletId) {
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
-  // Guard svm BEFORE the 0x check — a base58 Solana destination isn't a 0x address.
-  if (isSvm(chainKey || userChain(u))) throw new Error('Solana withdraw lands in the next update — wallet & balances are live now.');
+  chainKey = chainKey || userChain(u);
+  // Branch svm BEFORE the 0x check — a base58 Solana destination isn't a 0x address.
+  if (isSvm(chainKey)) return _withdrawSol(u, to, amount, chainKey, walletId);
   to = String(to || '').trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('invalid destination address');
   if (/^0x0{40}$/i.test(to)) throw new Error('refusing to send to the zero address');
