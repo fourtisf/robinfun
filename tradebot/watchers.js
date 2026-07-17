@@ -1,11 +1,14 @@
 'use strict';
 /*
  * Background watchers for the Robinfun Trade Bot:
- *   • SNIPE  — new-launch auto-buy on ROBINHOOD CHAIN (Robinfun curve launches).
- *              Polls the factory for TokenCreated and buys for every armed+funded
- *              user. (Generic new-pair sniping on other chains is a future add-on.)
- *   • ORDERS — limit-buy / take-profit / stop-loss on any chain. Polls each order's
- *              live price and executes ONE-SHOT when the target is crossed.
+ *   • SNIPE  — new-launch auto-buy. Robinhood Chain (factory TokenCreated), EVM DEX
+ *              (PairCreated on ETH/Base/BNB/Arbitrum), and SOLANA (pump.fun new-coins
+ *              feed → Jupiter buy). Buys for every armed+funded user.
+ *   • COPY   — mirror a followed wallet's buys. EVM watches ERC20 Transfer logs from
+ *              the token's WETH pair; SOLANA polls the target's signatures and mirrors
+ *              a SOL-funded SPL increase. DANGER-flagged tokens (GoPlus/RugCheck) skipped.
+ *   • ORDERS — limit-buy / take-profit / stop-loss on any chain (Solana included via
+ *              DexScreener pricing). Polls each order's live price, ONE-SHOT on cross.
  *
  * Fund-safety: a triggered order is REMOVED and persisted synchronously BEFORE the
  * trade is sent, so a crash/restart can never replay a fill (double-spend). Orders
@@ -15,6 +18,8 @@
 const { ethers } = require('ethers');
 const core = require('./core');
 const goplus = require('./goplus');
+const safety = require('./safety');   // chain-aware safety (GoPlus on EVM, RugCheck on Solana)
+const solana = require('./solana');   // Solana snipe/copy helpers
 
 let _notify = () => {};
 function setNotifier(fn) { if (typeof fn === 'function') _notify = fn; }
@@ -134,7 +139,7 @@ async function _dexSnipeChain(ch) {
     // Skip anything GoPlus flags as DANGER (honeypot, can't-sell, pausable, owner-rug,
     // blacklist, >10% tax). When GoPlus has no data yet (brand-new token) we proceed —
     // sniping fresh launches is the whole point; blind-buy risk is bounded by the amount.
-    if (goplus.supported(ch.key)) { const s = await goplus.tokenSecurity(ch.key, token).catch(() => null); if (s && goplus.verdict(s).level === 'danger') continue; }
+    if (safety.supported(ch.key)) { const s = await safety.tokenSecurity(ch.key, token).catch(() => null); if (s && safety.verdict(ch.key, s).level === 'danger') continue; }
     await mapLimit(armed, SNIPE_CONCURRENCY, async (u) => {
       const addr = core.activeAddress(u); if (!addr) return;
       try {
@@ -329,6 +334,8 @@ async function copyCycle() {
   for (const u of users) {
     for (const t of u.copy.targets) {
       const ch = core.chainOf(t.chain); if (!ch) continue;
+      // Solana copy-buy uses signature polling (no EVM logs) — dedicated path.
+      if (core.chains.isSvm(t.chain)) { await _copySolTarget(u, t).catch((e) => console.error('copysol', (e && e.message) || e)); continue; }
       const prov = core.providerFor(t.chain);
       let head; try { head = await prov.getBlockNumber(); } catch (_) { continue; }
       if (!t.cursor || head < t.cursor) { t.cursor = head; core.saveStore(); continue; }   // pin near head first pass
@@ -351,7 +358,7 @@ async function copyCycle() {
         if (!pair || pair !== fromAddr) continue;                          // not a swap-buy → skip (airdrop/transfer)
         // Skip anything GoPlus flags as DANGER (honeypot/pausable/owner-rug/high-tax…);
         // when GoPlus has no data we still mirror — worst-case loss stays bounded by maxEth.
-        if (goplus.supported(t.chain)) { const s = await goplus.tokenSecurity(t.chain, token).catch(() => null); if (s && goplus.verdict(s).level === 'danger') continue; }
+        if (safety.supported(t.chain)) { const s = await safety.tokenSecurity(t.chain, token).catch(() => null); if (s && safety.verdict(t.chain, s).level === 'danger') continue; }
         // Commit budget + dedup BEFORE spending (crash-safe: no double-mirror, budget can't be exceeded on restart).
         t.bought = t.bought || {};
         const boughtKeys = Object.keys(t.bought);
@@ -378,6 +385,133 @@ async function copyCycle() {
       }
     }
     core.saveStore();
+  }
+}
+
+// ------------------------------------------------------------------ Solana copy-buy
+// Mirror a followed SOLANA wallet's BUYS. We can't watch ERC20 logs, so we poll the
+// target's recent signatures, parse each tx, and mirror when the target's SPL balance
+// INCREASED while its SOL balance DROPPED (a real SOL-funded swap-buy, not an airdrop
+// or a transfer-in). Same crash-safe budget/dedup commit as the EVM path; sells stay
+// the user's job. Stablecoins + WSOL are ignored.
+const COPY_SOL_SIG_LIMIT = Math.max(5, Number(process.env.COPY_SOL_SIG_LIMIT || 25));
+const COPY_SOL_MIN_SPEND = 1000000n;   // target must have spent >0.001 SOL for it to count as a buy
+const _solStable = new Set([
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',   // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KConky11Mc6mzwtQKPa',    // USDT
+  solana.WSOL_MINT,
+]);
+// The mint the target BOUGHT in tx `sig` (largest SPL increase for the target owner),
+// but only if the target also spent SOL. null when it's not a SOL-funded buy.
+async function _solBuyMintFromTx(conn, sig, targetAddr) {
+  const tx = await conn.getParsedTransaction(sig, { maxSupportedTransactionVersion: 0, commitment: 'confirmed' });
+  if (!tx || !tx.meta) return null;
+  const pre = tx.meta.preTokenBalances || [], post = tx.meta.postTokenBalances || [];
+  const preMap = new Map();
+  for (const b of pre) { if (b && b.owner === targetAddr) { try { preMap.set(b.mint, BigInt(b.uiTokenAmount.amount)); } catch (_) {} } }
+  let boughtMint = null, bestDelta = 0n;
+  for (const b of post) {
+    if (!b || b.owner !== targetAddr) continue;
+    let after; try { after = BigInt(b.uiTokenAmount.amount); } catch (_) { continue; }
+    const delta = after - (preMap.get(b.mint) || 0n);
+    if (delta > bestDelta) { bestDelta = delta; boughtMint = b.mint; }
+  }
+  if (!boughtMint || bestDelta <= 0n) return null;
+  // Confirm the target PAID SOL (buy), not received tokens for free (airdrop/transfer).
+  const keys = tx.transaction.message.accountKeys || [];
+  let idx = -1;
+  for (let i = 0; i < keys.length; i++) { const k = keys[i]; const pk = (k && (k.pubkey ? k.pubkey.toString() : String(k))) || ''; if (pk === targetAddr) { idx = i; break; } }
+  if (idx >= 0 && Array.isArray(tx.meta.preBalances) && Array.isArray(tx.meta.postBalances)) {
+    const solDelta = BigInt(tx.meta.postBalances[idx]) - BigInt(tx.meta.preBalances[idx]);
+    if (solDelta >= -COPY_SOL_MIN_SPEND) return null;   // spent ≤0.001 SOL → not a SOL-funded buy
+  }
+  return boughtMint;
+}
+async function _copySolTarget(u, t) {
+  const conn = core.providerFor(t.chain);
+  const { PublicKey } = require('@solana/web3.js');
+  let sigs;
+  try { sigs = await conn.getSignaturesForAddress(new PublicKey(t.address), { limit: COPY_SOL_SIG_LIMIT }); } catch (_) { return; }
+  if (!Array.isArray(sigs) || !sigs.length) return;
+  if (!t.cursorSig) { t.cursorSig = sigs[0].signature; core.saveStore(); return; }   // pin near head first pass
+  const fresh = [];
+  for (const s of sigs) { if (s.signature === t.cursorSig) break; if (!s.err) fresh.push(s.signature); }
+  t.cursorSig = sigs[0].signature; core.saveStore();   // advance to head regardless
+  if (!fresh.length) return;
+  fresh.reverse();   // oldest-first → mirror in the target's order
+  let mirrors = 0;
+  for (const sig of fresh) {
+    if (mirrors >= COPY_MAX_MIRRORS_PER_CYCLE) break;
+    let mint; try { mint = await _solBuyMintFromTx(conn, sig, t.address); } catch (_) { continue; }
+    if (!mint || _solStable.has(mint)) continue;
+    if (t.bought && t.bought[mint]) continue;
+    if (Number(t.spentEth) + Number(t.buyEth) > Number(t.maxEth) + 1e-12) continue;   // budget cap
+    if (safety.supported(t.chain)) { const s = await safety.tokenSecurity(t.chain, mint).catch(() => null); if (s && safety.verdict(t.chain, s).level === 'danger') continue; }
+    // Commit budget + dedup BEFORE spending (crash-safe).
+    t.bought = t.bought || {};
+    const bk = Object.keys(t.bought); if (bk.length >= 2000) delete t.bought[bk[0]];
+    t.bought[mint] = true;
+    t.spentEth = Number(t.spentEth) + Number(t.buyEth);
+    core.saveStoreNow();
+    mirrors++;
+    try {
+      const r = await core.buy(u.chatId, mint, t.buyEth, t.chain);
+      _notify(u.chatId, `👥 <b>Copy-buy</b> $${esc(r.sym)} on 🟣 Solana\nFollowed <code>${short(t.address)}</code> · ${r.spentEth} ${r.native}\n<code>${mint}</code>\n${txLink(t.chain, r.hash)}`, undefined, 'copy');
+    } catch (err) {
+      if (!err || !err.broadcast) { t.spentEth = Math.max(0, Number(t.spentEth) - Number(t.buyEth)); delete t.bought[mint]; core.saveStoreNow(); }
+      const now = Date.now(), key = u.chatId + ':copysol:' + mint;
+      if (now - (_snipeFailAt.get(key) || 0) > 300000) { _snipeFailAt.set(key, now); _notify(u.chatId, `⚠️ Copy-buy of ${short(mint)} failed: ${esc(err.message || String(err))} (muted 5 min)`, undefined, 'copy'); }
+    }
+  }
+}
+
+// ------------------------------------------------------------------ Solana snipe (new pump.fun launches)
+// New-launch auto-buy on Solana. Discovery is pump.fun's new-coins feed (the canonical
+// launchpad); the actual buy goes through Jupiter, so a token that isn't routable yet
+// (still on the raw bonding curve) is skipped quietly and retried while it's fresh.
+// RugCheck DANGER-flagged tokens are skipped; brand-new ones usually aren't indexed yet
+// (gate fails open, like the EVM snipe). Best-effort — first-second curve sniping would
+// need a pump.fun program integration (future add-on).
+let _solSnipeCursorTs = 0;
+const _solSnipeSeen = new Set();
+const SOL_SNIPE_MAX_AGE_MS = Math.max(60000, Number(process.env.SOL_SNIPE_MAX_AGE_MS || 600000));   // ignore launches older than 10 min
+async function solSnipeCycle() {
+  if (!core.chains.isEnabled('solana')) return;
+  const armed = core.allUsers().filter((u) => u.snipe && u.snipe.chains && u.snipe.chains.solana && Number(u.snipe.ethAmount) > 0);
+  if (!armed.length) return;
+  const coins = await solana.pumpfunNew(50);
+  if (!coins.length) return;
+  const newestTs = Math.max(0, ...coins.map((c) => c.createdTs || 0));
+  if (!_solSnipeCursorTs) { _solSnipeCursorTs = newestTs; return; }   // pin near head first pass (no startup flood)
+  const now = Date.now();
+  const fresh = coins
+    .filter((c) => c.createdTs > _solSnipeCursorTs && (now - c.createdTs) < SOL_SNIPE_MAX_AGE_MS && !_solSnipeSeen.has(c.mint))
+    .sort((a, b) => a.createdTs - b.createdTs);
+  _solSnipeCursorTs = Math.max(_solSnipeCursorTs, newestTs);
+  let processed = 0;
+  for (const c of fresh) {
+    if (processed >= DEX_SNIPE_MAX_TOKENS) break;
+    _solSnipeSeen.add(c.mint);
+    if (_solSnipeSeen.size > 4000) { const it = _solSnipeSeen.values().next().value; _solSnipeSeen.delete(it); }
+    processed++;
+    if (safety.supported('solana')) { const s = await safety.tokenSecurity('solana', c.mint).catch(() => null); if (s && safety.verdict('solana', s).level === 'danger') continue; }
+    await mapLimit(armed, SNIPE_CONCURRENCY, async (u) => {
+      const w = core.activeWallet(u); if (!w) return;
+      try {
+        const bal = await core.ethBalance(core.walletAddress(w, 'solana'), 'solana');
+        const need = solana.solToLamports(u.snipe.ethAmount) + solana.solToLamports(core.CFG.solGasBuffer);
+        if (bal < need) return;   // can't afford → skip silently
+      } catch (_) { return; }
+      try {
+        const r = await core.buy(u.chatId, c.mint, u.snipe.ethAmount, 'solana');
+        _notify(u.chatId, `🎯 <b>Sniped $${esc(r.sym || c.symbol)}</b> on 🟣 Solana\nBought ${fmt(r.gotTokens)} for ${r.spentEth} ${r.native}\n<code>${c.mint}</code>\n${txLink('solana', r.hash)}`, undefined, 'snipe');
+      } catch (err) {
+        const msg = String((err && err.message) || err);
+        if (/no route|no liquidity|not tradable/i.test(msg)) return;   // not yet on Jupiter → retry while fresh
+        const now2 = Date.now(), key = u.chatId + ':solsnipe';
+        if (now2 - (_snipeFailAt.get(key) || 0) > 300000) { _snipeFailAt.set(key, now2); _notify(u.chatId, `⚠️ A Solana snipe failed: ${esc(msg)} (muted 5 min)`, undefined, 'snipe'); }
+      }
+    });
   }
 }
 
@@ -426,6 +560,11 @@ function start() {
   const dexSnipeMs = Math.max(5000, Number(process.env.DEX_SNIPE_POLL_MS || 8000));
   (async function snipeLoop() { for (;;) { try { await snipeCycle(); } catch (e) { console.error('snipe', e.message); } await sleep(snipeMs); } })();
   (async function dexSnipeLoop() { for (;;) { try { await dexSnipeCycle(); } catch (e) { console.error('dexsnipe', e.message); } await sleep(dexSnipeMs); } })();
+  // Solana snipe runs only when the chain is enabled (its own cadence; pump.fun poll).
+  if (core.chains.isEnabled('solana')) {
+    const solSnipeMs = Math.max(5000, Number(process.env.SOL_SNIPE_POLL_MS || 8000));
+    (async function solSnipeLoop() { for (;;) { try { await solSnipeCycle(); } catch (e) { console.error('solsnipe', e.message); } await sleep(solSnipeMs); } })();
+  }
   (async function orderLoop() { for (;;) { try { await ordersCycle(); } catch (e) { console.error('orders', e.message); } await sleep(orderMs); } })();
   (async function alertLoop() { for (;;) { try { await alertsCycle(); } catch (e) { console.error('alerts', e.message); } await sleep(alertMs); } })();
   const copyMs = Math.max(6000, Number(process.env.COPY_POLL_MS || 10000));
@@ -443,4 +582,4 @@ const esc = (s) => String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</
 const fmt = (n) => { n = Number(n) || 0; if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M'; if (n >= 1e3) return (n / 1e3).toFixed(2) + 'K'; return n.toFixed(n < 1 ? 4 : 2); };
 const txLink = (chain, h) => { const c = core.chainOf(chain); return (h && c) ? `<a href="${c.explorer}/tx/${h}">tx ↗</a>` : ''; };
 
-module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert };
+module.exports = { setNotifier, start, addOrder, cancelOrder, addAlert, cancelAlert, _test: { solSnipeCycle, copyCycle, _copySolTarget, _solBuyMintFromTx } };

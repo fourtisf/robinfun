@@ -14,6 +14,7 @@
 const { ethers } = require('ethers');
 const core = require('./core');
 const goplus = require('./goplus');
+const safety = require('./safety');   // chain-aware token safety (GoPlus / RugCheck)
 
 const SITE = (process.env.SITE || 'https://robinfun.io').replace(/\/+$/, '');
 const ROUTER_FACTORY_ABI = ['function factory() view returns (address)'];
@@ -70,6 +71,8 @@ async function enrich(ca, chainKey) {
   if (core.chains.isSvm(chainKey)) {
     info.liquidityNative = (snap.liquiditySol != null) ? snap.liquiditySol : null;
     info.api = { name: snap.name, symbol: snap.sym, volume: { h24Usd: snap.volH24Usd != null ? snap.volH24Usd : null, totalUsd: null }, marketCapUsd: snap.mcapUsd || null };
+    // RugCheck safety (best-effort, bounded) — mint/freeze authority, LP lock, holders.
+    info.security = await withTimeout(safety.tokenSecurity(chainKey, ca).catch(() => null), Math.max(3000, Number(process.env.SCAN_TIMEOUT_MS || 9000)));
     return info;
   }
   const tasks = [];

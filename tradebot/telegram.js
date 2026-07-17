@@ -12,6 +12,7 @@ const watchers = require('./watchers');
 const report = require('./report');   // ops reporting to admin channel (never sends secrets)
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const goplus = require('./goplus');
+const safety = require('./safety');   // chain-aware token safety (GoPlus on EVM, RugCheck on Solana)
 const tokeninfo = require('./tokeninfo');
 const solana = require('./solana');   // base58 address validation + SVM helpers
 
@@ -163,7 +164,7 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   L.push(`<b>${esc(name)}</b>  $${esc(sym)}  ·  ${ch.emoji} ${esc(ch.name)}`);
   L.push(`<code>${ca}</code>`);
   L.push(info.dex ? '◆ DEX' : (info.graduated ? '◆ GRADUATED' : `◈ LISTED · ${(info.progressPct || 0).toFixed(0)}%`));
-  if (sec) { const v = goplus.verdict(sec); if (v.level === 'danger') L.push(`🚨 <b>HIGH RISK</b>: ${esc(v.red.join(', '))}`); else if (v.level === 'warn') L.push(`⚠️ ${esc(v.warn.join(', '))}`); }
+  if (sec) { const v = safety.verdict(chainKey, sec); if (v.level === 'danger') L.push(`🚨 <b>HIGH RISK</b>: ${esc(v.red.join(', '))}`); else if (v.level === 'warn') L.push(`⚠️ ${esc(v.warn.join(', '))}`); }
   L.push('');
   L.push(`💵 Price: <b>${priceUsd > 0 ? '$' + priceUsd.toPrecision(3) : px.toExponential(2) + ' ' + nat}</b>`);
   const mcapUsd = (api && api.marketCapUsd) || (info.mcapEth * nativeUsd(nat));
@@ -219,7 +220,7 @@ async function tokenCard(chatId, ca, chainKey, walletId) {
   // (Telegram limit). Worst case ≈ 64 with chain "robinhood", wi≤99, 42-char ca, and a
   // 6-char preset (capped in setBuyPresets). Keep those caps if you touch this.
   const lastRow = [btn('🔔 Alert', `alt:${chainKey}:${wi}:${ca}`), btn('🔄 Refresh', `tok:${chainKey}:${wi}:${ca}`), btn('« Menu', 'menu')];
-  if (goplus.supported(chainKey)) lastRow.unshift(btn('🛡 Safety', `sec:${chainKey}:${ca}`));   // GoPlus only on supported chains
+  if (safety.supported(chainKey)) lastRow.unshift(btn('🛡 Safety', `sec:${chainKey}:${ca}`));   // GoPlus (EVM) / RugCheck (Solana)
   // Multi-wallet users get a picker row: choose one / several / ALL wallets to trade from.
   const selLabel = sel.all ? `👛 Trading: ALL ${list.length} wallets` : (selN >= 1 ? `👛 Trading: ${selN} wallet${selN > 1 ? 's' : ''}` : `👛 Trade from: ${core.walletLabel(w, wi)}`);
   const walletRow = list.length > 1 ? [[btn(selLabel, `wsel:${chainKey}:${ca}`)]] : [];
@@ -409,26 +410,44 @@ function notifyScreen(chatId) {
 async function safetyScreen(chatId, ca, chainKey) {
   const ch = core.chainOf(chainKey) || core.chainOf(core.userChain(core.ensureUser(chatId)));
   const back = rows([btn('« Menu', 'menu')]);
-  if (!goplus.supported(chainKey)) {
+  if (!safety.supported(chainKey)) {
     return { text: `🛡 <b>Token safety</b> — not available on ${ch.emoji} ${esc(ch.name)}.\n\nRobinfun-native tokens on Robinhood Chain are fair-launch by design: fixed supply, no tax, and LP is 100% burned at graduation.`, kb: back };
   }
-  const s = await goplus.tokenSecurity(chainKey, ca).catch(() => null);
+  const s = await safety.tokenSecurity(chainKey, ca).catch(() => null);
   if (!s) return { text: `🛡 <b>Token safety</b>\n\nCouldn't fetch security data right now (or the token isn't indexed yet). Trade carefully.`, kb: rows([btn('🔄 Retry', `sec:${chainKey}:${ca}`), btn('« Menu', 'menu')]) };
-  const v = goplus.verdict(s);
+  const v = safety.verdict(chainKey, s);
   const banner = v.level === 'danger' ? '🚨 <b>HIGH RISK</b>' : v.level === 'warn' ? '⚠️ <b>CAUTION</b>' : '✅ <b>No major red flags</b>';
-  const tax = (t) => (t == null ? '?' : (Math.round(t * 10) / 10) + '%');
   const yn = (bad) => (bad ? '🔴' : '🟢');
-  let body =
-    `${yn((s.buyTaxPct || 0) > 10)} Buy tax: <b>${tax(s.buyTaxPct)}</b>  ·  ${yn((s.sellTaxPct || 0) > 10)} Sell tax: <b>${tax(s.sellTaxPct)}</b>\n` +
-    `${yn(s.honeypot)} Honeypot: <b>${s.honeypot ? 'YES' : 'no'}</b>  ·  ${yn(s.cannotSellAll)} Can sell all: <b>${s.cannotSellAll ? 'NO' : 'yes'}</b>\n` +
-    `${yn(s.mintable)} Mintable: <b>${s.mintable ? 'yes' : 'no'}</b>  ·  ${yn(s.ownerChangeBalance)} Owner edits balances: <b>${s.ownerChangeBalance ? 'yes' : 'no'}</b>\n` +
-    `${yn(s.openSource === false)} Open-source: <b>${s.openSource === false ? 'no' : 'yes'}</b>  ·  ${yn(s.proxy)} Proxy: <b>${s.proxy ? 'yes' : 'no'}</b>\n`;
-  if (s.lpLockedPct != null) body += `${yn(s.lpLockedPct < 50)} LP locked/burned: <b>${Math.round(s.lpLockedPct)}%</b>\n`;
-  if (s.holders != null) body += `Holders: <b>${s.holders}</b>\n`;
-  if (v.red.length) body += `\n🔴 <b>${v.red.join(', ')}</b>`;
-  else if (v.warn.length) body += `\n⚠️ ${v.warn.join(', ')}`;
+  const svm = core.chains.isSvm(chainKey);
+  let body, src;
+  if (svm) {
+    // RugCheck (Solana): authorities, LP lock, holder concentration, "rugged".
+    src = 'RugCheck';
+    body =
+      `${yn(s.freezeAuthorityEnabled)} Freeze authority: <b>${s.freezeAuthorityEnabled ? 'ACTIVE 🚩' : 'revoked'}</b>\n` +
+      `${yn(s.mintAuthorityEnabled)} Mint authority: <b>${s.mintAuthorityEnabled ? 'active' : 'revoked'}</b>\n` +
+      `${yn(s.rugged)} Rugged flag: <b>${s.rugged ? 'YES' : 'no'}</b>\n`;
+    if (s.lpLockedPct != null) body += `${yn(s.lpLockedPct < 50)} LP locked/burned: <b>${Math.round(s.lpLockedPct)}%</b>\n`;
+    if (s.topHolderPct != null) body += `${yn(s.topHolderPct >= 20)} Top holder: <b>${s.topHolderPct.toFixed(1)}%</b>${s.top10Pct != null ? ` · top-10 <b>${s.top10Pct.toFixed(0)}%</b>` : ''}\n`;
+    if (s.totalHolders != null) body += `Holders: <b>${s.totalHolders}</b>\n`;
+    if (s.liquidityUsd != null) body += `Liquidity: <b>$${fmt(s.liquidityUsd)}</b>\n`;
+    if (s.scoreNorm != null) body += `RugCheck score: <b>${Math.round(s.scoreNorm)}/100</b> <i>(lower is safer)</i>\n`;
+  } else {
+    // GoPlus (EVM): tax, honeypot, mintable, owner footguns, LP lock.
+    src = 'GoPlus';
+    const tax = (t) => (t == null ? '?' : (Math.round(t * 10) / 10) + '%');
+    body =
+      `${yn((s.buyTaxPct || 0) > 10)} Buy tax: <b>${tax(s.buyTaxPct)}</b>  ·  ${yn((s.sellTaxPct || 0) > 10)} Sell tax: <b>${tax(s.sellTaxPct)}</b>\n` +
+      `${yn(s.honeypot)} Honeypot: <b>${s.honeypot ? 'YES' : 'no'}</b>  ·  ${yn(s.cannotSellAll)} Can sell all: <b>${s.cannotSellAll ? 'NO' : 'yes'}</b>\n` +
+      `${yn(s.mintable)} Mintable: <b>${s.mintable ? 'yes' : 'no'}</b>  ·  ${yn(s.ownerChangeBalance)} Owner edits balances: <b>${s.ownerChangeBalance ? 'yes' : 'no'}</b>\n` +
+      `${yn(s.openSource === false)} Open-source: <b>${s.openSource === false ? 'no' : 'yes'}</b>  ·  ${yn(s.proxy)} Proxy: <b>${s.proxy ? 'yes' : 'no'}</b>\n`;
+    if (s.lpLockedPct != null) body += `${yn(s.lpLockedPct < 50)} LP locked/burned: <b>${Math.round(s.lpLockedPct)}%</b>\n`;
+    if (s.holders != null) body += `Holders: <b>${s.holders}</b>\n`;
+  }
+  if (v.red.length) body += `\n🔴 <b>${esc(v.red.join(', '))}</b>`;
+  else if (v.warn.length) body += `\n⚠️ ${esc(v.warn.join(', '))}`;
   return {
-    text: `🛡 <b>Token safety</b> · ${ch.emoji} ${esc(ch.name)}  ${s.symbol ? '· $' + esc(s.symbol) : ''}\n${banner}\n\n${body}\n\n<i>Source: GoPlus. Not financial advice — always DYOR.</i>`,
+    text: `🛡 <b>Token safety</b> · ${ch.emoji} ${esc(ch.name)}  ${s.symbol ? '· $' + esc(s.symbol) : ''}\n${banner}\n\n${body}\n\n<i>Source: ${src}. Not financial advice — always DYOR.</i>`,
     kb: rows([btn('🔄 Recheck', `sec:${chainKey}:${ca}`), btn('« Menu', 'menu')]),
   };
 }
@@ -602,16 +621,18 @@ async function onMessage(m) {
     if (u.settings && u.settings.autoBuy) {
       const amt = u.settings.autoBuyAmount || '0.01';
       const chainKey = core.userChain(u);
-      // Safety gate: auto-buy skips the manual 🛡 Safety screen, so on GoPlus
-      // chains refuse an obvious honeypot / can't-sell token before spending funds.
+      // Safety gate: auto-buy skips the manual 🛡 Safety screen, so on chains we can
+      // check (GoPlus on EVM, RugCheck on Solana) refuse a DANGER-flagged token
+      // (honeypot / can't-sell / freeze-authority / rugged) before spending funds.
       let safetyNote = '';
-      if (goplus.supported(chainKey)) {
-        const s = await goplus.tokenSecurity(chainKey, text).catch(() => null);
-        if (s && (s.honeypot || s.cannotSellAll)) {
-          return send(chatId, `🚨 <b>Auto-buy blocked</b> — <code>${short(text)}</code> looks like a <b>honeypot / can't-sell</b> token (GoPlus). Open the card and review 🛡 Safety before buying manually.`, rows([btn('🔎 Open card', `tok:${chainKey}:${walletIndex(chatId)}:${text}`), btn('« Menu', 'menu')]));
+      if (safety.supported(chainKey)) {
+        const s = await safety.tokenSecurity(chainKey, text).catch(() => null);
+        if (s && safety.verdict(chainKey, s).level === 'danger') {
+          const why = safety.verdict(chainKey, s).red.join(', ');
+          return send(chatId, `🚨 <b>Auto-buy blocked</b> — <code>${short(text)}</code> is <b>HIGH RISK</b>: ${esc(why)}. Open the card and review 🛡 Safety before buying manually.`, rows([btn('🔎 Open card', `tok:${chainKey}:${walletIndex(chatId)}:${text}`), btn('« Menu', 'menu')]));
         }
-        // Gate fails OPEN when GoPlus has no data (fresh/unindexed token — the
-        // riskiest case). Tell the user the check didn't actually run.
+        // Gate fails OPEN when there's no data (fresh/unindexed token — the riskiest
+        // case). Tell the user the check didn't actually run.
         if (!s) safetyNote = '\n⚠️ <i>Safety data unavailable — buying blind on a fresh/unknown token.</i>';
       }
       await send(chatId, `⚡ <b>Auto-buy</b> ${esc(amt)} of <code>${short(text)}</code>… <i>(toggle in ⚙️ Settings)</i>${safetyNote}`);
@@ -717,7 +738,7 @@ async function onCallback(q) {
   if (k === 'al') { const okc = watchers.cancelAlert(chatId, ca); await answer(q.id, okc ? 'Cancelled' : 'Not found'); const s = alertsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'copy') { const s = copyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'cptog') { const u = core.ensureUser(chatId); try { core.setCopyOn(chatId, !(u.copy && u.copy.on)); } catch (_) {} const s = copyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
-  if (data === 'cpadd') { setPending(chatId, { action: 'copy_add' }); const ch = activeChain(chatId); return send(chatId, `👥 <b>Follow a wallet</b> on ${ch.emoji} ${esc(ch.name)} (your active chain)\n\nSend: <code>&lt;wallet_address&gt; &lt;perBuy&gt; &lt;totalBudget&gt;</code>\ne.g. <code>0xAbc… 0.02 0.2</code>\n\nEach buy the wallet makes is mirrored with <b>perBuy</b> from your active wallet, until <b>totalBudget</b> is spent.`); }
+  if (data === 'cpadd') { setPending(chatId, { action: 'copy_add' }); const ch = activeChain(chatId); const ex = core.chains.isSvm(ch.key) ? '4Nd1m… 0.05 0.5' : '0xAbc… 0.02 0.2'; return send(chatId, `👥 <b>Follow a wallet</b> on ${ch.emoji} ${esc(ch.name)} (your active chain)\n\nSend: <code>&lt;wallet_address&gt; &lt;perBuy&gt; &lt;totalBudget&gt;</code>\ne.g. <code>${ex}</code>\n\nEach buy the wallet makes is mirrored with <b>perBuy</b> ${ch.native} from your active wallet, until <b>totalBudget</b> is spent.`); }
   if (k === 'cprm') { core.removeCopyTarget(chatId, ca); const s = copyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (k === 'oc') { const ok = watchers.cancelOrder(chatId, ca); await answer(q.id, ok ? 'Cancelled' : 'Not found'); const s = ordersScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
 }

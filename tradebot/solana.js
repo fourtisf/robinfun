@@ -294,6 +294,32 @@ async function dexScreener(mint) {
   } catch (_) { return null; }
 }
 
+// ---------------------------------------------------------------- new launches (pump.fun)
+
+// Recently-created pump.fun coins, newest first. The canonical Solana launchpad feed —
+// used by the snipe watcher for discovery (the buy itself routes through Jupiter). Best-
+// effort: returns [] on any failure / unsupported response. Override the host via
+// PUMPFUN_API (e.g. a proxy) if the public frontend API is unreachable.
+async function pumpfunNew(limit = 50) {
+  const base = (process.env.PUMPFUN_API || 'https://frontend-api.pump.fun/coins').replace(/\/+$/, '');
+  try {
+    const n = Math.max(1, Math.min(100, limit));
+    const url = `${base}?offset=0&limit=${n}&sort=created_timestamp&order=DESC&includeNsfw=true`;
+    const r = await _fetch(url, { signal: AbortSignal.timeout(9000), headers: { accept: 'application/json' } });
+    if (!r.ok) return [];
+    const j = await r.json();
+    const arr = Array.isArray(j) ? j : (Array.isArray(j && j.coins) ? j.coins : []);
+    return arr.map((c) => ({
+      mint: String((c && (c.mint || c.address)) || ''),
+      name: String((c && c.name) || '').slice(0, 40),
+      symbol: String((c && c.symbol) || '').slice(0, 20),
+      createdTs: Number(c && c.created_timestamp) || 0,
+      mcapUsd: Number(c && c.usd_market_cap) || 0,
+      complete: !!(c && c.complete),
+    })).filter((c) => isSolAddress(c.mint));
+  } catch (_) { return []; }
+}
+
 module.exports = {
   KIND, WSOL_MINT, SOL_PATH, LAMPORTS_PER_SOL, JUP_BASE,
   isSolAddress, isSolSecretKey,
@@ -301,5 +327,5 @@ module.exports = {
   solToLamports, lamportsToSol, fmtUnits, toRaw,
   quoteUrl, swapBody, parseQuote, feeLamports,
   getConnection, solBalance, splBalance, sendJupiterSwap,
-  getQuote, getSwapTx, swap, sendSol, splDecimals, jupTokenMeta, splMeta, dexScreener,
+  getQuote, getSwapTx, swap, sendSol, splDecimals, jupTokenMeta, splMeta, dexScreener, pumpfunNew,
 };

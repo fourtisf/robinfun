@@ -501,16 +501,21 @@ const MAX_COPY_TARGETS = Math.max(1, Number(process.env.MAX_COPY_TARGETS || 5));
 function addCopyTarget(chatId, address, chain, buyEth, maxEth) {
   const u = ensureUser(chatId);
   address = String(address || '').trim();
-  if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error('invalid wallet address');
   if (!isEnabled(chain)) throw new Error('chain not enabled');
+  const svm = isSvm(chain);
+  // Validate per chain: base58 pubkey on Solana, 0x on EVM. Solana addresses are
+  // case-SENSITIVE, so only lowercase EVM addresses for the dup check.
+  if (svm) { if (!solana.isSolAddress(address)) throw new Error('invalid Solana wallet address'); }
+  else if (!/^0x[0-9a-fA-F]{40}$/.test(address)) throw new Error('invalid wallet address');
+  const norm = (a) => (svm ? a : a.toLowerCase());
   u.copy = u.copy || { on: false, targets: [] };
   u.copy.targets = u.copy.targets || [];
   if (u.copy.targets.length >= MAX_COPY_TARGETS) throw new Error(`copy limit (${MAX_COPY_TARGETS}) reached — remove one first`);
-  if (u.copy.targets.some((t) => t.address.toLowerCase() === address.toLowerCase() && t.chain === chain)) throw new Error('already following that wallet on this chain');
+  if (u.copy.targets.some((t) => norm(t.address) === norm(address) && t.chain === chain)) throw new Error('already following that wallet on this chain');
   const be = Number(buyEth), me = Number(maxEth);
   if (!(be > 0)) throw new Error('per-buy amount must be > 0');
   if (!(me >= be)) throw new Error('total budget must be ≥ the per-buy amount');
-  const t = { id: 'cp' + crypto.randomBytes(4).toString('hex'), address, chain, buyEth: String(be), maxEth: String(me), spentEth: 0, bought: {}, cursor: 0, createdAt: Date.now() };
+  const t = { id: 'cp' + crypto.randomBytes(4).toString('hex'), address, chain, buyEth: String(be), maxEth: String(me), spentEth: 0, bought: {}, cursor: 0, cursorSig: '', createdAt: Date.now() };
   u.copy.targets.push(t);
   saveStore();
   return t;
