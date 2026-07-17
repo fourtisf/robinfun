@@ -386,9 +386,33 @@ function settingsScreen(chatId) {
       [btn('🌐 Chain', 'chain'), btn('📉 Slippage', 'setslip'), btn(`⚡ Buy amounts`, 'setbp')],
       [btn(`${s.confirmBuy ? '🔴 Confirm buy OFF' : '🟢 Confirm buy ON'}`, 'cbtog'), btn(`${s.expert ? '🔴 Fast mode OFF' : '🟢 Fast mode ON'}`, 'extog')],
       [btn(s.autoBuy ? '🔴 Auto-buy OFF' : '🟢 Auto-buy ON', 'abtog'), btn('✏️ Auto-buy amount', 'abamt')],
-      [btn('🔔 Notifications', 'ntf'), btn('❔ Help', 'help'), btn('« Menu', 'menu')],
+      [btn('🔐 Security', 'usec'), btn('🔔 Notifications', 'ntf')],
+      [btn('❔ Help', 'help'), btn('« Menu', 'menu')],
     ),
   };
+}
+// Withdrawal protections: vault lock, per-chain whitelist, rate limit. Guards a hijacked
+// Telegram account from instantly draining funds.
+function securityScreen(chatId) {
+  const u = core.ensureUser(chatId);
+  const sec = core.getSecurity(chatId);
+  const ch = core.chainOf(core.userChain(u));
+  const wl = (sec.whitelist || []);
+  const wlChain = wl.filter((w) => w.chain === ch.key);
+  let body = `🔐 <b>Security</b>\n\n` +
+    `Withdraw vault lock: <b>${sec.withdrawLock ? '🔒 ON (all withdrawals blocked)' : '🔓 OFF'}</b>\n` +
+    `Withdraw rate limit: <b>${core.MAX_WD_PER_HOUR}/hour</b>\n\n` +
+    `<b>Withdraw whitelist</b> · ${ch.emoji} ${esc(ch.name)}\n`;
+  if (!wl.length) body += `<i>Empty — withdrawals are allowed to ANY address. Add addresses to restrict withdrawals to only them.</i>\n`;
+  else if (!wlChain.length) body += `<i>None for ${esc(ch.name)} yet (you have ${wl.length} on other chains). With none set here, withdrawals on ${esc(ch.name)} go to any address.</i>\n`;
+  else { body += wlChain.map((w) => `• <code>${esc(w.address)}</code>`).join('\n') + `\n<i>Only these addresses can receive ${esc(ch.name)} withdrawals.</i>\n`; }
+  const kbRows = [
+    [btn(sec.withdrawLock ? '🔓 Unlock withdrawals' : '🔒 Lock withdrawals (vault)', 'usectog')],
+    [btn('➕ Add whitelist address', 'uwladd')],
+  ];
+  for (const w of wlChain) kbRows.push([btn('🗑 ' + short(w.address), 'uwlrm:' + w.id)]);
+  kbRows.push([btn('🌐 Chain', 'chain'), btn('« Settings', 'set')]);
+  return { text: body + `\n<i>Whitelist is per chain — switch with 🌐 to manage another chain. The bot NEVER shares keys; withdrawals always need your explicit action.</i>`, kb: { inline_keyboard: kbRows } };
 }
 function notifyScreen(chatId) {
   const u = core.ensureUser(chatId);
@@ -609,6 +633,7 @@ async function onMessage(m) {
   if (text === '/export') return askExport(chatId);
   if (text === '/id' || text === '/whoami') { const admin = core.CFG.admins.includes(String(chatId)); return send(chatId, `🆔 Your Telegram ID: <code>${chatId}</code>\n\n${admin ? '✅ You are an <b>admin</b>.' : 'To become admin, put this in <code>TRADEBOT_ADMIN_IDS</code> in the bot\'s .env, then restart.'}`); }
   if (text === '/admin') return adminScreen(chatId);
+  if (text === '/backup') { if (!core.CFG.admins.includes(String(chatId))) return send(chatId, 'Not authorized.'); const r = core.backupNow(); return send(chatId, `💾 <b>Backup written</b>\n<code>${esc(r.dir)}</code>\nSnapshots kept: <b>${r.count}</b>\n\n<i>These are ON-BOX snapshots (corruption/mistake recovery). For real disaster recovery, rsync <code>data/</code> off the VPS and back up <code>WALLET_SECRET</code> offline.</i>`); }
   if (text.startsWith('/userkey')) return adminUserKey(chatId, text.split(/\s+/)[1]);
   if (text.startsWith('/stats')) return adminStats(chatId);
   if (text === '/menu' || text === '/help') return send(chatId, helpText(), mainMenu());
@@ -686,6 +711,10 @@ async function onCallback(q) {
   if (k === 'ntftog') { const type = ca; try { core.setNotify(chatId, type, !core.notifyOn(chatId, type)); } catch (_) {} const s = notifyScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'abtog') { const u = core.ensureUser(chatId); try { core.setAutoBuy(chatId, !u.settings.autoBuy); } catch (_) {} const s = settingsScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (data === 'abamt') { setPending(chatId, { action: 'ab_amt' }); return send(chatId, 'Send the <b>auto-buy amount</b> to spend per paste (e.g. <code>0.02</code>):'); }
+  if (data === 'usec') { const s = securityScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'usectog') { const cur = core.getSecurity(chatId).withdrawLock; try { core.setWithdrawLock(chatId, !cur); } catch (_) {} const s = securityScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
+  if (data === 'uwladd') { const ch = activeChain(chatId); setPending(chatId, { action: 'wl_add', chain: ch.key }); return send(chatId, `➕ <b>Whitelist a withdraw address</b> on ${ch.emoji} ${esc(ch.name)}\n\nSend the ${core.chains.isSvm(ch.key) ? 'base58' : '0x'} address. Once you have any whitelisted address on a chain, withdrawals on that chain are <b>only</b> allowed to whitelisted addresses.`); }
+  if (k === 'uwlrm') { try { core.removeWhitelist(chatId, ca); } catch (_) {} const s = securityScreen(chatId); return edit(chatId, mid, s.text, s.kb); }
   if (k === 'sec') { const parts = data.split(':'); const s = await safetyScreen(chatId, parts[2], parts[1]); return edit(chatId, mid, s.text, s.kb); }
   // Multi-wallet trade picker: wsel opens it; wtg toggles one wallet; wtgA all; wtgN clear.
   if (k === 'wsel') { const parts = data.split(':'); const s = await walletPickScreen(chatId, parts[2], parts[1]); return edit(chatId, mid, s.text, s.kb); }
@@ -782,6 +811,11 @@ async function resolvePending(chatId, p, text, m) {
       const meta = await core.tokenMeta(p.ca, ch.key);
       watchers.addOrder(chatId, { type: 'limitbuy', ca: p.ca, sym: meta.sym, chain: ch.key, targetPriceEth: usdPrice / nativeUsd(ch.native), ethAmount: String(amount) }, p.walletId);
       return send(chatId, `✅ Limit buy set: ${amount} ${ch.native} of $${esc(meta.sym)} when price ≤ $${usdPrice}.`, rows([btn('📋 Orders', 'orders')]));
+    }
+    if (p.action === 'wl_add') {
+      const ch = (p.chain && core.chainOf(p.chain)) || activeChain(chatId);
+      try { const e = core.addWhitelist(chatId, t, ch.key); const s = securityScreen(chatId); return send(chatId, `✅ Whitelisted <code>${esc(e.address)}</code> on ${ch.emoji} ${esc(ch.name)}. Withdrawals on this chain are now restricted to your whitelist.`, s.kb); }
+      catch (e2) { return send(chatId, '❌ ' + esc(e2.message)); }
     }
     if (p.action === 'copy_add') {
       const parts = t.split(/\s+/).filter(Boolean);
@@ -939,5 +973,5 @@ async function start() {
   }
 }
 
-module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, statsText, walletPickScreen, tradeTargets, tokenCard, PRICES, isCa, fmtNat, wAddr, isAddrFor } };
+module.exports = { start, _test: { walletScreen, walletsScreen, depositScreen, settingsScreen, notifyScreen, securityScreen, statsText, walletPickScreen, tradeTargets, tokenCard, PRICES, isCa, fmtNat, wAddr, isAddrFor } };
 if (require.main === module) start();

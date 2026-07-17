@@ -137,6 +137,28 @@ function loadStore() {
   if (!DB.report.lastRecapDate) DB.report.lastRecapDate = _todayUTC();   // first run: baseline today (first daily recap fires tomorrow)
   wireShutdownFlush();
 }
+// ---- rotating backups: a corrupt write or a fat-fingered file op must not be
+// unrecoverable. Every store carries only ciphertext keys, so snapshots are as safe
+// as the live file. Throttled (default ≥10 min apart) + pruned to the newest N.
+// NOTE: this protects against corruption/mistakes on the SAME box — it is NOT off-site
+// DR. Operators must still rsync `data/` + back up WALLET_SECRET off the VPS.
+const BACKUP_DIR = path.join(CFG.dataDir, 'backups');
+const BACKUP_MIN_INTERVAL_MS = Math.max(0, Number(process.env.BACKUP_MIN_INTERVAL_MS || 600000));
+const BACKUP_KEEP = Math.max(1, Number(process.env.BACKUP_KEEP || 72));
+let _lastBackupAt = 0;
+function _backupStore(force) {
+  try {
+    const now = Date.now();
+    if (!force && (now - _lastBackupAt) < BACKUP_MIN_INTERVAL_MS) return;
+    if (!fs.existsSync(STORE_FILE)) return;
+    _lastBackupAt = now;
+    fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const stamp = new Date(now).toISOString().replace(/[:.]/g, '-').slice(0, 19);
+    fs.copyFileSync(STORE_FILE, path.join(BACKUP_DIR, 'tradebot-' + stamp + '.json'));
+    const files = fs.readdirSync(BACKUP_DIR).filter((f) => /^tradebot-.*\.json$/.test(f)).sort();
+    while (files.length > BACKUP_KEEP) { const old = files.shift(); try { fs.unlinkSync(path.join(BACKUP_DIR, old)); } catch (_) {} }
+  } catch (e) { console.error('store backup', e.message); }
+}
 let _saveTimer = null;
 function _writeNow() {
   try {
@@ -144,8 +166,11 @@ function _writeNow() {
     const tmp = STORE_FILE + '.tmp';
     fs.writeFileSync(tmp, JSON.stringify(DB));
     fs.renameSync(tmp, STORE_FILE);   // atomic replace
+    _backupStore(false);              // throttled rotating snapshot
   } catch (e) { console.error('store write', e.message); }
 }
+// On-demand backup (admin /backup): always writes a fresh snapshot, returns its path.
+function backupNow() { saveStoreNow(); _backupStore(true); try { return { dir: BACKUP_DIR, count: fs.readdirSync(BACKUP_DIR).filter((f) => /^tradebot-.*\.json$/.test(f)).length }; } catch (_) { return { dir: BACKUP_DIR, count: 0 }; } }
 // Debounced save for high-frequency, non-critical mutations (positions, orders).
 function saveStore() {
   if (_saveTimer) return;
@@ -159,7 +184,7 @@ function saveStoreNow() { if (_saveTimer) { clearTimeout(_saveTimer); _saveTimer
 let _shutdownWired = false;
 function wireShutdownFlush() {
   if (_shutdownWired) return; _shutdownWired = true;
-  const flush = () => { try { saveStoreNow(); } catch (_) {} };
+  const flush = () => { try { saveStoreNow(); _backupStore(true); } catch (_) {} };
   process.on('beforeExit', flush);
   for (const sig of ['SIGINT', 'SIGTERM']) process.on(sig, () => { flush(); process.exit(0); });
 }
@@ -338,6 +363,10 @@ function ensureUser(chatId, referredBy) {
     if (!Array.isArray(u.alerts)) { u.alerts = []; ch = true; }                            // price alerts (notify-only)
     if (!u.copy || typeof u.copy !== 'object') { u.copy = { on: false, targets: [] }; ch = true; }   // copy-trading
     if (!Array.isArray(u.copy.targets)) { u.copy.targets = []; ch = true; }
+    if (!u.security || typeof u.security !== 'object') { u.security = { withdrawLock: false, whitelist: [], wdTimes: [] }; ch = true; }
+    if (typeof u.security.withdrawLock !== 'boolean') { u.security.withdrawLock = false; ch = true; }
+    if (!Array.isArray(u.security.whitelist)) { u.security.whitelist = []; ch = true; }
+    if (!Array.isArray(u.security.wdTimes)) { u.security.wdTimes = []; ch = true; }
     if (!u.settings || typeof u.settings !== 'object') { u.settings = {}; ch = true; }
     { const s = u.settings;
       if (typeof s.slippage !== 'number') { s.slippage = 0; ch = true; }                                   // 0 → 5% default
@@ -362,6 +391,7 @@ function ensureUser(chatId, referredBy) {
     wallets: [w], activeWalletId: w.id,   // each wallet: { id, address, enc, positions, orders, history }
     snipe: { ethAmount: '0.01', chains: { robinhood: false } },
     alerts: [], copy: { on: false, targets: [] },
+    security: { withdrawLock: false, whitelist: [], wdTimes: [] },
     refEarnedEth: 0,
     settings: { slippage: 0, buyPresets: DEFAULT_BUY_PRESETS.slice(), autoBuy: false, autoBuyAmount: '0.01', confirmBuy: false, expert: false, notify: { snipe: true, copy: true, alerts: true }, presetsByChain: {} },
   };
@@ -383,6 +413,52 @@ function signerFor(chatId, chainKey, walletId) {
   const u = getUser(chatId); if (!u) throw new Error('no wallet');
   return _signer(_resolveWallet(u, walletId), chainKey || userChain(u));
 }
+
+// ---------------------------------------------------------------- withdraw security
+// Per-user protections so a hijacked Telegram account can't instantly drain funds:
+//   • vault lock   — block ALL withdrawals until the user turns it off;
+//   • whitelist    — when set (per chain), only allow withdrawals to those addresses;
+//   • rate limit   — cap withdrawals per hour.
+const MAX_WD_PER_HOUR = Math.max(1, Number(process.env.MAX_WD_PER_HOUR || 10));
+const WHITELIST_MAX = 20;
+function _secOf(u) { if (!u.security || typeof u.security !== 'object') u.security = { withdrawLock: false, whitelist: [], wdTimes: [] }; return u.security; }
+function _wlNorm(addr, chainKey) { return isSvm(chainKey) ? String(addr).trim() : String(addr).trim().toLowerCase(); }
+function getSecurity(chatId) { return _secOf(ensureUser(chatId)); }
+function setWithdrawLock(chatId, on) { const s = _secOf(ensureUser(chatId)); s.withdrawLock = !!on; saveStoreNow(); return s.withdrawLock; }
+function addWhitelist(chatId, address, chainKey) {
+  const u = ensureUser(chatId); const s = _secOf(u);
+  chainKey = chainKey || userChain(u);
+  address = String(address || '').trim();
+  const ok = isSvm(chainKey) ? solana.isSolAddress(address) : /^0x[0-9a-fA-F]{40}$/.test(address);
+  if (!ok) throw new Error('invalid address for ' + ((chainOf(chainKey) || {}).name || chainKey));
+  s.whitelist = Array.isArray(s.whitelist) ? s.whitelist : [];
+  if (s.whitelist.length >= WHITELIST_MAX) throw new Error(`whitelist limit (${WHITELIST_MAX}) reached — remove one first`);
+  if (s.whitelist.some((w) => w.chain === chainKey && _wlNorm(w.address, chainKey) === _wlNorm(address, chainKey))) throw new Error('already whitelisted on this chain');
+  const entry = { id: 'wl' + crypto.randomBytes(4).toString('hex'), address, chain: chainKey, at: Date.now() };
+  s.whitelist.push(entry); saveStoreNow();
+  return entry;
+}
+function removeWhitelist(chatId, id) {
+  const s = _secOf(ensureUser(chatId));
+  const before = (s.whitelist || []).length;
+  s.whitelist = (s.whitelist || []).filter((w) => w.id !== id);
+  if (s.whitelist.length !== before) { saveStoreNow(); return true; }
+  return false;
+}
+// Throws if a withdraw to `to` on `chainKey` isn't currently allowed (lock / whitelist
+// miss / rate cap). Call BEFORE sending.
+function _guardWithdraw(u, to, chainKey) {
+  const s = _secOf(u);
+  if (s.withdrawLock) throw new Error('withdrawals are 🔒 LOCKED (vault mode). Turn it off in ⚙️ Security first.');
+  const wl = Array.isArray(s.whitelist) ? s.whitelist.filter((w) => w.chain === chainKey) : [];
+  if (wl.length && !wl.some((w) => _wlNorm(w.address, chainKey) === _wlNorm(to, chainKey))) {
+    throw new Error('that address is not in your withdraw whitelist for this chain. Add it in ⚙️ Security first.');
+  }
+  const now = Date.now();
+  s.wdTimes = (Array.isArray(s.wdTimes) ? s.wdTimes : []).filter((t) => now - t < 3600000);
+  if (s.wdTimes.length >= MAX_WD_PER_HOUR) throw new Error(`withdraw rate limit reached (${MAX_WD_PER_HOUR}/hour). Try again later.`);
+}
+function _noteWithdraw(u) { const s = _secOf(u); s.wdTimes = Array.isArray(s.wdTimes) ? s.wdTimes : []; s.wdTimes.push(Date.now()); saveStore(); }
 // Export the wallet's secret for a given chain: the Solana base58 secret on svm
 // (what Phantom/Solflare import), else the EVM 0x private key. Default (no chainKey)
 // stays EVM for backward compatibility.
@@ -926,6 +1002,7 @@ async function _sellSol(u, ca, pct, chainKey, walletId) {
 async function _withdrawSol(u, to, amount, chainKey, walletId) {
   to = String(to || '').trim();
   if (!solana.isSolAddress(to)) throw new Error('invalid Solana destination address');
+  _guardWithdraw(u, to, chainKey);   // vault lock / whitelist / rate limit
   const wal = _resolveWallet(u, walletId);
   return withWalletLock(wal.address, async () => {
     const signer = _signer(wal, chainKey);
@@ -937,6 +1014,7 @@ async function _withdrawSol(u, to, amount, chainKey, walletId) {
     else lamports = solana.solToLamports(amount);
     if (lamports <= 0n) throw new Error('nothing to withdraw (after fees)');
     if (lamports + feeReserve > bal) throw new Error('amount exceeds balance after fees');
+    _noteWithdraw(u);
     const sig = await solana.sendSol(conn, kp, to, lamports);
     return { hash: sig, sentEth: solana.lamportsToSol(lamports), native: 'SOL' };
   });
@@ -1121,6 +1199,7 @@ async function withdraw(chatId, to, amount, chainKey, walletId) {
   to = String(to || '').trim();
   if (!/^0x[0-9a-fA-F]{40}$/.test(to)) throw new Error('invalid destination address');
   if (/^0x0{40}$/i.test(to)) throw new Error('refusing to send to the zero address');
+  _guardWithdraw(u, to, chainKey);   // vault lock / whitelist / rate limit
   const wal = _resolveWallet(u, walletId);
   return withWalletLock(wal.address, async () => {
     chainKey = chainKey || userChain(u);
@@ -1137,6 +1216,7 @@ async function withdraw(chatId, to, amount, chainKey, walletId) {
     if (value <= 0n) throw new Error('nothing to withdraw (after gas)');
     if (value + gasCost > bal) throw new Error('amount exceeds balance after gas');
     const tx = await wallet.sendTransaction({ to, value, gasPrice: gp });
+    _noteWithdraw(u);
     await waitBounded(tx);
     return { hash: tx.hash, sentEth: Number(ethers.formatEther(value)), native: (chainOf(chainKey) || {}).native || 'ETH' };
   });
@@ -1276,6 +1356,7 @@ module.exports = {
   noteUser, findUser, recordTrade, reportSnapshot, resetReportWindow, recapDue, markRecap,
   walletList, walletById, activeWallet, activeAddress, addWallet, switchWallet, removeWallet, listWallets, WALLET_CAP,
   renameWallet, walletLabel, hasChainPresets, solAddressOf, walletAddress,
+  getSecurity, setWithdrawLock, addWhitelist, removeWhitelist, MAX_WD_PER_HOUR, backupNow,
   buyPresets, setSlippage, setBuyPresets, setAutoBuy, DEFAULT_BUY_PRESETS, setSnipeChain, setSnipeAmount,
   setConfirmBuy, setExpert, setNotify, notifyOn, NOTIFY_TYPES,
   tradeSelection, setTradeAll, toggleTradeWallet, tradeWalletIds,
