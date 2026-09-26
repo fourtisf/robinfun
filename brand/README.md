@@ -2,8 +2,8 @@
 
 The Robinfun mark is a **Robin Hood plume / quill** that also reads as an
 **up-only arrow** — one glyph, three meanings (the robin's feather, the quill
-you "sign"/launch a token with, and a rising chart). Volt-lime on near-black,
-matching the product's design tokens.
+you "sign"/launch a token with, and a rising chart). Champagne gold on true
+black ("Obsidian & Champagne"), matching the product's design tokens.
 
 ![brand sheet](brand-sheet.png)
 
@@ -45,18 +45,22 @@ The mark is also **inlined** into the site (`deploy/site/index.html` and
 so there is no external asset request. Edit the paths in those files if the
 mark changes; the canonical geometry lives in `robinfun-mark.svg`.
 
-## Palette
+## Palette — "Obsidian & Champagne"
 
 | Token | Hex | Role |
 |---|---|---|
-| `--ink` | `#080B0A` | page ground (near-black) |
-| `--gilt` | `#C6F23C` | brand accent (volt-lime) |
-| lime gradient | `#A6D62E → #C6F23C → #E4FF7A` | the feather fill |
-| light-mode green | `#3C9A1B` | mark/wordmark accent on light surfaces |
-| `--seal` | `#FF5B4A` | alert / sell red |
+| `--ink` | `#000000` | page ground (true black) |
+| `--ledger` | `#0A0A0A` | card / panel surface |
+| `--cream` | `#F5F3EE` | primary text (warm white) |
+| `--gilt` | `#D4B574` | brand accent (champagne gold) |
+| gold gradient | `#A8874A → #DCC089 → #F6E7C1` | the feather fill |
+| light-mode gold | `#8C6D2F` | mark/wordmark accent on light surfaces |
+| `--jade` | `#3ECF8E` | buys / positive (calm emerald) |
+| `--seal` | `#F0595F` | sells / negative (rose) |
 
-Type: **Space Grotesk** (display / wordmark), Instrument Sans (body),
-IBM Plex Mono (numerals). The wordmark is `Robin` in cream + `fun` in gilt.
+Type: **Inter Tight** (display), **Instrument Serif** italic (the `fun` in the
+wordmark + editorial accents), Inter (body), JetBrains Mono (numerals). The
+wordmark is `Robin` in warm white + `fun` in gold serif italic.
 
 ## Regenerating the PNGs
 
