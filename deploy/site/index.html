@@ -192,7 +192,6 @@ body.light{
 }
 body.light{--card-bg:#FFFFFF;--card-line:var(--rule)}
 body.light::before{background-image:linear-gradient(rgba(0,0,0,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(0,0,0,.035) 1px,transparent 1px)}
-body.light .hero-banner .btn-line{color:#F5F3EE;border-color:rgba(255,255,255,.18)}
 body.light .btn-gold{color:#0A0A0A!important}
 body.light .nav button.active{background:rgba(0,0,0,.05);box-shadow:inset 0 0 0 1px rgba(0,0,0,.06)}
 body.light .tb-icon{border-color:var(--rule-2)}
@@ -212,12 +211,6 @@ body.light .stamp{border-color:rgba(154,123,63,.32)}
 body.light .stamp::before{box-shadow:0 0 6px rgba(154,123,63,.45)}
 body.light .grad-pill{border-color:rgba(154,123,63,.3)}
 body.light .ftab.active{background:var(--cream);color:#F7F6F3}
-/* hero banner stays dark in light mode → keep its content bright */
-body.light .banner-word{color:#F5F3EE}
-body.light .banner-tag{color:#F5F3EE}
-body.light .banner-tag em{color:#EAD3A0}
-body.light .banner-chip{color:#BDB8AE;border-color:rgba(255,255,255,.14)}
-body.light .banner-chip .dot{background:#D4B574;box-shadow:0 0 8px #D4B574}
 /* light surfaces → darken the lime line-art for contrast */
 body.light .brand-seal{filter:none;color:#8C6D2F}
 body.light .stake-orbit{filter:none}
@@ -251,99 +244,89 @@ body.light .stake-orbit text{fill:#8C6D2F}
 }
 .tape-item b{color:var(--cream);font-weight:600}
 
-/* ---------------- hero ---------------- */
-.hero{padding:34px 0 30px;position:relative}
-.hero-cta{display:flex;gap:11px;flex-wrap:wrap}
-.hero-top{display:grid;grid-template-columns:1.62fr 1fr;gap:18px;margin-bottom:18px}
-
-/* glowing banner */
-.hero-banner{
-  position:relative;overflow:hidden;border-radius:24px;isolation:isolate;
-  border:1px solid rgba(255,255,255,.07);min-height:300px;
-  background:
-    radial-gradient(90% 120% at 88% 0%,rgba(212,181,116,.16),rgba(212,181,116,.03) 45%,transparent 70%),
-    radial-gradient(60% 80% at 0% 100%,rgba(255,255,255,.035),transparent 70%),
-    linear-gradient(160deg,#0D0D0D 0%,#060606 55%,#000 100%);
-  padding:38px 40px 34px;display:flex;flex-direction:column;justify-content:center;
-  box-shadow:0 1px 0 rgba(255,255,255,.06) inset,0 40px 80px -40px rgba(0,0,0,1),0 0 0 1px rgba(0,0,0,.6);
-}
-.hero-banner::before{ /* champagne hairline along the top edge */
-  content:"";position:absolute;left:8%;right:8%;top:0;height:1px;z-index:3;
-  background:linear-gradient(90deg,transparent,rgba(234,211,160,.7),transparent);
-}
-.hero-banner::after{ /* fine engraved grid, fading right→left */
-  content:"";position:absolute;inset:0;z-index:0;pointer-events:none;
-  background-image:linear-gradient(rgba(255,255,255,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(255,255,255,.035) 1px,transparent 1px);
-  background-size:36px 36px;
-  -webkit-mask-image:linear-gradient(90deg,transparent 30%,#000 90%);mask-image:linear-gradient(90deg,transparent 30%,#000 90%);
-}
-.banner-content{position:relative;z-index:2;max-width:68%}
-.banner-brand{display:flex;align-items:center;gap:15px;margin-bottom:15px}
-.banner-mark{width:52px;height:52px;flex-shrink:0;filter:drop-shadow(0 0 16px rgba(212,181,116,.3))}
-.banner-word{
-  font-family:var(--font-display);font-weight:600;font-size:clamp(42px,5vw,64px);letter-spacing:-.045em;line-height:.9;
-  color:var(--cream);
-}
-.banner-word em{font-family:var(--font-serif);font-style:italic;font-weight:400;letter-spacing:-.01em;font-size:1.1em;padding-right:4px;
+/* ---------------- hero (centered editorial) ---------------- */
+.eyebrow{font-family:var(--font-mono);font-size:10.5px;font-weight:500;letter-spacing:.22em;text-transform:uppercase;color:var(--gilt);margin-bottom:8px}
+.hero{position:relative;padding:92px 0 40px;text-align:center}
+.hero-bg{position:absolute;inset:-40px -24px 0;pointer-events:none;z-index:0;overflow:hidden}
+.hero-horizon{position:absolute;left:50%;bottom:4%;transform:translateX(-50%);width:1300px;height:560px;border-radius:50%;
+  background:radial-gradient(closest-side,rgba(212,181,116,.14),rgba(212,181,116,.04) 55%,transparent 72%);filter:blur(6px)}
+.hero-horizon::after{ /* thin gold horizon arc */
+  content:"";position:absolute;inset:18% 6% auto;height:70%;border-radius:50%;
+  border-top:1px solid rgba(234,211,160,.35);-webkit-mask-image:linear-gradient(90deg,transparent,#000 30%,#000 70%,transparent);
+  mask-image:linear-gradient(90deg,transparent,#000 30%,#000 70%,transparent)}
+.hero-art{position:absolute;right:3%;bottom:20%;width:40%;height:64%;opacity:.5;
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 60%);mask-image:linear-gradient(90deg,transparent,#000 60%)}
+.hero-art svg{width:100%;height:100%}
+.hero-center{position:relative;z-index:1;max-width:900px;margin:0 auto;display:flex;flex-direction:column;align-items:center}
+.hero-eyebrow{display:inline-flex;align-items:center;gap:9px;padding:7px 15px 7px 12px;border-radius:99px;margin-bottom:30px;
+  font-family:var(--font-mono);font-size:11.5px;letter-spacing:.04em;color:var(--cream-dim);
+  border:1px solid rgba(212,181,116,.22);background:linear-gradient(180deg,rgba(212,181,116,.08),rgba(212,181,116,.02))}
+.hero-eyebrow .dot{width:6px;height:6px;border-radius:50%;background:var(--jade);box-shadow:0 0 10px var(--jade);animation:pulse 2.4s infinite}
+.hero-title{font-family:var(--font-display);font-weight:600;font-size:clamp(44px,7.4vw,96px);line-height:.98;letter-spacing:-.05em;
+  color:var(--cream);max-width:15ch;margin-bottom:26px;text-wrap:balance}
+.hero-title em{font-family:var(--font-serif);font-style:italic;font-weight:400;letter-spacing:-.02em;padding-right:.06em;
   background:var(--gold-text);-webkit-background-clip:text;background-clip:text;color:transparent}
-.banner-tag{font-size:18px;color:rgba(245,243,238,.86);font-weight:400;margin-bottom:12px;line-height:1.35;letter-spacing:-.005em}
-.banner-tag em{font-family:var(--font-serif);font-style:italic;font-size:1.18em;color:var(--gilt-bright)}
-.banner-chip{
-  display:inline-flex;align-items:center;gap:7px;font-family:var(--font-mono);font-size:11px;
-  color:var(--cream-dim);border:1px solid var(--rule-2);border-radius:99px;padding:5px 13px;margin-bottom:22px;
-  background:rgba(255,255,255,.03);border-color:rgba(255,255,255,.08);letter-spacing:.02em;
-}
-.banner-chip .dot{width:6px;height:6px;border-radius:50%;background:var(--gilt);box-shadow:0 0 8px var(--gilt)}
-.banner-art{position:absolute;right:0;top:0;bottom:0;width:48%;z-index:1;pointer-events:none;
-  display:flex;align-items:flex-end}
-.banner-art svg{width:100%;height:100%}
-
-/* top-volume leaderboard */
-.hero-lead{
-  border:1px solid var(--card-line);border-radius:24px;background:var(--card-bg);padding:18px 20px;
-  box-shadow:var(--shadow-card);display:flex;flex-direction:column;
-}
-.lead-title{font-family:var(--font-mono);font-weight:500;font-size:10.5px;text-transform:uppercase;letter-spacing:.2em;color:var(--gilt);text-align:left;margin-bottom:15px}
-.lead-head{display:grid;grid-template-columns:1fr 82px 74px;gap:10px;font-family:var(--font-mono);font-size:9px;
-  letter-spacing:.14em;color:var(--cream-mute);padding-bottom:10px;border-bottom:1px solid var(--rule)}
-.lead-head span:not(:first-child){text-align:right}
-.lead-row{display:grid;grid-template-columns:1fr 82px 74px;gap:10px;align-items:center;padding:11px 0;
-  border-bottom:1px solid var(--rule);cursor:pointer;transition:background .15s}
-.lead-row:last-child{border-bottom:none}
-.lead-row:hover{background:rgba(255,255,255,.025)}
-.lead-coin{display:flex;align-items:center;gap:10px;min-width:0}
-.lead-logo{width:32px;height:32px;border-radius:9px;display:flex;align-items:center;justify-content:center;
-  font-size:17px;background:var(--ledger-2);border:1px solid var(--rule-2);flex-shrink:0}
-.lead-nm{font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.lead-mc{font-family:var(--font-mono);font-size:12.5px;font-weight:600;text-align:right}
-.lead-mc small{display:block;font-size:10px;font-weight:500;margin-top:2px}
-.lead-vol{font-family:var(--font-mono);font-size:12.5px;color:var(--cream-dim);text-align:right}
-
-/* big stat blocks */
-.stat-blocks{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:16px;margin-bottom:24px}
-.stat-block{
-  border:1px solid var(--card-line);border-radius:18px;background:var(--card-bg);padding:26px 20px;text-align:center;
-  position:relative;overflow:hidden;
-}
-.stat-block.hl{border-color:rgba(212,181,116,.22);
-  background:radial-gradient(120% 120% at 50% -10%,rgba(212,181,116,.09),transparent 66%),var(--card-bg)}
-.stat-block .sb-v{font-family:var(--font-display);font-weight:500;font-size:clamp(28px,3vw,40px);letter-spacing:-.035em;
-  font-variant-numeric:tabular-nums;line-height:1}
-.stat-block .sb-v.gold{background:var(--gold-text);-webkit-background-clip:text;background-clip:text;color:transparent}
-.stat-block .sb-k{font-family:var(--font-mono);font-size:10px;letter-spacing:.16em;color:var(--cream-mute);
-  text-transform:uppercase;margin-top:9px}
-
-.hero-desc{text-align:center;max-width:780px;margin:0 auto;color:var(--cream-dim);font-size:15px;line-height:1.65}
+.hero-desc{max-width:640px;margin:0 auto 34px;color:var(--cream-dim);font-size:16px;line-height:1.7}
 .hero-desc b{color:var(--cream);font-weight:600}
-.hero-desc .lv{color:var(--gilt-bright);font-weight:500;font-family:var(--font-serif);font-style:italic;font-size:1.14em}
+.hero-desc .lv{color:var(--gilt-bright);font-family:var(--font-serif);font-style:italic;font-size:1.14em}
+.hero-cta{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.hero-cta .btn-lg{padding:15px 28px;border-radius:99px;font-size:15px}
+
+/* KPI bar — one glass strip with hairline dividers */
+.stat-blocks{position:relative;z-index:1;display:grid;grid-template-columns:repeat(4,1fr);margin:72px auto 0;max-width:1080px;
+  border:1px solid var(--card-line);border-radius:22px;background:rgba(10,10,10,.6);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);
+  box-shadow:0 1px 0 rgba(255,255,255,.04) inset,0 30px 60px -40px rgba(0,0,0,1);overflow:hidden}
+.stat-block{padding:26px 20px 24px;text-align:center;position:relative}
+.stat-block+.stat-block::before{content:"";position:absolute;left:0;top:22%;bottom:22%;width:1px;background:linear-gradient(180deg,transparent,rgba(255,255,255,.1),transparent)}
+.stat-block.hl{background:radial-gradient(90% 120% at 50% 0%,rgba(212,181,116,.10),transparent 70%)}
+.stat-block .sb-v{font-family:var(--font-display);font-weight:500;font-size:clamp(26px,2.8vw,36px);letter-spacing:-.035em;font-variant-numeric:tabular-nums;line-height:1}
+.stat-block .sb-v.gold{background:var(--gold-text);-webkit-background-clip:text;background-clip:text;color:transparent}
+.stat-block .sb-k{font-family:var(--font-mono);font-size:9.5px;letter-spacing:.18em;color:var(--cream-mute);text-transform:uppercase;margin-top:10px}
+
+/* trending podium */
+.hero-lead{padding:34px 0 10px}
+.lead-headline{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin-bottom:18px}
+.lead-headline .lead-title{margin:0}
+#leadRows{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+.lead-row{position:relative;display:flex;flex-direction:column;gap:18px;padding:20px;border-radius:20px;cursor:pointer;overflow:hidden;
+  background:var(--card-bg);border:1px solid var(--card-line);box-shadow:var(--shadow-card);transition:border-color .2s,transform .2s}
+.lead-row:hover{border-color:rgba(212,181,116,.3);transform:translateY(-2px)}
+.lead-row:first-child{border-color:rgba(212,181,116,.26);background:radial-gradient(90% 90% at 100% 0%,rgba(212,181,116,.12),transparent 60%),var(--card-bg)}
+.lead-coin{display:flex;align-items:center;gap:12px;min-width:0}
+.lead-rank{font-family:var(--font-serif);font-style:italic;font-size:34px;line-height:1;color:var(--gilt);width:26px;flex-shrink:0;opacity:.9}
+.lead-logo{width:44px;height:44px;border-radius:13px;display:flex;align-items:center;justify-content:center;font-size:22px;
+  background:var(--ledger-2);border:1px solid var(--rule-2);flex-shrink:0}
+.lead-nm{display:block;font-weight:600;font-size:15px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lead-tk{display:block;font-family:var(--font-mono);font-size:11px;color:var(--cream-mute);margin-top:2px}
+.lead-nums{display:flex;justify-content:space-between;align-items:flex-end;gap:12px;padding-top:16px;border-top:1px solid var(--rule)}
+.lead-nums .lk{display:block;font-family:var(--font-mono);font-size:9px;letter-spacing:.16em;color:var(--cream-mute);margin-bottom:5px;font-weight:500}
+.lead-mc{font-family:var(--font-display);font-size:22px;font-weight:500;letter-spacing:-.03em}
+.lead-mc small{font-family:var(--font-mono);font-size:11px;font-weight:500;margin-left:8px;letter-spacing:0}
+.lead-vol{font-family:var(--font-mono);font-size:13px;color:var(--cream-dim);text-align:right}
+.lead-empty{grid-column:1/-1;color:var(--cream-mute);font-family:var(--font-mono);font-size:13px;padding:24px 4px}
+
+/* pillars */
+.pillars{display:grid;grid-template-columns:repeat(3,1fr);gap:0;margin:40px 0 10px;border-top:1px solid var(--rule);border-bottom:1px solid var(--rule)}
+.pillar{padding:34px 30px 34px 0}
+.pillar+.pillar{padding-left:30px;border-left:1px solid var(--rule)}
+.pillar-n{font-family:var(--font-mono);font-size:11px;letter-spacing:.2em;color:var(--gilt);margin-bottom:18px}
+.pillar h3{font-family:var(--font-display);font-weight:600;font-size:22px;letter-spacing:-.03em;margin-bottom:10px}
+.pillar h3 em{font-family:var(--font-serif);font-style:italic;font-weight:400;color:var(--gilt-bright);font-size:1.1em}
+.pillar p{font-size:14px;color:var(--cream-dim);line-height:1.65}
 
 @media(max-width:900px){
-  .hero-top{grid-template-columns:1fr}
-  .banner-content{max-width:100%}
-  .banner-art{opacity:.28;width:60%}
+  .hero{padding:64px 0 28px}
+  .stat-blocks{grid-template-columns:repeat(2,1fr);margin-top:52px}
+  .stat-block:nth-child(3)::before{display:none}
+  .stat-block:nth-child(n+3){border-top:1px solid var(--rule)}
+  #leadRows{grid-template-columns:1fr}
+  .lead-row{flex-direction:row;align-items:center;justify-content:space-between;padding:16px}
+  .lead-nums{border-top:none;padding-top:0;gap:18px}
+  .pillars{grid-template-columns:1fr}
+  .pillar,.pillar+.pillar{padding:26px 0;border-left:none}
+  .pillar+.pillar{border-top:1px solid var(--rule)}
+  .hero-art{width:80%;opacity:.3}
 }
-/* .stat-blocks mobile layout handled in the responsive section below (compact 3-up) */
-
 /* ---------------- section frame ---------------- */
 .section{padding:26px 0 60px}
 .section-head{display:flex;align-items:end;justify-content:space-between;gap:18px;margin-bottom:18px;flex-wrap:wrap}
@@ -837,24 +820,24 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   #walletBtn{padding:8px 12px;font-size:13px}
   .fsearch{min-width:0;width:100%;margin-left:0}
   .stat-strip{grid-template-columns:1fr 1fr}
-  .hero{padding:22px 0 24px}
-  .hero-top{gap:14px;margin-bottom:14px}
-  .hero-banner{min-height:auto;padding:26px 22px 24px;border-radius:18px}
-  .banner-content{max-width:100%}
-  .banner-mark{width:46px;height:46px}
-  .banner-tag{font-size:16px}
   .hero-cta{gap:10px}
-  .hero-lead{padding:16px}
   .field-row{grid-template-columns:1fr}
   .preset-row{grid-template-columns:1fr 1fr}
 }
-/* compact KPI row instead of three tall stacked cards */
+/* phones: compact KPI bar + tighter hero */
 @media(max-width:560px){
-  .stat-blocks{grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:20px}
-  .stat-block{padding:15px 8px;border-radius:13px}
-  .stat-block .sb-v{font-size:clamp(19px,6.4vw,26px)}
-  .stat-block .sb-k{font-size:8.5px;letter-spacing:.03em;margin-top:6px;line-height:1.32}
-  .hero-desc{font-size:14px}
+  .hero{padding:46px 0 22px}
+  .hero-eyebrow{font-size:10.5px;margin-bottom:22px}
+  .hero-title{font-size:clamp(40px,12vw,56px);margin-bottom:18px}
+  .stat-blocks{margin-top:40px;border-radius:18px}
+  .stat-block{padding:18px 10px}
+  .stat-block .sb-v{font-size:clamp(20px,6.4vw,26px)}
+  .stat-block .sb-k{font-size:8.5px;letter-spacing:.1em;margin-top:7px;line-height:1.35}
+  .hero-desc{font-size:14.5px;margin-bottom:26px}
+  .lead-nums .lk{display:none}
+  .lead-vol{display:none}
+  .lead-rank{font-size:26px;width:18px}
+  .hero-art{display:none}
 }
 /* tightest phones */
 @media(max-width:420px){
@@ -867,13 +850,10 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
   .tb-lang{padding:0 7px;font-size:11.5px}
   #walletBtn{padding:8px 10px;font-size:12px}
   .hamburger{padding:6px 5px;font-size:19px}
-  .banner-word{font-size:clamp(34px,11.5vw,46px)}
-  .banner-tag{font-size:15px}
   .hero-cta .btn{flex:1 1 100%;width:100%}          /* full-width CTAs */
-  .lead-head,.lead-row{grid-template-columns:1fr 62px 54px;gap:8px}
-  .lead-logo{width:28px;height:28px;font-size:15px}
-  .lead-nm{font-size:12px}
-  .lead-mc,.lead-vol{font-size:11.5px}
+  .lead-logo{width:36px;height:36px;font-size:18px}
+  .lead-nm{font-size:13.5px}
+  .lead-mc{font-size:18px}
 }
 @media (prefers-reduced-motion:reduce){
   .tape-track{animation:none}
@@ -937,6 +917,65 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 .stake-src b{color:var(--cream)}
 .orbit-wrap{display:flex;justify-content:center;padding:6px 0 16px}
 .stake-orbit{width:120px;height:120px;animation:rotor 60s linear infinite}
+
+/* ================================================================
+   Layout v2 — floating nav, segmented filters, roomier token cards
+   ================================================================ */
+.topbar{background:transparent;border-bottom:none;backdrop-filter:none;-webkit-backdrop-filter:none;padding:12px 24px 0}
+.topbar-in{height:62px;padding:0 10px 0 20px;border-radius:20px;border:1px solid rgba(255,255,255,.08);
+  background:rgba(8,8,8,.72);backdrop-filter:saturate(140%) blur(20px);-webkit-backdrop-filter:saturate(140%) blur(20px);
+  box-shadow:0 1px 0 rgba(255,255,255,.05) inset,0 20px 40px -24px rgba(0,0,0,.9)}
+.nav{margin-left:auto}
+.nav button{border-radius:99px;padding:7px 13px}
+.topbar-right .btn-mini{border-radius:99px;padding:9px 16px}
+.tb-icon{border-radius:99px}
+.tape{margin-top:14px;border:none;background:transparent;
+  -webkit-mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent);mask-image:linear-gradient(90deg,transparent,#000 8%,#000 92%,transparent)}
+.tape-item{border-right:1px solid rgba(255,255,255,.05)}
+
+.section{padding:64px 0 90px}
+.section-head{align-items:flex-end;margin-bottom:22px}
+.filters{gap:12px;margin-bottom:24px}
+.seg{display:flex;gap:2px;padding:4px;border:1px solid var(--card-line);border-radius:99px;background:var(--ink-2);
+  overflow-x:auto;scrollbar-width:none;max-width:100%}
+.seg::-webkit-scrollbar{display:none}
+.seg .ftab{border:none;padding:8px 15px;white-space:nowrap;flex-shrink:0}
+.seg .ftab:hover{background:rgba(255,255,255,.04)}
+.fsearch{border-radius:99px;border-color:var(--card-line);padding:10px 16px}
+
+.grid{grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
+.tcard{padding:18px 18px 15px;border-radius:20px}
+.tlogo{width:52px;height:52px;border-radius:14px}
+.tname{font-size:15.5px;letter-spacing:-.01em}
+.tdesc{margin:2px 0 14px}
+.tcard-meta{align-items:flex-end;margin-bottom:12px}
+.tmcap{font-family:var(--font-display);font-size:24px;font-weight:500;letter-spacing:-.035em;line-height:1}
+.tmcap span{display:block;font-family:var(--font-mono);font-size:9px;font-weight:500;letter-spacing:.18em;text-transform:uppercase;color:var(--cream-mute);margin:0 0 6px}
+.tchg{padding:4px 9px;border-radius:99px;background:var(--jade-dim)}
+.tchg.down{background:var(--seal-dim)}
+.curve-bar{height:4px;border:none;background:rgba(255,255,255,.06)}
+.tcard-foot{padding-top:11px;margin-top:2px;border-top:1px solid var(--rule)}
+.watch-star{top:15px;right:14px}
+
+body.light .topbar-in{background:rgba(255,255,255,.78);border-color:var(--rule-2);box-shadow:0 14px 34px -24px rgba(20,16,8,.35)}
+body.light .stat-blocks{background:rgba(255,255,255,.8)}
+body.light .curve-bar{background:rgba(0,0,0,.06)}
+body.light .btn-line{border-color:var(--rule-2);background:rgba(255,255,255,.6)}
+body.light .bond-pill{color:#9A6B12;border-color:rgba(154,107,18,.4);background:rgba(154,107,18,.07)}
+body.light .hero-horizon{opacity:.6}
+
+@media(max-width:900px){
+  .nav.open{top:80px;left:16px;right:16px;border-radius:18px;border:1px solid var(--rule-2);background:rgba(8,8,8,.96)}
+  body.light .nav.open{background:rgba(255,255,255,.97)}
+}
+@media(max-width:760px){
+  .topbar{padding:10px 12px 0}
+  .topbar-in{height:58px;padding:0 8px 0 14px;border-radius:18px}
+  .nav.open{top:74px;left:12px;right:12px}
+  .section{padding:44px 0 70px}
+  .filters{flex-direction:column;align-items:stretch}
+  .seg{width:100%}
+}
 </style>
 </head>
 <body>
@@ -997,29 +1036,10 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 <div class="page active" id="page-home">
   <div class="wrap">
     <section class="hero">
-      <div class="hero-top">
-        <!-- glowing banner -->
-        <div class="hero-banner">
-          <div class="banner-content">
-            <div class="banner-brand">
-              <svg class="banner-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true">
-                <defs><linearGradient id="bm-plume" x1="14" y1="54" x2="48" y2="10" gradientUnits="userSpaceOnUse">
-                  <stop offset="0" stop-color="#A8874A"/><stop offset=".55" stop-color="#D4B574"/><stop offset="1" stop-color="#F6E7C1"/>
-                </linearGradient></defs>
-                <path fill="url(#bm-plume)" d="M50 8 C 33 9, 20 18, 15 34 C 13.6 38.5, 13.2 43.2, 14 48 L 25.2 36.8 C 25.6 32.2, 27.6 27.9, 31 24.5 C 34.5 21, 38.8 19, 43.4 18.6 L 32.5 29.5 C 36.8 29.2, 41 27.6, 44.7 24.6 C 50.2 20.2, 52.4 13.7, 50 8 Z"/>
-                <path fill="url(#bm-plume)" d="M21.6 37.4 L24 39.3 L12 53 L10.9 51.1 Z"/>
-                <path stroke="#000000" stroke-width="2.1" stroke-linecap="round" opacity=".9" d="M44.4 14.4 L18.7 40.2"/>
-              </svg>
-              <span class="banner-word">Robin<em>fun</em></span>
-            </div>
-            <p class="banner-tag" data-i18n-html="hero.tag">Launch a token. Collect the <em>fee</em> — forever.</p>
-            <div class="banner-chip" data-i18n-html="hero.chip"><span class="dot"></span>Robinhood Chain · fair-launch bonding curves</div>
-            <div class="hero-cta">
-              <button class="btn btn-gold btn-lg" data-i18n="btn.launch" onclick="go('create')">+ Launch Token</button>
-              <button class="btn btn-line btn-lg" data-i18n="hero.explore" onclick="document.getElementById('tokens').scrollIntoView({behavior:'smooth'})">Explore tokens</button>
-            </div>
-          </div>
-          <div class="banner-art" aria-hidden="true">
+      <!-- horizon light + fine-line chart behind the headline -->
+      <div class="hero-bg" aria-hidden="true">
+        <div class="hero-horizon"></div>
+        <div class="hero-art" aria-hidden="true">
             <svg viewBox="0 0 340 300" fill="none" preserveAspectRatio="xMaxYMax meet">
               <defs>
                 <linearGradient id="ba-line" x1="20" y1="0" x2="330" y2="0" gradientUnits="userSpaceOnUse">
@@ -1055,34 +1075,52 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
               <circle cx="318" cy="52" r="9" stroke="#F4E6C3" stroke-opacity=".35" stroke-width="1"/>
             </svg>
           </div>
-        </div>
-        <!-- top volume leaderboard -->
-        <div class="hero-lead">
-          <div class="lead-title">Top volume</div>
-          <div class="lead-head"><span>COIN</span><span>MCAP</span><span>24H VOL</span></div>
-          <div id="leadRows"></div>
+      </div>
+      <div class="hero-center">
+        <div class="hero-eyebrow" data-i18n-html="hero.chip"><span class="dot"></span>Robinhood Chain · fair-launch bonding curves</div>
+        <h1 class="hero-title" data-i18n-html="hero.tag">Launch a token. Collect the <em>fee</em> — forever.</h1>
+        <p class="hero-desc">
+          Fair-launch bonding curves. Every token starts on the curve and graduates into a Uniswap pool once
+          <b>~2.6 ETH</b> is raised, with <b>100% of the LP burned</b> — no presale, no team. The twist: set a <span class="lv">creator fee up to 10%</span>,
+          and every buy &amp; sell routes fees to your wallet — on the curve, and long after graduation.
+        </p>
+        <div class="hero-cta">
+          <button class="btn btn-gold btn-lg" data-i18n="btn.launch" onclick="go('create')">+ Launch Token</button>
+          <button class="btn btn-line btn-lg" data-i18n="hero.explore" onclick="document.getElementById('tokens').scrollIntoView({behavior:'smooth'})">Explore tokens</button>
         </div>
       </div>
-      <!-- big stat blocks -->
+      <!-- KPI bar -->
       <div class="stat-blocks">
         <div class="stat-block"><div class="sb-v" id="st-vol">—</div><div class="sb-k">24h volume</div></div>
         <div class="stat-block"><div class="sb-v" id="st-volall">—</div><div class="sb-k">All-time volume</div></div>
         <div class="stat-block"><div class="sb-v" id="st-launched">—</div><div class="sb-k">Tokens launched</div></div>
         <div class="stat-block hl"><div class="sb-v gold" id="st-paid">—</div><div class="sb-k">Paid to creators · all-time</div></div>
       </div>
-      <p class="hero-desc">
-        Fair-launch bonding curves. Every token starts on the curve and graduates into a Uniswap pool once
-        <b>~2.6 ETH</b> is raised, with <b>100% of the LP burned</b> — no presale, no team. The twist: set a <span class="lv">creator fee up to 10%</span>,
-        and every buy &amp; sell routes fees to your wallet — on the curve, and long after graduation.
-      </p>
+    </section>
+
+    <!-- trending podium (top 24h volume) -->
+    <section class="hero-lead" aria-label="Top volume">
+      <div class="lead-headline">
+        <div><div class="eyebrow">Top volume · 24h</div><h2 class="section-title lead-title">Trending now</h2></div>
+        <button class="btn btn-line btn-mini" onclick="setFilter('mcap');document.getElementById('tokens').scrollIntoView({behavior:'smooth'})">View all →</button>
+      </div>
+      <div id="leadRows"></div>
+    </section>
+
+    <!-- why robinfun -->
+    <section class="pillars">
+      <div class="pillar"><div class="pillar-n">01</div><h3>Creator fee, <em>forever</em></h3><p>Set a buy/sell fee up to 10%. It lives in the token contract, so it keeps paying you on Uniswap long after graduation.</p></div>
+      <div class="pillar"><div class="pillar-n">02</div><h3>LP <em>100%</em> burned</h3><p>At ~2.6 ETH the curve graduates atomically: liquidity is seeded on Uniswap and every LP token goes to <span class="mono">0xdead</span>.</p></div>
+      <div class="pillar"><div class="pillar-n">03</div><h3>Fair by <em>design</em></h3><p>1B supply, all of it on the curve. No presale, no team allocation, no mint, no blacklist — a holder can always sell.</p></div>
     </section>
 
     <section class="section" id="tokens">
       <div class="section-head">
-        <h2 class="section-title" data-i18n="board.title">The board</h2>
+        <div><div class="eyebrow">All tokens</div><h2 class="section-title" data-i18n="board.title">The board</h2></div>
         <span class="section-note" data-i18n-html="board.note"><span class="live-dot"></span>Live — cards flash and re-sort as trades land</span>
       </div>
       <div class="filters">
+        <div class="seg">
         <button class="ftab active" data-f="trending" onclick="setFilter('trending')">Trending</button>
         <button class="ftab" data-f="watch" onclick="setFilter('watch')">★ Watchlist</button>
         <button class="ftab" data-f="new" onclick="setFilter('new')">Newest</button>
@@ -1090,6 +1128,7 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
         <button class="ftab" data-f="mcap" onclick="setFilter('mcap')">Top mcap</button>
         <button class="ftab" data-f="soon" onclick="setFilter('soon')">Graduating soon</button>
         <button class="ftab" data-f="graduated" onclick="setFilter('graduated')">Graduated</button>
+        </div>
         <div class="fsearch">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#9C9890" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
           <input type="text" id="search" placeholder="Search name, ticker, or paste a CA…" oninput="renderGrid()">
@@ -2513,7 +2552,7 @@ function cardHtml(t){
     </div>
     <p class="tdesc">${t.desc}</p>
     <div class="tcard-meta">
-      <span class="tmcap"><span>MCAP</span>${fmtUsd(t.mcap)}</span>
+      <span class="tmcap"><span>Market cap</span>${fmtUsd(t.mcap)}</span>
       <span class="tchg ${chgCls}">${chgTxt}</span>
     </div>
     ${robinGrad(t)
@@ -2592,14 +2631,16 @@ function renderLead(){
   const box = document.getElementById('leadRows');
   if(!box) return;
   const top = [...TOKENS].sort((a,b)=>b.vol24-a.vol24).slice(0,3);
-  box.innerHTML = top.map(t=>{
+  box.innerHTML = top.map((t,i)=>{
     const up = t.chg24>=0;
     return `<div class="lead-row" onclick="openToken('${t.id}')">
-      <div class="lead-coin"><div class="lead-logo">${tLogo(t)}</div><span class="lead-nm">${t.ticker}</span></div>
-      <div class="lead-mc">${fmtUsd(t.mcap)}<small class="${up?'up':'down'}">${up?'▲':'▼'} ${Math.abs(t.chg24).toFixed(1)}%</small></div>
-      <div class="lead-vol">${fmtUsd(t.vol24)}</div>
+      <div class="lead-coin"><span class="lead-rank">${i+1}</span><div class="lead-logo">${tLogo(t)}</div><div style="min-width:0"><span class="lead-nm">${t.name||t.ticker}</span><span class="lead-tk">$${t.ticker}</span></div></div>
+      <div class="lead-nums">
+        <div class="lead-mc"><span class="lk">MCAP</span>${fmtUsd(t.mcap)}<small class="${up?'up':'down'}">${up?'▲':'▼'} ${Math.abs(t.chg24).toFixed(1)}%</small></div>
+        <div class="lead-vol"><span class="lk">24H VOL</span>${fmtUsd(t.vol24)}</div>
+      </div>
     </div>`;
-  }).join('');
+  }).join('') || '<p class="lead-empty">No trades yet — the first launch takes the top spot.</p>';
 }
 /* ---------------- board: live on-chain stats -----------------
    The homepage numbers (24h volume, per-token mcap/volume, "paid to creators")
@@ -4629,7 +4670,7 @@ function applyTrade(t, tr, user){
   if(card){
     card.classList.remove('flash-buy','flash-sell'); void card.offsetWidth;
     card.classList.add(tr.buy?'flash-buy':'flash-sell');
-    const mc = card.querySelector('.tmcap'); if(mc) mc.innerHTML = '<span>MCAP</span>'+fmtUsd(t.mcap);
+    const mc = card.querySelector('.tmcap'); if(mc) mc.innerHTML = '<span>Market cap</span>'+fmtUsd(t.mcap);
     const ch = card.querySelector('.tchg'); if(ch){ ch.textContent=(t.chg24>=0?'+':'')+t.chg24.toFixed(1)+'%'; ch.className='tchg '+(t.chg24>=0?'up':'down'); }
     const cf = card.querySelector('.curve-fill'); if(cf && !t.graduated) cf.style.width = Math.min(100,t.mcap/GRAD_CAP*100)+'%';
   }
