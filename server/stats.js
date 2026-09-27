@@ -207,7 +207,9 @@ async function scanDex(pair, tok0, ca, lo, hi, chunk) {
 
 // First block worth scanning for a token: its launch block (recorded by
 // chainsync from TokenCreated), else the curve's deploy block found by binary
-// search on eth_getCode, else the last BACKFILL_CAP blocks.
+// search on eth_getCode. Returns null when neither is available yet — e.g. a
+// non-archive RPC can't answer historical getCode — so the caller can wait for
+// chainsync instead of settling for a short window.
 async function startBlockFor(rec, s, head) {
   const known = Number(rec.createdBlock);
   if (Number.isFinite(known) && known > 0 && known <= head) return known;
@@ -219,7 +221,7 @@ async function startBlockFor(rec, s, head) {
     }
     if (lo > 0 && lo <= head) return lo;
   } catch (_) {}
-  return Math.max(0, head - BACKFILL_CAP);
+  return null;
 }
 
 async function indexToken(rec, head, nowSec) {
@@ -287,10 +289,25 @@ async function indexToken(rec, head, nowSec) {
   //             (estimated timestamps, never pushed to the live feed)
   // Neither pass ever re-scans a block, so nothing is double counted.
   if (!s.lastBlock) {
-    const start = await startBlockFor(rec, s, head);
+    let start = await startBlockFor(rec, s, head);
+    if (start == null) {
+      // Give chainsync a few cycles to record the launch block before falling
+      // back to the last BACKFILL_CAP blocks (the extension below still widens
+      // the history later if the launch block turns up).
+      s.startTries = (s.startTries || 0) + 1;
+      if (s.startTries < 6) return;
+      start = Math.max(0, head - BACKFILL_CAP);
+    }
     s.histLo = start;
     s.histHi = head;
     s.lastBlock = head;
+  }
+  // Launch block learned after indexing began (or indexing started from the
+  // fallback window): extend the history pass back to it.
+  const born = Number(rec.createdBlock);
+  if (Number.isFinite(born) && born > 0 && s.histLo != null && born < s.histLo) {
+    if (s.histHi < s.histLo) s.histHi = s.histLo - 1;   // history was finished — resume below it
+    s.histLo = born;
   }
   const scans = [];   // [lo, hi, backfilling]
   if (head > s.lastBlock) scans.push([s.lastBlock + 1, head, false]);
