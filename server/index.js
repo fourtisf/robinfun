@@ -22,6 +22,7 @@ const stats = require('./stats');   // continuous on-chain board-stats indexer
 const apiV1 = require('./api-v1');  // public partner API (read-only token data)
 const webhooks = require('./webhooks'); // partner webhook subscriptions (token.created / graduated)
 const realtime = require('./realtime'); // live feed: SSE /api/v1/stream + WS /api/v1/ws
+const chainsync = require('./chainsync'); // backfills the board from on-chain TokenCreated events
 
 const PORT = Number(process.env.PORT || 3001);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -283,7 +284,17 @@ app.post('/api/tokens', rateLimit, async (req, res) => {
     if (ca) {
       const existing = store.allTokens().find((t) => t.ca && t.ca.toLowerCase() === ca.toLowerCase());
       if (existing) {
-        if (logo && !existing.logo) await store.updateToken(existing.id, { logo });
+        const patch = {};
+        if (logo && !existing.logo) patch.logo = logo;
+        // A token chainsync registered from its TokenCreated event carries no
+        // metadata — let the launch's own POST fill the EMPTY fields once.
+        // Never overwrites anything already set.
+        if (existing.source === 'chain') {
+          const fill = { description: clip(b.description, 280), website: cleanUrl(b.website), x: cleanUrl(b.x), tg: cleanUrl(b.tg) };
+          for (const [k, v] of Object.entries(fill)) if (v && !existing[k]) patch[k] = v;
+          if (Object.keys(patch).length) patch.source = 'chain+meta';
+        }
+        if (Object.keys(patch).length) await store.updateToken(existing.id, patch);
         return res.status(200).json(existing);
       }
     }
@@ -370,4 +381,8 @@ if (SITE_DIR) {
     try { stats.startIndexer(() => store.allTokens(), webhooks.dispatch); console.log('board-stats indexer started'); }
     catch (e) { console.error('stats indexer failed to start', e); }
   }
+  // Register every token launched through the factories (current + legacy)
+  // straight from the chain, so the board is never empty on a fresh server.
+  try { if (chainsync.start(store, DATA_DIR)) console.log('chain sync started'); }
+  catch (e) { console.error('chain sync failed to start', e); }
 })().catch((e) => { console.error('fatal: store init failed', e); process.exit(1); });

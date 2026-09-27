@@ -200,6 +200,9 @@ async function indexToken(rec, head, nowSec) {
   if (!s.curve) {
     try { const c = await new ethers.Contract(FACTORY, FACTORY_ABI, prov()).curveOf(ca); if (c && c !== ethers.ZeroAddress) s.curve = c; } catch (_) {}
   }
+  // Legacy-factory tokens aren't known to the current factory's curveOf — use
+  // the curve recorded from their TokenCreated event (see chainsync.js).
+  if (!s.curve && /^0x[0-9a-fA-F]{40}$/.test(String(rec.curve || ''))) s.curve = rec.curve;
   if (!s.curve) return;
   const curve = new ethers.Contract(s.curve, CURVE_ABI, prov());
 
@@ -319,7 +322,8 @@ async function cycle() {
     await refreshBlockTime(head);
     const nowSec = Math.floor(Date.now() / 1000);
 
-    const tokens = (_getTokens() || []).filter((t) => t && t.ca).slice(0, MAX_TOKENS);
+    // newest first: the store is append-only, so the most recent launches are at the end
+    const tokens = (_getTokens() || []).filter((t) => t && t.ca).slice(-MAX_TOKENS);
     await mapLimit(tokens, CONCURRENCY, (rec) => indexToken(rec, head, nowSec));
 
     idx.updatedAt = Date.now();
