@@ -11,7 +11,8 @@
  *     on-chain) are skipped
  * Matching is by contract address, so it is safe to run more than once.
  *
- * Input: the old tokens.json ({ "tokens": [...] }), a plain JSON array, or a
+ * Input: the old tokens.json ({ "tokens": [...] }), a plain JSON array — e.g.
+ * straight from the old site: curl https://robinfun.io/api/tokens — or a
  * `mongoexport` dump (one JSON document per line).
  *
  * Stop the API first so it can't overwrite the file with its in-memory copy:
@@ -43,7 +44,8 @@ const META = ['logo', 'description', 'website', 'x', 'tg'];
 const isAddr = (a) => /^0x[0-9a-fA-F]{40}$/.test(String(a || '').trim());
 
 (async () => {
-  const old = readOld(file);
+  // Oldest first, so the store stays in launch order (GET /api/tokens returns newest first).
+  const old = readOld(file).sort((a, b) => (Number(a && a.createdAt) || 0) - (Number(b && b.createdAt) || 0));
   await store.init({ dataDir: DATA_DIR, defaultSettings: { gradLpEth: 2.6 } });
   console.log(`store: ${store.backend()} · ${store.countTokens()} tokens before import · ${old.length} records in ${file}`);
 
