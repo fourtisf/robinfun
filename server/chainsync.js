@@ -48,6 +48,7 @@ function loadState() {
   state.lastBlock = state.lastBlock || {};
 }
 function saveState() {
+  if (!stateFile) return;   // start() not called (e.g. tests) — nothing to persist
   try { fs.writeFileSync(stateFile + '.tmp', JSON.stringify(state)); fs.renameSync(stateFile + '.tmp', stateFile); } catch (_) {}
 }
 
