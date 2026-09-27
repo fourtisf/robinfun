@@ -15,7 +15,7 @@
 <link rel="shortcut icon" href="/famspad-logo.png">
 <link rel="apple-touch-icon" href="/famspad-logo.png">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20100%20100%22%3E%3Cdefs%3E%3Cmask%20id%3D%22m%22%20maskUnits%3D%22userSpaceOnUse%22%20x%3D%220%22%20y%3D%220%22%20width%3D%22100%22%20height%3D%22100%22%3E%3Cg%20fill%3D%22%23fff%22%3E%3Cg%20transform%3D%22translate%2850%2050%29%20rotate%28-16%29%20translate%28-56%20-44%29%22%3E%3Cpath%20d%3D%22M22%2050%20C%2034%2044%2C%2046%2040.5%2C%2058%2039.5%20C%2074%2038.5%2C%2088%2039.5%2C%2095%2045%20C%2099.5%2048.5%2C%2099.5%2053.5%2C%2095.5%2056.5%20C%2088%2061%2C%2076%2062.2%2C%2064%2062.2%20C%2048%2062.2%2C%2034%2060%2C%2024%2057%20Z%22%2F%3E%3Cpath%20d%3D%22M53%2040%20C%2055%2028%2C%2056.5%2016%2C%2055.5%203%20C%2061%2013%2C%2065%2026%2C%2068%2039%20Z%22%2F%3E%3Cpath%20d%3D%22M25%2051.5%20C%2019%2046.5%2C%2013%2042.5%2C%205%2041.5%20C%209%2046%2C%2012%2050.5%2C%2014.5%2054%20C%2012%2058%2C%209%2062.5%2C%205%2067%20C%2013%2065.5%2C%2019%2061.5%2C%2025%2056.5%20Z%22%2F%3E%3Cpath%20d%3D%22M71%2060%20C%2075%2066.5%2C%2074.5%2074.5%2C%2067.5%2079%20C%2064%2075%2C%2064%2067%2C%2065.5%2061%20Z%22%2F%3E%3C%2Fg%3E%3C%2Fg%3E%3Cg%20fill%3D%22%23000%22%3E%3Cg%20transform%3D%22translate%2850%2050%29%20rotate%28-16%29%20translate%28-56%20-44%29%22%3E%3Cpath%20d%3D%22M77%2046.5%20C%2080%2043.2%2C%2086%2042.6%2C%2090%2044.6%20C%2088%2047.4%2C%2082.5%2048.6%2C%2077%2046.5%20Z%22%2F%3E%3Cpath%20d%3D%22M38%2057.8%20C%2043%2051.8%2C%2052%2051.2%2C%2057.5%2056.2%20C%2051.5%2059%2C%2044%2059.4%2C%2038%2057.8%20Z%22%2F%3E%3C%2Fg%3E%3C%2Fg%3E%3C%2Fmask%3E%3C%2Fdefs%3E%3Crect%20width%3D%22100%22%20height%3D%22100%22%20rx%3D%2222%22%20fill%3D%22%23000%22%2F%3E%3Cg%20transform%3D%22translate%2850%2050%29%20scale%28.8%29%20translate%28-50%20-50%29%22%3E%3Crect%20width%3D%22100%22%20height%3D%22100%22%20fill%3D%22%23D4B574%22%20mask%3D%22url%28%23m%29%22%2F%3E%3C%2Fg%3E%3C%2Fsvg%3E">
-<!-- Link-preview tags (Telegram / X) — 1200x630 Famspad card. -->
+<!-- Link-preview tags (X / chat apps) — 1200x630 Famspad card. -->
 <meta property="og:type" content="website">
 <meta property="og:url" content="https://famspad.com/">
 <meta property="og:title" content="Famspad — Fair-Launch Bonding Curves on Robinhood Chain">
@@ -271,6 +271,13 @@ body.light .stake-orbit text{fill:#8C6D2F}
 .hero-desc b{color:var(--cream);font-weight:600}
 .hero-desc .lv{color:var(--gilt-bright);font-family:var(--font-serif);font-style:italic;font-size:1.14em}
 .hero-cta{display:flex;gap:12px;flex-wrap:wrap;justify-content:center}
+.hero-ca{display:inline-flex;align-items:center;gap:12px;margin-top:22px;padding:7px 8px 7px 7px;border-radius:99px;
+  border:1px solid var(--card-line);background:rgba(255,255,255,.025);font-family:var(--font-mono);font-size:12.5px;flex-wrap:wrap;justify-content:center}
+.hero-ca .ca-k{padding:4px 10px;border-radius:99px;background:var(--gold-metal);color:#0A0A0A;font-weight:600;letter-spacing:.12em;font-size:11px}
+.hero-ca .ca-v{color:var(--cream);letter-spacing:.04em}
+.hero-ca .ca-x{color:var(--gilt);padding-right:8px;font-size:12px}
+.hero-ca .ca-x:hover{color:var(--gilt-bright)}
+.foot-ca{font-family:var(--font-mono);font-size:12px;color:var(--cream-mute);letter-spacing:.03em}
 .hero-cta .btn-lg{padding:15px 28px;border-radius:99px;font-size:15px}
 
 /* KPI bar — one glass strip with hairline dividers */
@@ -1015,16 +1022,14 @@ body.light .hero-horizon{opacity:.6}
       <div class="nav-tools">
         <button onclick="toggleTheme();document.getElementById('nav').classList.remove('open')">◐&nbsp; Light / dark</button>
         <button onclick="toggleLang();document.getElementById('nav').classList.remove('open')">🌐&nbsp; Language · <span id="navLangLbl">EN</span></button>
-        <a class="ntool-social" href="https://x.com/robinfunmeme" target="_blank" rel="noopener noreferrer">𝕏&nbsp; @robinfunmeme</a>
-        <a class="ntool-social" href="https://telegram.me/robinfunio" target="_blank" rel="noopener noreferrer">✈&nbsp; Telegram</a>
+        <a class="ntool-social" href="https://x.com/famspad" target="_blank" rel="noopener noreferrer">𝕏&nbsp; @famspad</a>
       </div>
     </nav>
     <div class="topbar-right">
       <span class="tb-eth" id="ethPx" title="Live ETH price · CoinGecko"><b>Ξ</b>&nbsp;$—</span>
       <button class="tb-icon tb-lang" id="langBtn" onclick="toggleLang()" title="Language" aria-label="Switch language">EN</button>
       <button class="tb-icon" id="themeBtn" onclick="toggleTheme()" title="Toggle light / dark" aria-label="Toggle theme"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.4M12 19.6V22M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2 12h2.4M19.6 12H22M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg></button>
-      <a class="tb-icon tb-social" href="https://x.com/robinfunmeme" target="_blank" rel="noopener noreferrer" title="X — @robinfunmeme" aria-label="X (Twitter)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.9 2H22l-7.6 8.7L23.3 22h-6.9l-5.4-7.1L4.8 22H1.7l8.2-9.4L.9 2h7.1l4.9 6.5L18.9 2zm-1.2 18h1.9L7.1 4H5.1l12.6 16z"/></svg></a>
-      <a class="tb-icon tb-social" href="https://telegram.me/robinfunio" target="_blank" rel="noopener noreferrer" title="Telegram — t.me/robinfunio" aria-label="Telegram"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M21.94 4.15a.9.9 0 00-1.2-.86L2.9 10.3c-.86.34-.85 1.57.02 1.88l4.35 1.53 1.67 5.28c.19.6.94.8 1.4.38l2.44-2.24 4.42 3.26c.5.37 1.21.1 1.35-.5l3.4-15.4a.9.9 0 00-.01-.34zM9.2 14.3l-.28 3.5-1.02-3.24 8.36-5.36-7.04 5.1z"/></svg></a>
+      <a class="tb-icon tb-social" href="https://x.com/famspad" target="_blank" rel="noopener noreferrer" title="X — @famspad" aria-label="X (Twitter)"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.9 2H22l-7.6 8.7L23.3 22h-6.9l-5.4-7.1L4.8 22H1.7l8.2-9.4L.9 2h7.1l4.9 6.5L18.9 2zm-1.2 18h1.9L7.1 4H5.1l12.6 16z"/></svg></a>
       <div class="tb-sep tb-social"></div>
       <button class="btn btn-line btn-mini tb-launch" data-i18n="btn.launch" onclick="go('create')">+ Launch Token</button>
       <button class="btn btn-gold btn-mini" id="walletBtn" onclick="connectWallet()">Connect wallet</button>
@@ -1092,6 +1097,11 @@ body.light .hero-horizon{opacity:.6}
         <div class="hero-cta">
           <button class="btn btn-gold btn-lg" data-i18n="btn.launch" onclick="go('create')">+ Launch Token</button>
           <button class="btn btn-line btn-lg" data-i18n="hero.explore" onclick="document.getElementById('tokens').scrollIntoView({behavior:'smooth'})">Explore tokens</button>
+        </div>
+        <!-- Famspad token contract — swap "Coming soon" for the address at launch -->
+        <div class="hero-ca" title="Famspad contract address — announced on x.com/famspad">
+          <span class="ca-k">CA</span><span class="ca-v">Coming soon</span>
+          <a class="ca-x" href="https://x.com/famspad" target="_blank" rel="noopener noreferrer">Follow @famspad for launch →</a>
         </div>
       </div>
       <!-- KPI bar -->
@@ -1619,7 +1629,7 @@ body.light .hero-horizon{opacity:.6}
 <footer>
   <div class="wrap foot-in">
     <div class="foot-l">Famspad · fair-launch bonding curves · creator fee 0–10% · LP 100% burned · Robinhood Chain <span class="foot-build" style="opacity:.45;margin-left:8px" title="deployed build — updates every publish">__BUILD__</span><span id="chain-diag" style="margin-left:8px;font-family:var(--font-mono);font-size:11px;opacity:.7" title="live on-chain read status"></span></div>
-    <div class="foot-links"><a href="#" onclick="go('docs');return false">Whitepaper</a><a href="/api/v1/guide" target="_blank" rel="noopener noreferrer">API</a><a href="https://x.com/robinfunmeme" target="_blank" rel="noopener noreferrer">X</a><a href="https://telegram.me/robinfunio" target="_blank" rel="noopener noreferrer">Telegram</a><a href="#">RobinBridge</a></div>
+    <div class="foot-links"><a href="#" onclick="go('docs');return false">Whitepaper</a><a href="/api/v1/guide" target="_blank" rel="noopener noreferrer">API</a><a href="https://x.com/famspad" target="_blank" rel="noopener noreferrer">X · @famspad</a><span class="foot-ca">CA: coming soon</span></div>
   </div>
 </footer>
 
