@@ -26,8 +26,12 @@ const WETH         = (process.env.WETH || '0x0bd7d308f8e1639fab988df18a8011f41ea
 const SUPPLY       = 1e9;
 const STATS_FILE   = process.env.STATS_FILE || path.join(__dirname, 'data', 'stats.json');
 const CYCLE_MS     = Math.max(8000, Number(process.env.STATS_CYCLE_MS || 20000));
-const MAX_TOKENS   = Math.max(1, Number(process.env.STATS_MAX_TOKENS || 120));
-const BACKFILL_CAP = Math.max(50000, Number(process.env.STATS_BACKFILL_BLOCKS || 2000000));
+const MAX_TOKENS   = Math.max(1, Number(process.env.STATS_MAX_TOKENS || 1000));
+const BACKFILL_CAP = Math.max(50000, Number(process.env.STATS_BACKFILL_BLOCKS || 2000000));   // only when a token's start block can't be found
+// History is scanned newest → oldest, this many getLogs windows per token per
+// cycle, so a months-long backfill never stalls the live (incremental) scan.
+const HIST_CHUNKS  = Math.max(1, Number(process.env.STATS_HIST_CHUNKS || 8));
+const CHECKPOINT_V = 2;   // bump to force a full re-index (v1 only looked back BACKFILL_CAP blocks)
 const CONCURRENCY  = Math.max(1, Number(process.env.STATS_CONCURRENCY || 6));
 
 const CURVE_ABI = [
@@ -86,7 +90,10 @@ const _liveReady = new Set();
 function loadCheckpoint() {
   try {
     const j = JSON.parse(fs.readFileSync(STATS_FILE, 'utf8'));
-    if (j && j.perToken) { idx.perToken = j.perToken; idx.ethUsd = j.ethUsd || 0; idx.blockTime = j.blockTime || 0; }
+    if (j) { idx.ethUsd = j.ethUsd || 0; idx.blockTime = j.blockTime || 0; }
+    // Older checkpoints only covered the last BACKFILL_CAP blocks of history —
+    // drop them so every token is re-indexed from its launch block.
+    if (j && j.perToken && j.v === CHECKPOINT_V) idx.perToken = j.perToken;
   } catch (_) {}
 }
 let _saveTimer = null;
@@ -96,7 +103,7 @@ function saveCheckpoint() {
     _saveTimer = null;
     try {
       fs.mkdirSync(path.dirname(STATS_FILE), { recursive: true });
-      fs.writeFileSync(STATS_FILE, JSON.stringify({ ethUsd: idx.ethUsd, blockTime: idx.blockTime, updatedAt: idx.updatedAt, perToken: idx.perToken }));
+      fs.writeFileSync(STATS_FILE, JSON.stringify({ v: CHECKPOINT_V, ethUsd: idx.ethUsd, blockTime: idx.blockTime, updatedAt: idx.updatedAt, perToken: idx.perToken }));
     } catch (_) {}
   }, 5000);
 }
@@ -141,7 +148,7 @@ async function refreshBlockTime(head) {
 
 // Probe the widest eth_getLogs window this RPC accepts (cached per token).
 async function probeChunk(contract, filter, head) {
-  for (const c of [90000, 45000, 18000, 7000, 2500, 800]) {
+  for (const c of [2000000, 500000, 200000, 90000, 45000, 18000, 7000, 2500, 800]) {
     try { await contract.queryFilter(filter, Math.max(0, head - c), head); return c; } catch (_) {}
   }
   return 0;
@@ -157,7 +164,12 @@ async function scanCurve(curve, lo, hi, chunk) {
     try { [buys, sells] = await Promise.all([
       curve.queryFilter(curve.filters.Buy(), from, to),
       curve.queryFilter(curve.filters.Sell(), from, to),
-    ]); } catch (_) { continue; }
+    ]); } catch (_) {
+      // RPC refused this window (too wide / too many results): retry it in
+      // quarters rather than silently losing its trades from the volume.
+      if (to - from > 400) { events.push(...await scanCurve(curve, from, to, Math.ceil((to - from) / 4))); }
+      continue;
+    }
     // rE/rT = post-trade virtual reserves — carried through so the aggregator can
     // report curve LIQUIDITY to DexScreener/GeckoTerminal (they read reserves off
     // swap events; without this every curve token shows Liquidity $0 even after we
@@ -174,7 +186,10 @@ async function scanDex(pair, tok0, ca, lo, hi, chunk) {
   for (let from = lo; from <= hi; from += chunk + 1) {
     const to = Math.min(hi, from + chunk);
     let sw = [];
-    try { sw = await pair.queryFilter(pair.filters.Swap(), from, to); } catch (_) { continue; }
+    try { sw = await pair.queryFilter(pair.filters.Swap(), from, to); } catch (_) {
+      if (to - from > 400) { events.push(...await scanDex(pair, tok0, ca, from, to, Math.ceil((to - from) / 4))); }
+      continue;
+    }
     for (const e of sw) {
       const a = e.args;
       const a0i = Number(ethers.formatUnits(a.amount0In, 18)), a1i = Number(ethers.formatUnits(a.amount1In, 18));
@@ -188,6 +203,23 @@ async function scanDex(pair, tok0, ca, lo, hi, chunk) {
     }
   }
   return events;
+}
+
+// First block worth scanning for a token: its launch block (recorded by
+// chainsync from TokenCreated), else the curve's deploy block found by binary
+// search on eth_getCode, else the last BACKFILL_CAP blocks.
+async function startBlockFor(rec, s, head) {
+  const known = Number(rec.createdBlock);
+  if (Number.isFinite(known) && known > 0 && known <= head) return known;
+  try {
+    let lo = 0, hi = head;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi) / 2);
+      if ((await prov().getCode(s.curve, mid)) === '0x') lo = mid + 1; else hi = mid;
+    }
+    if (lo > 0 && lo <= head) return lo;
+  } catch (_) {}
+  return Math.max(0, head - BACKFILL_CAP);
 }
 
 async function indexToken(rec, head, nowSec) {
@@ -248,14 +280,27 @@ async function indexToken(rec, head, nowSec) {
   if (!s.logChunk) s.logChunk = await probeChunk(curve, curve.filters.Buy(), head);
   const chunk = s.logChunk || 2500;
 
-  // Determine the scan range: backfill on first sight, else incremental from the
-  // block AFTER the last one scanned. Never re-scan lastBlock (that would double
-  // count any trade in it). If no new blocks, there's nothing to scan.
-  const backfilling = !s.lastBlock;
-  const lo = backfilling ? Math.max(0, head - BACKFILL_CAP) : s.lastBlock + 1;
-  const hi = head;
-  if (lo > hi) return;   // no new blocks since last cycle
+  // Two passes per cycle:
+  //   forward — blocks after lastBlock (live trades, stamped "now")
+  //   history — from the token's launch block up to where indexing began,
+  //             walked newest → oldest, HIST_CHUNKS windows per cycle
+  //             (estimated timestamps, never pushed to the live feed)
+  // Neither pass ever re-scans a block, so nothing is double counted.
+  if (!s.lastBlock) {
+    const start = await startBlockFor(rec, s, head);
+    s.histLo = start;
+    s.histHi = head;
+    s.lastBlock = head;
+  }
+  const scans = [];   // [lo, hi, backfilling]
+  if (head > s.lastBlock) scans.push([s.lastBlock + 1, head, false]);
+  if (s.histHi != null && s.histHi >= s.histLo) {
+    const lo = Math.max(s.histLo, s.histHi - chunk * HIST_CHUNKS + 1);
+    scans.push([lo, s.histHi, true]);
+  }
+  if (!scans.length) return;
 
+  for (const [lo, hi, backfilling] of scans) {
   const fresh = [];
   const cur = await scanCurve(curve, lo, hi, chunk);
   fresh.push(...cur);
@@ -296,6 +341,8 @@ async function indexToken(rec, head, nowSec) {
       });
     }
   }
+  if (backfilling) s.histHi = lo - 1; else s.lastBlock = hi;
+  }
   // Mark this token "warm" AFTER its first indexed cycle in this process, so the
   // NEXT cycle's trades (genuinely live) emit while this cycle's (backfill or
   // post-restart catch-up) do not.
@@ -306,13 +353,10 @@ async function indexToken(rec, head, nowSec) {
   if (s.trades.length > 1500 || (s.trades.length && s.trades[0].t < tradeCutoff)) {
     s.trades = s.trades.filter((x) => x.t >= tradeCutoff).slice(-1500);
   }
-  s.lastBlock = hi;
-
   // Prune the 24h window (keep ~26h of margin) to bound memory.
   const cutoff = nowSec - 93600;
-  if (s.recent.length > 4000 || (s.recent.length && s.recent[0][0] < cutoff)) {
-    s.recent = s.recent.filter((r) => r[0] >= cutoff);
-  }
+  // (history is appended out of order, so filter unconditionally — it's small)
+  if (s.recent.length) s.recent = s.recent.filter((r) => r[0] >= cutoff);
 }
 
 async function cycle() {

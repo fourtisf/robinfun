@@ -43,8 +43,10 @@ function prov() {
 
 let stateFile = '';
 let state = { lastBlock: {}, chunk: 0 };
+const STATE_V = 2;   // v2 records createdBlock — rescan once so older records get it too
 function loadState() {
   try { state = Object.assign(state, JSON.parse(fs.readFileSync(stateFile, 'utf8'))); } catch (_) {}
+  if (state.v !== STATE_V) { state.lastBlock = {}; state.v = STATE_V; }
   state.lastBlock = state.lastBlock || {};
 }
 function saveState() {
@@ -95,14 +97,19 @@ async function syncFactory(store, addr, head) {
   const from = state.lastBlock[addr] != null ? state.lastBlock[addr] + 1 : await deployBlock(addr, head);
   if (from > head) return 0;
   const logs = await getLogsRange(addr, from, head);
-  const known = new Set(store.allTokens().map((t) => String(t.ca || '').toLowerCase()).filter(Boolean));
+  const known = new Map(store.allTokens().filter((t) => t && t.ca).map((t) => [String(t.ca).toLowerCase(), t]));
   const tsCache = new Map();
   let added = 0;
   for (const log of logs) {
     let ev;
     try { ev = IFACE.parseLog(log); } catch (_) { continue; }
     const ca = String(ev.args.token).toLowerCase();
-    if (known.has(ca)) continue;
+    const have = known.get(ca);
+    if (have) {
+      // Launch block lets the stats indexer count ALL of a token's history.
+      if (!have.createdBlock) await store.updateToken(have.id, { createdBlock: log.blockNumber });
+      continue;
+    }
     const ticker = clean(ev.args.symbol, 16).toUpperCase().replace(/[^A-Z0-9]/g, '');
     const name = clean(ev.args.name, 64);
     if (!name || !ticker) continue;
@@ -125,9 +132,10 @@ async function syncFactory(store, addr, head) {
       creator: ethers.getAddress(String(ev.args.creator)),
       logo: null,
       createdAt: ts,
+      createdBlock: log.blockNumber,
       source: 'chain',
     });
-    known.add(ca);
+    known.set(ca, { ca });
     added++;
   }
   state.lastBlock[addr] = head;
