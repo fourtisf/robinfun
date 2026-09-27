@@ -4,8 +4,11 @@
 # that ALREADY hosts other apps (e.g. dualyne-api / dualyne-web).
 #
 # Safe on a shared server:
-#   - only ADDS its own nginx vhost (/etc/nginx/sites-available/famspad.conf);
-#     never deletes the default site or touches other vhosts
+#   - works with whichever web server already owns :80/:443:
+#       Caddy → adds its own site file (famspad.caddy) + one `import` line,
+#               validated first and auto-reverted on error; HTTPS is automatic
+#       nginx → adds its own vhost (sites-available/famspad.conf) + certbot
+#     never deletes or edits other sites
 #   - runs the API as its own pm2 app "famspad-api" on a free local port;
 #     never restarts/deletes other pm2 apps
 #   - only installs packages that are missing
@@ -41,35 +44,43 @@ warn(){ printf '\n\033[1;33m!!\033[0m %s\n' "$*"; }
 die(){ printf '\n\033[1;31mERROR:\033[0m %s\n' "$*" >&2; exit 1; }
 [ "$(id -u)" = "0" ] || die "Run as root."
 
+# ---------------------------------------------------------------- web server
+# Share whatever already owns :80 — Caddy (e.g. fronting dualyne) or nginx.
+# If nothing listens yet, install nginx.
+WEB=""
+P80=""
+command -v ss >/dev/null 2>&1 && P80="$(ss -ltnpH 'sport = :80' 2>/dev/null | head -1)"
+if [ -z "$P80" ]; then WEB=nginx
+elif printf '%s' "$P80" | grep -q '"caddy"'; then WEB=caddy
+elif printf '%s' "$P80" | grep -q '"nginx"'; then WEB=nginx
+else
+  die "Port 80 is held by an unsupported server:
+  $P80
+Famspad can share a box with Caddy or nginx. Put that app behind one of them first."
+fi
+log "Web server on :80 → ${WEB}"
+
 # ---------------------------------------------------------------- packages
 export DEBIAN_FRONTEND=noninteractive
 APT="apt-get -o DPkg::Lock::Timeout=300"
 NEED=()
-command -v git     >/dev/null 2>&1 || NEED+=(git)
-command -v nginx   >/dev/null 2>&1 || NEED+=(nginx)
-command -v certbot >/dev/null 2>&1 || NEED+=(certbot python3-certbot-nginx)
-command -v curl    >/dev/null 2>&1 || NEED+=(curl)
+command -v git  >/dev/null 2>&1 || NEED+=(git)
+command -v curl >/dev/null 2>&1 || NEED+=(curl)
+if [ "$WEB" = nginx ]; then
+  command -v nginx   >/dev/null 2>&1 || NEED+=(nginx)
+  command -v certbot >/dev/null 2>&1 || NEED+=(certbot)
+  dpkg -s python3-certbot-nginx >/dev/null 2>&1 || NEED+=(python3-certbot-nginx)
+fi
 if [ ${#NEED[@]} -gt 0 ]; then
   log "Installing missing packages: ${NEED[*]}"
   $APT update -y && $APT install -y "${NEED[@]}" || die "apt install failed"
 fi
-dpkg -s python3-certbot-nginx >/dev/null 2>&1 || $APT install -y python3-certbot-nginx >/dev/null 2>&1 || true
 if ! command -v node >/dev/null 2>&1; then
   log "Installing Node.js 20"
   curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && $APT install -y nodejs || die "node install failed"
 fi
 command -v pm2 >/dev/null 2>&1 || { log "Installing pm2"; npm install -g pm2 || die "pm2 install failed"; }
-
-# Port 80 must be nginx's, or certbot/vhosts can't work alongside the other apps.
-if command -v ss >/dev/null 2>&1; then
-  P80="$(ss -ltnpH 'sport = :80' 2>/dev/null | head -1)"
-  if [ -n "$P80" ] && ! printf '%s' "$P80" | grep -q nginx; then
-    die "Port 80 is held by something other than nginx:
-  $P80
-Famspad needs nginx on :80/:443 to share this server. Put that app behind nginx first."
-  fi
-fi
-systemctl enable --now nginx >/dev/null 2>&1 || true
+[ "$WEB" = nginx ] && { systemctl enable --now nginx >/dev/null 2>&1 || true; }
 
 # ---------------------------------------------------------------- code
 log "Fetching code (${BRANCH}) into ${SRC_DIR}"
@@ -151,6 +162,78 @@ done
 [ -n "$ok" ] || { pm2 logs "$APP_NAME" --lines 30 --nostream; die "API health check failed on :${PORT}"; }
 log "API healthy: $(curl -fsS "http://127.0.0.1:${PORT}/api/health")"
 
+# ---------------------------------------------------------------- caddy
+setup_caddy() {
+  command -v caddy >/dev/null 2>&1 || die "caddy holds :80 but the caddy binary isn't on PATH."
+  local CADDYFILE SITE BAK
+  CADDYFILE="$(systemctl cat caddy 2>/dev/null | grep -oP -- '--config[= ]\K\S+' | head -1)"
+  CADDYFILE="${CADDYFILE:-/etc/caddy/Caddyfile}"
+  [ -f "$CADDYFILE" ] || die "Caddyfile not found at $CADDYFILE (set CADDYFILE=... and re-run)."
+  SITE="$(dirname "$CADDYFILE")/famspad.caddy"
+
+  if grep -qE "(^|[[:space:],])(www\.)?${DOMAIN//./\\.}([[:space:],:{]|$)" "$CADDYFILE"; then
+    die "$CADDYFILE already has a site block for ${DOMAIN}. Remove it (Famspad manages its own in $SITE), then re-run."
+  fi
+
+  log "Writing Caddy site ${SITE} (HTTPS is automatic)"
+  cat > "$SITE" <<CADDY
+# Famspad — managed by deploy/famspad/deploy.sh (re-run the script to update)
+www.${DOMAIN} {
+	redir https://${DOMAIN}{uri} permanent
+}
+
+${DOMAIN} {
+	encode gzip
+	request_body {
+		max_size 8MB
+	}
+
+	# live feed (SSE) — flush events immediately
+	handle /api/v1/stream {
+		reverse_proxy 127.0.0.1:${PORT} {
+			flush_interval -1
+		}
+	}
+	# API + WebSocket (/api/v1/ws — Caddy upgrades WS automatically)
+	handle /api/* {
+		reverse_proxy 127.0.0.1:${PORT}
+	}
+	# static site + uploaded logos, SPA fallback for /create, /token/<ca>, ...
+	handle {
+		root * ${WEBROOT}
+		@assets path *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico
+		header @assets Cache-Control "public, max-age=604800"
+		@pages not path *.png *.jpg *.jpeg *.gif *.svg *.webp *.ico
+		header @pages Cache-Control "no-cache"
+		try_files {path} /index.html
+		file_server
+	}
+
+	header {
+		X-Frame-Options SAMEORIGIN
+		X-Content-Type-Options nosniff
+		Referrer-Policy strict-origin-when-cross-origin
+	}
+}
+CADDY
+
+  BAK="${CADDYFILE}.famspad-bak"
+  cp "$CADDYFILE" "$BAK"
+  grep -qF "import $SITE" "$CADDYFILE" || printf '\nimport %s\n' "$SITE" >> "$CADDYFILE"
+  if ! caddy validate --config "$CADDYFILE" --adapter caddyfile >/tmp/famspad-caddy-validate.log 2>&1; then
+    cp "$BAK" "$CADDYFILE"
+    cat /tmp/famspad-caddy-validate.log | tail -15
+    die "Caddy config invalid — Caddyfile restored, dualyne untouched."
+  fi
+  if systemctl is-active --quiet caddy; then
+    systemctl reload caddy || { cp "$BAK" "$CADDYFILE"; systemctl reload caddy; die "caddy reload failed — Caddyfile restored."; }
+  else
+    caddy reload --config "$CADDYFILE" --adapter caddyfile || { cp "$BAK" "$CADDYFILE"; die "caddy reload failed — Caddyfile restored."; }
+  fi
+  log "Caddy reloaded — certificate for ${DOMAIN} + www is issued automatically on first visit (takes a few seconds)."
+}
+
+setup_nginx() {
 # ---------------------------------------------------------------- nginx
 if grep -rlsE "server_name[^;]*\b${DOMAIN//./\\.}\b" /etc/nginx/sites-enabled/ /etc/nginx/conf.d/ 2>/dev/null | grep -v 'famspad.conf' | grep -q .; then
   warn "Another nginx vhost already claims ${DOMAIN}:"
@@ -242,6 +325,10 @@ if ! grep -q 'managed by Certbot' "$CONF"; then
     && systemctl reload nginx \
     || warn "certbot failed — site is up on http:// only. Check DNS (A @ and CNAME www → this server), then re-run."
 fi
+
+}
+
+if [ "$WEB" = caddy ]; then setup_caddy; else setup_nginx; fi
 
 log "Done — https://${DOMAIN} is live (build ${BUILD_ID})."
 echo "  Hard-refresh the page (Ctrl/Cmd+Shift+R) and check the footer shows: build ${BUILD_ID}"
