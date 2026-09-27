@@ -1,11 +1,11 @@
-# Robinfun Public API v1
+# Famspad Public API v1
 
-A read-only HTTP API that exposes every token launched on Robinfun with live
+A read-only HTTP API that exposes every token launched on Famspad with live
 market data (price, market cap, volume, status). Partners use it to **auto-list**
-Robinfun tokens, power aggregators/trackers, or feed wallets and bots.
+Famspad tokens, power aggregators/trackers, or feed wallets and bots.
 
-- **New here?** Start with the step-by-step **[integration guide](https://robinfun.io/api/v1/guide)** (copy-paste examples) or the interactive **[API reference](https://robinfun.io/api/v1/docs)**.
-- **Base URL:** `https://robinfun.io/api/v1`
+- **New here?** Start with the step-by-step **[integration guide](https://famspad.com/api/v1/guide)** (copy-paste examples) or the interactive **[API reference](https://famspad.com/api/v1/docs)**.
+- **Base URL:** `https://famspad.com/api/v1`
 - **Auth:** none — public, read-only. `CORS` is open (`Access-Control-Allow-Origin: *`), so it works from a browser too.
 - **Format:** JSON. All money fields are USD unless the name ends in `Eth`/`Native`.
 - **Freshness:** market data (price/mcap/volume) is indexed continuously from Robinhood Chain and cached ~15s. `updatedAt` is a ms epoch of the last index cycle.
@@ -105,7 +105,7 @@ For charts. `?resolution=` one of `1m 5m 15m 1h 4h 1d` (default `1h`), `?limit=`
   "symbol": "TDOGE",
   "decimals": 18,
   "totalSupply": "1000000000",
-  "logoURI": "https://robinfun.io/uploads/x.png",
+  "logoURI": "https://famspad.com/uploads/x.png",
   "description": "a test token",
   "links": { "website": "https://…", "twitter": "https://x.com/…", "telegram": "https://t.me/…" },
   "creator": "0xABC…",
@@ -120,16 +120,16 @@ For charts. `?resolution=` one of `1m 5m 15m 1h 4h 1d` (default `1h`), `?limit=`
   "pairAddress": "0x…",         // Uniswap V2 pair — present once "listed", else null
   "createdAt": 1700000000000,
   "urls": {
-    "robinfun": "https://robinfun.io/token/0x…",
+    "famspad": "https://famspad.com/token/0x…",
     "explorer": "https://robinhoodchain.blockscout.com/token/0x…",
-    "api": "https://robinfun.io/api/v1/tokens/0x…"
+    "api": "https://famspad.com/api/v1/tokens/0x…"
   }
 }
 ```
 
 **Notes for integrators**
 - Market fields (`priceUsd`, `marketCapUsd`, `volume`) are `null` until the indexer has seen a freshly-launched token (usually within a minute). Treat `null` as "not yet indexed", not zero.
-- `status: "bonding"` tokens trade on the Robinfun bonding curve (`curveAddress`); `status: "listed"` tokens trade on the Uniswap V2 `pairAddress`.
+- `status: "bonding"` tokens trade on the Famspad bonding curve (`curveAddress`); `status: "listed"` tokens trade on the Uniswap V2 `pairAddress`.
 - To poll for new listings, request `GET /api/v1/tokens?status=listed&limit=100` on an interval and diff by `address`.
 
 ---
@@ -156,9 +156,9 @@ synthetic `txnId` and omit `maker`/`reserves`. Enough to build price & volume.
 `id` accepts the Uniswap pair address, the bonding-curve address, **or** the token
 address — all resolve to the same pair. `asset0Id` is the token; `asset1Id` is `ETH`.
 ```json
-{ "pair": { "id": "0x…", "dexKey": "robinfun-curve", "asset0Id": "0x…", "asset1Id": "ETH", "createdAtBlockTimestamp": 1752600000, "feeBps": 100, "metadata": { "name": "Test Doge", "symbol": "TDOGE", "logoURI": "https://…" } } }
+{ "pair": { "id": "0x…", "dexKey": "famspad-curve", "asset0Id": "0x…", "asset1Id": "ETH", "createdAtBlockTimestamp": 1752600000, "feeBps": 100, "metadata": { "name": "Test Doge", "symbol": "TDOGE", "logoURI": "https://…" } } }
 ```
-`dexKey` is `robinfun-curve` while bonding, `uniswap-v2` once listed.
+`dexKey` is `famspad-curve` while bonding, `uniswap-v2` once listed.
 
 ### `GET /api/v1/dex/events?fromBlock={n}&toBlock={n}`
 Swap events across **all** tokens in a block range (newest→oldest by block).
@@ -176,7 +176,7 @@ Swap events across **all** tokens in a block range (newest→oldest by block).
 
 ## Webhooks (push feed)
 
-Instead of polling, partners can register a URL that Robinfun **POSTs to** when
+Instead of polling, partners can register a URL that Famspad **POSTs to** when
 something happens. Fire-and-forget with an optional HMAC-SHA256 signature.
 
 **Events:** `token.created` (a new token launched) · `token.graduated` (a token
@@ -187,15 +187,15 @@ run the instance, call the admin endpoint with `x-admin-secret`:
 
 ```bash
 # register
-curl -X POST https://robinfun.io/api/v1/webhooks \
+curl -X POST https://famspad.com/api/v1/webhooks \
   -H "x-admin-secret: $ADMIN_SECRET" -H "content-type: application/json" \
   -d '{"url":"https://partner.example/hook","events":["token.created","token.graduated"],"secret":"your-shared-secret"}'
 
 # list  →  { "webhooks": [ { "id", "url", "events", "createdAt" } ], "events": [...] }
-curl -H "x-admin-secret: $ADMIN_SECRET" https://robinfun.io/api/v1/webhooks
+curl -H "x-admin-secret: $ADMIN_SECRET" https://famspad.com/api/v1/webhooks
 
 # delete
-curl -X DELETE -H "x-admin-secret: $ADMIN_SECRET" https://robinfun.io/api/v1/webhooks/{id}
+curl -X DELETE -H "x-admin-secret: $ADMIN_SECRET" https://famspad.com/api/v1/webhooks/{id}
 ```
 
 **Delivery payload** (POST body):
@@ -204,12 +204,12 @@ curl -X DELETE -H "x-admin-secret: $ADMIN_SECRET" https://robinfun.io/api/v1/web
 ```
 
 **Verifying the signature** — if you set a `secret`, each request carries
-`x-robinfun-signature: sha256=<hmac>` over the **raw body**:
+`x-famspad-signature: sha256=<hmac>` over the **raw body**:
 ```js
 const sig = 'sha256=' + crypto.createHmac('sha256', SECRET).update(rawBody).digest('hex');
-const ok = crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(req.headers['x-robinfun-signature']));
+const ok = crypto.timingSafeEqual(Buffer.from(sig), Buffer.from(req.headers['x-famspad-signature']));
 ```
-Also sent: `x-robinfun-event: token.created`. Respond `2xx` quickly; we don't retry.
+Also sent: `x-famspad-event: token.created`. Respond `2xx` quickly; we don't retry.
 
 ---
 
@@ -221,8 +221,8 @@ so pick whichever your stack prefers:
 
 | transport | URL | consume with |
 |-----------|-----|--------------|
-| **Server-Sent Events** | `GET https://robinfun.io/api/v1/stream` | `new EventSource(url)` (built into browsers) |
-| **WebSocket** | `wss://robinfun.io/api/v1/ws` | browser `WebSocket`, or Node `npm i ws` |
+| **Server-Sent Events** | `GET https://famspad.com/api/v1/stream` | `new EventSource(url)` (built into browsers) |
+| **WebSocket** | `wss://famspad.com/api/v1/ws` | browser `WebSocket`, or Node `npm i ws` |
 
 **Message envelope** (every message, both transports):
 ```json
@@ -251,14 +251,14 @@ so pick whichever your stack prefers:
 
 ```js
 // SSE — browser, no library
-const es = new EventSource('https://robinfun.io/api/v1/stream');
+const es = new EventSource('https://famspad.com/api/v1/stream');
 es.onmessage = (e) => {
   const m = JSON.parse(e.data);
   if (m.type === 'trade') console.log(m.data.symbol, m.data.side, '$' + m.data.volumeUsd);
 };
 
 // WebSocket — Node (npm i ws) or browser
-const ws = new WebSocket('wss://robinfun.io/api/v1/ws?token=0xYourToken');
+const ws = new WebSocket('wss://famspad.com/api/v1/ws?token=0xYourToken');
 ws.on('message', (buf) => { const m = JSON.parse(buf); /* { type, ts, data } */ });
 ```
 
@@ -273,21 +273,21 @@ off the stream.
 
 ```bash
 # platform stats
-curl https://robinfun.io/api/v1/stats
+curl https://famspad.com/api/v1/stats
 
 # newest 20 tokens
-curl "https://robinfun.io/api/v1/tokens?limit=20"
+curl "https://famspad.com/api/v1/tokens?limit=20"
 
 # only tokens listed on Uniswap (ready for a DEX aggregator)
-curl "https://robinfun.io/api/v1/tokens?status=listed"
+curl "https://famspad.com/api/v1/tokens?status=listed"
 
 # one token
-curl https://robinfun.io/api/v1/tokens/0xd48A1Eed09696E389A3CC32E519224d6Bf4ffeEd
+curl https://famspad.com/api/v1/tokens/0xd48A1Eed09696E389A3CC32E519224d6Bf4ffeEd
 ```
 
 ```js
 // JS / partner integration
-const r = await fetch('https://robinfun.io/api/v1/tokens?status=listed&limit=100');
+const r = await fetch('https://famspad.com/api/v1/tokens?status=listed&limit=100');
 const { tokens } = await r.json();
 for (const t of tokens) {
   // auto-list: t.address, t.symbol, t.name, t.pairAddress, t.priceUsd, t.marketCapUsd, t.logoURI …

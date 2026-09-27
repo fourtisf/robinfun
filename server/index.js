@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Robinfun metadata API (M3, off-chain).
+ * Famspad metadata API (M3, off-chain).
  *
  * Persists token metadata (name, ticker, description, socials, creator, logo)
  * so launches survive reloads and are shared across all visitors — the board
@@ -139,7 +139,7 @@ app.get('/api/stats', adminCors, (req, res) => {
 });
 
 // ---------------- Public Partner API v1 (read-only, CORS open) ----------------
-// Stable, documented token feed so partners can auto-list Robinfun tokens.
+// Stable, documented token feed so partners can auto-list Famspad tokens.
 // Any origin may read it; there are no secrets and it exposes only public data.
 function publicCors(req, res, next) {
   res.set('Access-Control-Allow-Origin', '*');
@@ -234,7 +234,7 @@ app.get('/api/v1/dex/events', publicCors, (req, res) => {
 });
 
 // ---- Webhook subscriptions (admin-gated: same x-admin-secret) ----
-// Partners register a URL; Robinfun POSTs to it on token.created / token.graduated.
+// Partners register a URL; Famspad POSTs to it on token.created / token.graduated.
 app.options('/api/v1/webhooks', adminCors);
 app.options('/api/v1/webhooks/:id', adminCors);
 app.get('/api/v1/webhooks', adminCors, (req, res) => {
@@ -357,7 +357,7 @@ if (SITE_DIR) {
 // Bootstrap: connect the store (MongoDB or JSON) BEFORE accepting requests.
 (async () => {
   await store.init({ dataDir: DATA_DIR, defaultSettings: DEFAULT_SETTINGS });
-  const server = app.listen(PORT, HOST, () => console.log(`robinfun-api listening on ${HOST}:${PORT} [store: ${store.backend()}]`));
+  const server = app.listen(PORT, HOST, () => console.log(`famspad-api listening on ${HOST}:${PORT} [store: ${store.backend()}]`));
   // Real-time feed: attach the WebSocket server to the same port (/api/v1/ws)
   // and subscribe it to the indexer's trade + graduation events. SSE is served
   // by the /api/v1/stream route above; both carry the same messages.

@@ -1,6 +1,6 @@
 'use strict';
 /*
- * Robinfun board-stats indexer.
+ * Famspad board-stats indexer.
  *
  * Computes the homepage aggregates — 24h volume, all-time volume, paid-to-creators
  * and every token's live market cap — ONCE, server-side, on a continuous loop, so

@@ -1,8 +1,8 @@
 'use strict';
 /*
- * Webhook subscriptions — partners register a URL and Robinfun POSTs to it when
+ * Webhook subscriptions — partners register a URL and Famspad POSTs to it when
  * something happens (a token is created, a token graduates). Fire-and-forget with
- * an optional HMAC-SHA256 signature (`x-robinfun-signature: sha256=…`) so the
+ * an optional HMAC-SHA256 signature (`x-famspad-signature: sha256=…`) so the
  * receiver can verify the payload. Subscriptions persist to a JSON file.
  *
  * Managed via the admin API (POST/GET/DELETE /api/v1/webhooks) — see docs/API.md.
@@ -39,8 +39,8 @@ function dispatch(event, data) {
   const body = JSON.stringify({ event, data, ts: Date.now() });
   for (const s of subs) {
     if (!s.events.includes(event)) continue;
-    const headers = { 'content-type': 'application/json', 'x-robinfun-event': event };
-    if (s.secret) headers['x-robinfun-signature'] = 'sha256=' + crypto.createHmac('sha256', s.secret).update(body).digest('hex');
+    const headers = { 'content-type': 'application/json', 'x-famspad-event': event };
+    if (s.secret) headers['x-famspad-signature'] = 'sha256=' + crypto.createHmac('sha256', s.secret).update(body).digest('hex');
     try { fetch(s.url, { method: 'POST', headers, body, signal: AbortSignal.timeout(8000) }).catch(() => {}); } catch (_) {}
   }
 }

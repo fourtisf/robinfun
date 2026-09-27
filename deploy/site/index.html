@@ -958,6 +958,11 @@ footer{border-top:1px solid var(--rule);padding:26px 0 34px;margin-top:20px}
 .tcard-foot{padding-top:11px;margin-top:2px;border-top:1px solid var(--rule)}
 .watch-star{top:15px;right:14px}
 
+.topbar-in{max-width:1320px}
+.topbar-right>*{flex-shrink:0}
+/* keep Connect wallet inside the pill: shed the least-useful items first */
+@media(max-width:1600px){ .nav:not(.open) button[data-nav-chain]{display:none} }
+@media(max-width:1440px){ .tb-eth{display:none} .nav button{padding:7px 11px} }
 body.light .topbar-in{background:rgba(255,255,255,.78);border-color:var(--rule-2);box-shadow:0 14px 34px -24px rgba(20,16,8,.35)}
 body.light .stat-blocks{background:rgba(255,255,255,.8)}
 body.light .curve-bar{background:rgba(0,0,0,.06)}
@@ -1006,7 +1011,7 @@ body.light .hero-horizon{opacity:.6}
       <button data-nav="stake" data-i18n="nav.staking" onclick="go('stake')">Staking</button>
       <button data-nav="docs" data-i18n="nav.whitepaper" onclick="go('docs')">Whitepaper</button>
       <button data-i18n="nav.api" onclick="window.open('/api/v1/guide','_blank','noopener');document.getElementById('nav').classList.remove('open')">API</button>
-      <button data-i18n="nav.chain" onclick="toast('Robinhood Chain — L2 explorer &amp; bridge coming soon','')">Robinhood Chain</button>
+      <button data-nav-chain data-i18n="nav.chain" onclick="toast('Robinhood Chain — L2 explorer &amp; bridge coming soon','')">Robinhood Chain</button>
       <div class="nav-tools">
         <button onclick="toggleTheme();document.getElementById('nav').classList.remove('open')">◐&nbsp; Light / dark</button>
         <button onclick="toggleLang();document.getElementById('nav').classList.remove('open')">🌐&nbsp; Language · <span id="navLangLbl">EN</span></button>

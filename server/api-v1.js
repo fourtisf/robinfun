@@ -1,6 +1,6 @@
 'use strict';
 /*
- * Robinfun Public API v1 — read-only token data for partners & integrations
+ * Famspad Public API v1 — read-only token data for partners & integrations
  * (auto-listing, aggregators, wallets, trackers). Merges off-chain metadata
  * (name/symbol/logo/links) with the continuously-indexed on-chain market data
  * (price, market cap, volume, status) into one clean, stable JSON shape.
@@ -9,9 +9,9 @@
  * on them. Add new fields freely; never rename/remove without a v2.
  */
 const CHAIN_ID = Number(process.env.CHAIN_ID || 4663);
-const SITE = (process.env.APP_URL || 'https://robinfun.io').replace(/\/+$/, '');
+const SITE = (process.env.APP_URL || 'https://famspad.com').replace(/\/+$/, '');
 const EXPLORER = (process.env.EXPLORER_URL || 'https://robinhoodchain.blockscout.com').replace(/\/+$/, '');
-const TOTAL_SUPPLY = '1000000000';   // every Robinfun token: fixed 1B supply, 18 decimals
+const TOTAL_SUPPLY = '1000000000';   // every Famspad token: fixed 1B supply, 18 decimals
 const NATIVE_ID = 'ETH';             // aggregator asset id for the chain's gas token (ETH)
 const NATIVE_SYMBOL = 'ETH';
 
@@ -55,7 +55,7 @@ function toPublic(rec, st, apiBase) {
     pairAddress: s ? (s.pair || null) : null,           // Uniswap V2 pair (once listed)
     createdAt: rec.createdAt || null,
     urls: {
-      robinfun: ca ? `${SITE}/token/${ca}` : SITE,
+      famspad: ca ? `${SITE}/token/${ca}` : SITE,
       explorer: ca ? `${EXPLORER}/token/${ca}` : null,
       api: (ca && apiBase) ? `${apiBase}/tokens/${ca}` : null,
     },
@@ -118,7 +118,7 @@ function platformStats(stats) {
 // GET /api/v1 — self-describing index so integrators can discover endpoints.
 function index(apiBase) {
   return {
-    name: 'Robinfun Public API',
+    name: 'Famspad Public API',
     version: '1',
     chain: 'Robinhood Chain', chainId: CHAIN_ID,
     guide: `${apiBase}/guide`,
@@ -216,7 +216,7 @@ function dexPair(store, stats, id) {
   return {
     pair: {
       id: pairId,
-      dexKey: s && s.graduated ? 'uniswap-v2' : 'robinfun-curve',
+      dexKey: s && s.graduated ? 'uniswap-v2' : 'famspad-curve',
       asset0Id: rec.ca,
       asset1Id: NATIVE_ID,
       createdAtBlockNumber: null,
@@ -279,12 +279,12 @@ function openapi(apiBase) {
   return {
     openapi: '3.0.3',
     info: {
-      title: 'Robinfun Public API',
+      title: 'Famspad Public API',
       version: '1.0.0',
-      description: 'Read-only market data for memecoins launched on Robinfun (Robinhood Chain, chainId 4663). Use it to auto-list tokens, power aggregators/trackers, or feed wallets and bots. No auth, CORS open, cached ~15s.\n\n**Real-time:** for live trades don\'t poll — subscribe to the push feed. Two transports carry the same `{ type, ts, data }` messages (type = `trade` | `token.created` | `token.graduated`): Server-Sent Events at `GET /stream` (documented below) and WebSocket at `wss://robinfun.io/api/v1/ws`. Both accept `?token=0x…` and `?types=trade,token.created` filters. Historical trades stay at `/tokens/{contractAddress}/trades`.',
-      contact: { name: 'Robinfun', url: SITE },
+      description: 'Read-only market data for memecoins launched on Famspad (Robinhood Chain, chainId 4663). Use it to auto-list tokens, power aggregators/trackers, or feed wallets and bots. No auth, CORS open, cached ~15s.\n\n**Real-time:** for live trades don\'t poll — subscribe to the push feed. Two transports carry the same `{ type, ts, data }` messages (type = `trade` | `token.created` | `token.graduated`): Server-Sent Events at `GET /stream` (documented below) and WebSocket at `wss://famspad.com/api/v1/ws`. Both accept `?token=0x…` and `?types=trade,token.created` filters. Historical trades stay at `/tokens/{contractAddress}/trades`.',
+      contact: { name: 'Famspad', url: SITE },
     },
-    servers: [{ url: base, description: 'Robinfun API v1' }],
+    servers: [{ url: base, description: 'Famspad API v1' }],
     tags: [
       { name: 'Discovery' }, { name: 'Tokens' }, { name: 'Market' }, { name: 'Realtime' }, { name: 'Platform' }, { name: 'Aggregator' },
     ],
@@ -327,7 +327,7 @@ function openapi(apiBase) {
         get: {
           tags: ['Realtime'],
           summary: 'Real-time event stream (Server-Sent Events)',
-          description: 'A long-lived `text/event-stream` response. Each SSE message\'s `data:` line is a JSON `{ type, ts, data }` envelope — type is `hello`, `ping` (heartbeat comment, no event), `trade`, `token.created` or `token.graduated`. Consume with `new EventSource(url).onmessage`. A WebSocket with identical messages is at `wss://robinfun.io/api/v1/ws`.',
+          description: 'A long-lived `text/event-stream` response. Each SSE message\'s `data:` line is a JSON `{ type, ts, data }` envelope — type is `hello`, `ping` (heartbeat comment, no event), `trade`, `token.created` or `token.graduated`. Consume with `new EventSource(url).onmessage`. A WebSocket with identical messages is at `wss://famspad.com/api/v1/ws`.',
           operationId: 'stream',
           parameters: [
             { name: 'token', in: 'query', schema: { type: 'string' }, description: 'Restrict trade messages to one contract address (0x…)' },
@@ -363,7 +363,7 @@ function openapi(apiBase) {
             curveAddress: { type: 'string', nullable: true },
             pairAddress: { type: 'string', nullable: true },
             createdAt: { type: 'integer', nullable: true },
-            urls: { type: 'object', properties: { robinfun: { type: 'string' }, explorer: { type: 'string', nullable: true }, api: { type: 'string', nullable: true } } },
+            urls: { type: 'object', properties: { famspad: { type: 'string' }, explorer: { type: 'string', nullable: true }, api: { type: 'string', nullable: true } } },
           },
         },
         TokenList: {
@@ -408,8 +408,8 @@ function openapi(apiBase) {
   };
 }
 
-// GET /api/v1/docs — interactive Swagger UI page, restyled to Robinfun's
-// dark volt-lime brand (Space Grotesk / IBM Plex Mono). Loads Swagger UI from
+// GET /api/v1/docs — interactive Swagger UI page, restyled to Famspad's
+// black + champagne-gold brand (Inter Tight / JetBrains Mono). Loads Swagger UI from
 // CDN; this is a real website page (not a sandboxed artifact), so that's fine.
 function docsHtml(apiBase) {
   const specUrl = `${apiBase}/openapi.json`;
@@ -418,27 +418,27 @@ function docsHtml(apiBase) {
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Robinfun API — Docs</title>
-<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%23C6F23C'/%3E%3C/svg%3E">
+<title>Famspad API — Docs</title>
+<link rel="icon" type="image/png" href="/famspad-logo.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Instrument+Sans:wght@400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://unpkg.com/swagger-ui-dist@5/swagger-ui.css">
 <style>
   :root{
-    --bg:#080B0A; --panel:#0F140F; --raise:#161C13; --rule:#1C231A; --rule2:#29321F;
-    --ink:#F2F5EA; --dim:#9AA18F; --mute:#5F6653; --lime:#C6F23C; --lime2:#D8FB5C;
-    --lime-dim:rgba(198,242,60,.12); --red:#FF5B4A;
-    --fdisplay:"Space Grotesk",system-ui,sans-serif; --fbody:"Instrument Sans",system-ui,sans-serif; --fmono:"IBM Plex Mono",ui-monospace,monospace;
+    --bg:#000000; --panel:#0A0A0A; --raise:#121212; --rule:#1A1A1A; --rule2:#262626;
+    --ink:#F5F3EE; --dim:#9C9890; --mute:#5E5B55; --lime:#D4B574; --lime2:#EAD3A0;
+    --lime-dim:rgba(212,181,116,0.08); --red:#F0595F;
+    --fdisplay:"Inter Tight",system-ui,sans-serif; --fbody:"Inter",system-ui,sans-serif; --fmono:"JetBrains Mono",ui-monospace,monospace;
   }
   html,body{background:var(--bg);}
   body{margin:0;font-family:var(--fbody);}
-  body::after{content:"";position:fixed;left:50%;top:-340px;transform:translateX(-50%);width:1100px;height:620px;pointer-events:none;z-index:0;background:radial-gradient(closest-side,rgba(198,242,60,.10),rgba(198,242,60,.03) 55%,transparent 75%);filter:blur(8px);}
+  body::after{content:"";position:fixed;left:50%;top:-340px;transform:translateX(-50%);width:1100px;height:620px;pointer-events:none;z-index:0;background:radial-gradient(closest-side,rgba(212,181,116,0.07),rgba(212,181,116,0.02) 55%,transparent 75%);filter:blur(8px);}
   .swagger-ui .topbar{display:none;}
   /* ---- brand header ---- */
   .rf-head{position:relative;z-index:2;font-family:var(--fdisplay);color:var(--ink);max-width:1100px;margin:0 auto;padding:30px 24px 6px;}
   .rf-head .rf-brand{display:flex;align-items:center;gap:11px;font-size:23px;font-weight:700;letter-spacing:-.02em;}
-  .rf-head .rf-dot{width:15px;height:15px;border-radius:99px;background:var(--lime);box-shadow:0 0 16px rgba(198,242,60,.6);}
+  .rf-head .rf-dot{width:15px;height:15px;border-radius:99px;background:var(--lime);box-shadow:0 0 16px rgba(212,181,116,0.42);}
   .rf-head .rf-sub{font-family:var(--fbody);color:var(--dim);font-size:14px;margin-top:7px;}
   .rf-head .rf-sub a{color:var(--lime);text-decoration:none;font-weight:600;}
   .rf-head .rf-sub a:hover{color:var(--lime2);}
@@ -466,7 +466,7 @@ function docsHtml(apiBase) {
   .swagger-ui select{background:var(--raise);border:1px solid var(--rule2);border-radius:8px;box-shadow:none;}
   /* tag groups */
   .swagger-ui .opblock-tag{color:var(--ink);font-family:var(--fdisplay);border-bottom:1px solid var(--rule);}
-  .swagger-ui .opblock-tag:hover{background:rgba(198,242,60,.03);}
+  .swagger-ui .opblock-tag:hover{background:rgba(212,181,116,0.02);}
   .swagger-ui .opblock-tag small{color:var(--mute);}
   /* operation blocks */
   .swagger-ui .opblock{background:var(--panel);border:1px solid var(--rule);border-radius:12px;box-shadow:none;margin:0 0 12px;}
@@ -474,12 +474,12 @@ function docsHtml(apiBase) {
   .swagger-ui .opblock .opblock-summary-path, .swagger-ui .opblock .opblock-summary-path__deprecated,
   .swagger-ui .opblock .opblock-summary-description{color:var(--ink);font-family:var(--fmono);}
   .swagger-ui .opblock .opblock-summary-method{border-radius:7px;font-family:var(--fmono);text-shadow:none;}
-  .swagger-ui .opblock.opblock-get{background:rgba(198,242,60,.04);border-color:var(--rule2);}
-  .swagger-ui .opblock.opblock-get .opblock-summary-method{background:var(--lime);color:#0B0F04;}
-  .swagger-ui .opblock.opblock-get .opblock-summary{border-color:rgba(198,242,60,.25);}
-  .swagger-ui .opblock.opblock-post{background:rgba(198,242,60,.04);border-color:var(--rule2);}
-  .swagger-ui .opblock.opblock-post .opblock-summary-method{background:var(--lime2);color:#0B0F04;}
-  .swagger-ui .opblock.opblock-delete .opblock-summary-method{background:var(--red);color:#1a0400;}
+  .swagger-ui .opblock.opblock-get{background:rgba(212,181,116,0.03);border-color:var(--rule2);}
+  .swagger-ui .opblock.opblock-get .opblock-summary-method{background:var(--lime);color:#0A0A0A;}
+  .swagger-ui .opblock.opblock-get .opblock-summary{border-color:rgba(212,181,116,0.17);}
+  .swagger-ui .opblock.opblock-post{background:rgba(212,181,116,0.03);border-color:var(--rule2);}
+  .swagger-ui .opblock.opblock-post .opblock-summary-method{background:var(--lime2);color:#0A0A0A;}
+  .swagger-ui .opblock.opblock-delete .opblock-summary-method{background:var(--red);color:#1A0405;}
   /* body / tables / params */
   .swagger-ui .opblock-body, .swagger-ui .opblock-section-header{background:var(--bg);box-shadow:none;}
   .swagger-ui .opblock-section-header{border-radius:8px;border:1px solid var(--rule);}
@@ -487,7 +487,7 @@ function docsHtml(apiBase) {
   .swagger-ui .parameters-col_description input[type=text]{background:var(--raise);border:1px solid var(--rule2);color:var(--ink);border-radius:8px;}
   .swagger-ui .parameter__name.required::after{color:var(--red);}
   .swagger-ui .btn{border:1px solid var(--rule2);color:var(--ink);border-radius:8px;box-shadow:none;background:var(--raise);}
-  .swagger-ui .btn.execute{background:var(--lime);border-color:var(--lime);color:#0B0F04;font-family:var(--fdisplay);font-weight:600;}
+  .swagger-ui .btn.execute{background:var(--lime);border-color:var(--lime);color:#0A0A0A;font-family:var(--fdisplay);font-weight:600;}
   .swagger-ui .btn.execute:hover{background:var(--lime2);}
   .swagger-ui .btn.try-out__btn{background:transparent;color:var(--lime);border-color:var(--rule2);}
   .swagger-ui .btn.cancel{color:var(--red);border-color:var(--red);}
@@ -496,9 +496,9 @@ function docsHtml(apiBase) {
   .swagger-ui table.responses-table td{color:var(--ink);}
   .swagger-ui .response-col_description__inner div.renderedMarkdown p{color:var(--dim);}
   .swagger-ui .microlight, .swagger-ui .highlight-code, .swagger-ui .curl-command,
-  .swagger-ui textarea, .swagger-ui .body-param__text{background:#05070500!important;}
-  .swagger-ui .highlight-code, .swagger-ui .responses-inner pre, .swagger-ui .curl{background:#050706;border:1px solid var(--rule);border-radius:8px;}
-  .swagger-ui .microlight code, .swagger-ui pre, .swagger-ui code{font-family:var(--fmono);color:#d7e6c4;}
+  .swagger-ui textarea, .swagger-ui .body-param__text{background:#05050500!important;}
+  .swagger-ui .highlight-code, .swagger-ui .responses-inner pre, .swagger-ui .curl{background:#050505;border:1px solid var(--rule);border-radius:8px;}
+  .swagger-ui .microlight code, .swagger-ui pre, .swagger-ui code{font-family:var(--fmono);color:#E4E0D8;}
   /* models */
   .swagger-ui section.models{border:1px solid var(--rule);background:var(--panel);border-radius:12px;}
   .swagger-ui section.models.is-open h4{border-color:var(--rule);color:var(--ink);}
@@ -511,13 +511,13 @@ function docsHtml(apiBase) {
   .swagger-ui .opblock-tag-section h3, .swagger-ui hgroup.main a{color:var(--ink);}
   .swagger-ui .info__contact a{color:var(--lime);}
   .swagger-ui .parameter__enum, .swagger-ui .renderedMarkdown code{background:var(--lime-dim);color:var(--lime2);font-family:var(--fmono);border-radius:4px;}
-  ::selection{background:rgba(198,242,60,.30);color:#0B0F04;}
+  ::selection{background:rgba(212,181,116,0.21);color:#0A0A0A;}
 </style>
 </head>
 <body>
 <div class="rf-head">
-  <div class="rf-brand"><span class="rf-dot"></span> Robinfun Public API</div>
-  <div class="rf-sub">Read-only market data for tokens launched on Robinhood Chain — auto-list, aggregators, wallets &amp; bots. · <a href="${apiBase}/guide">Integration guide</a> · <a href="${SITE}">robinfun.io</a> · <a href="${specUrl}">openapi.json</a></div>
+  <div class="rf-brand"><img src="/famspad-logo.png" alt="" style="width:30px;height:30px;border-radius:8px"> Famspad Public API</div>
+  <div class="rf-sub">Read-only market data for tokens launched on Robinhood Chain — auto-list, aggregators, wallets &amp; bots. · <a href="${apiBase}/guide">Integration guide</a> · <a href="${SITE}">famspad.com</a> · <a href="${specUrl}">openapi.json</a></div>
   <div class="rf-pills"><span>Chain <b>Robinhood · 4663</b></span><span>Auth <b>none</b></span><span>CORS <b>open</b></span><span>Cache <b>~15s</b></span></div>
 </div>
 <div id="swagger"></div>
@@ -553,7 +553,7 @@ function guideHtml(apiBase) {
   ].join("\n");
 
   const cList = [
-    "// Pull every Robinfun token and add it to your platform.",
+    "// Pull every Famspad token and add it to your platform.",
     "const res = await fetch(`" + base + "/tokens?limit=200`);",
     "const { tokens } = await res.json();",
     "",
@@ -640,11 +640,11 @@ function guideHtml(apiBase) {
   ].join("\n");
 
   const cHookReg = [
-    "# Ask Robinfun to register your endpoint (operator runs this once).",
+    "# Ask Famspad to register your endpoint (operator runs this once).",
     "curl -X POST " + base + "/webhooks \\",
     "  -H \"x-admin-secret: $ADMIN_SECRET\" \\",
     "  -H \"content-type: application/json\" \\",
-    "  -d '{\"url\":\"https://your.app/robinfun-hook\",\"events\":[\"token.created\",\"token.graduated\"],\"secret\":\"your-shared-secret\"}'",
+    "  -d '{\"url\":\"https://your.app/famspad-hook\",\"events\":[\"token.created\",\"token.graduated\"],\"secret\":\"your-shared-secret\"}'",
   ].join("\n");
 
   const cHookRecv = [
@@ -654,9 +654,9 @@ function guideHtml(apiBase) {
     "const SECRET = 'your-shared-secret';        // the secret you registered",
     "",
     "// Use the RAW body so the signature matches byte-for-byte.",
-    "app.post('/robinfun-hook', express.raw({ type: '*/*' }), (req, res) => {",
+    "app.post('/famspad-hook', express.raw({ type: '*/*' }), (req, res) => {",
     "  const want = 'sha256=' + crypto.createHmac('sha256', SECRET).update(req.body).digest('hex');",
-    "  const got  = req.get('x-robinfun-signature') || '';",
+    "  const got  = req.get('x-famspad-signature') || '';",
     "  if (want.length !== got.length ||",
     "      !crypto.timingSafeEqual(Buffer.from(want), Buffer.from(got))) {",
     "    return res.status(401).send('bad signature');",
@@ -684,18 +684,19 @@ function guideHtml(apiBase) {
 '<html lang="en"><head>\n' +
 '<meta charset="utf-8">\n' +
 '<meta name="viewport" content="width=device-width, initial-scale=1">\n' +
-'<title>Integrate Robinfun — API Guide</title>\n' +
-'<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=\'http://www.w3.org/2000/svg\' viewBox=\'0 0 100 100\'%3E%3Ccircle cx=\'50\' cy=\'50\' r=\'46\' fill=\'%23C6F23C\'/%3E%3C/svg%3E">\n' +
+'<title>Integrate Famspad — API Guide</title>\n' +
+'<link rel="icon" type="image/png" href="/famspad-logo.png">\n' +
+'<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@500;600;700&family=JetBrains+Mono:wght@400;500;600&family=Inter:wght@400;500;600&display=swap" rel="stylesheet">\n' +
 '<style>\n' +
-':root{--bg:#080B0A;--panel:#0F140F;--raise:#161C13;--rule:#1C231A;--rule2:#29321F;--ink:#F2F5EA;--dim:#9AA18F;--mute:#5F6653;--lime:#C6F23C;--lime2:#D8FB5C;--red:#FF5B4A;--fd:"Space Grotesk",system-ui,sans-serif;--fb:"Instrument Sans",system-ui,sans-serif;--fm:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace}\n' +
+':root{--bg:#000000;--panel:#0A0A0A;--raise:#121212;--rule:#1A1A1A;--rule2:#262626;--ink:#F5F3EE;--dim:#9C9890;--mute:#5E5B55;--lime:#D4B574;--lime2:#EAD3A0;--red:#F0595F;--fd:"Inter Tight",system-ui,sans-serif;--fb:"Inter",system-ui,sans-serif;--fm:"JetBrains Mono",ui-monospace,SFMono-Regular,Menlo,monospace}\n' +
 '*{margin:0;padding:0;box-sizing:border-box}\n' +
 'body{background:var(--bg);color:var(--ink);font-family:var(--fb);font-size:15.5px;line-height:1.65;-webkit-font-smoothing:antialiased;overflow-x:hidden}\n' +
-'body::after{content:"";position:fixed;left:50%;top:-360px;transform:translateX(-50%);width:1100px;height:640px;pointer-events:none;z-index:0;background:radial-gradient(closest-side,rgba(198,242,60,.10),rgba(198,242,60,.03) 55%,transparent 75%);filter:blur(8px)}\n' +
+'body::after{content:"";position:fixed;left:50%;top:-360px;transform:translateX(-50%);width:1100px;height:640px;pointer-events:none;z-index:0;background:radial-gradient(closest-side,rgba(212,181,116,0.07),rgba(212,181,116,0.02) 55%,transparent 75%);filter:blur(8px)}\n' +
 'a{color:var(--lime);text-decoration:none}a:hover{color:var(--lime2)}\n' +
 '.wrap{position:relative;z-index:1;max-width:860px;margin:0 auto;padding:0 22px 90px}\n' +
 '.top{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:22px 0 8px;flex-wrap:wrap}\n' +
 '.brand{display:flex;align-items:center;gap:10px;font-family:var(--fd);font-weight:700;font-size:19px;letter-spacing:-.01em}\n' +
-'.dot{width:13px;height:13px;border-radius:99px;background:var(--lime);box-shadow:0 0 14px rgba(198,242,60,.6)}\n' +
+'.dot{width:13px;height:13px;border-radius:99px;background:var(--lime);box-shadow:0 0 14px rgba(212,181,116,0.42)}\n' +
 '.top .links{display:flex;gap:16px;font-family:var(--fm);font-size:12.5px}\n' +
 '.hero{padding:34px 0 10px}\n' +
 '.hero h1{font-family:var(--fd);font-size:38px;line-height:1.1;font-weight:700;letter-spacing:-.02em}\n' +
@@ -711,14 +712,14 @@ function guideHtml(apiBase) {
 '.feat .e{font-size:19px}.feat b{display:block;font-family:var(--fd);margin:6px 0 2px;font-size:14.5px}\n' +
 '.feat span{color:var(--dim);font-size:13px}\n' +
 '.step{display:flex;gap:16px;margin:30px 0 0;align-items:flex-start}\n' +
-'.num{flex:none;width:34px;height:34px;border-radius:99px;background:var(--lime);color:#0B0F04;font-family:var(--fd);font-weight:700;display:flex;align-items:center;justify-content:center;font-size:16px;margin-top:2px}\n' +
+'.num{flex:none;width:34px;height:34px;border-radius:99px;background:var(--lime);color:#0A0A0A;font-family:var(--fd);font-weight:700;display:flex;align-items:center;justify-content:center;font-size:16px;margin-top:2px}\n' +
 '.step .body{flex:1;min-width:0}\n' +
 'h2{font-family:var(--fd);font-size:22px;font-weight:600;letter-spacing:-.01em;margin:0 0 4px}\n' +
 'h3{font-family:var(--fd);font-size:17px;font-weight:600;margin:34px 0 6px;padding-top:22px;border-top:1px solid var(--rule)}\n' +
 '.lead{color:var(--dim);margin-bottom:12px}\n' +
 '.code{position:relative;margin:12px 0}\n' +
-'.code pre{background:#050706;border:1px solid var(--rule);border-radius:10px;padding:15px 16px;overflow-x:auto}\n' +
-'.code code{font-family:var(--fm);font-size:13px;line-height:1.7;color:#d7e6c4;white-space:pre}\n' +
+'.code pre{background:#050505;border:1px solid var(--rule);border-radius:10px;padding:15px 16px;overflow-x:auto}\n' +
+'.code code{font-family:var(--fm);font-size:13px;line-height:1.7;color:#E4E0D8;white-space:pre}\n' +
 '.code .copy{position:absolute;top:9px;right:9px;font-family:var(--fm);font-size:11px;background:var(--raise);border:1px solid var(--rule2);color:var(--dim);border-radius:6px;padding:4px 9px;cursor:pointer}\n' +
 '.code .copy:hover{color:var(--lime);border-color:var(--lime)}\n' +
 '.note{background:var(--panel);border-left:3px solid var(--lime);border-radius:0 10px 10px 0;padding:12px 16px;margin:14px 0;color:var(--dim);font-size:14px}\n' +
@@ -730,18 +731,18 @@ function guideHtml(apiBase) {
 'td span{color:var(--dim)}\n' +
 '.cta{display:flex;gap:12px;flex-wrap:wrap;margin-top:34px}\n' +
 '.btn{font-family:var(--fd);font-weight:600;font-size:15px;border-radius:10px;padding:12px 20px;border:1px solid var(--rule2);color:var(--ink);background:var(--panel)}\n' +
-'.btn.primary{background:var(--lime);border-color:var(--lime);color:#0B0F04}\n' +
+'.btn.primary{background:var(--lime);border-color:var(--lime);color:#0A0A0A}\n' +
 '.foot{margin-top:46px;padding-top:20px;border-top:1px solid var(--rule);color:var(--mute);font-size:13px}\n' +
 '@media(max-width:560px){.hero h1{font-size:30px}}\n' +
 '</style></head><body>\n' +
 '<div class="wrap">\n' +
 '  <div class="top">\n' +
-'    <div class="brand"><span class="dot"></span> Robinfun</div>\n' +
+'    <div class="brand"><img src="/famspad-logo.png" alt="" style="width:28px;height:28px;border-radius:8px"> Famspad</div>\n' +
 '    <div class="links"><a href="' + SITE + '">Home</a><a href="' + refUrl + '">API Reference</a><a href="' + specUrl + '">openapi.json</a></div>\n' +
 '  </div>\n' +
 '  <div class="hero">\n' +
-'    <h1>Connect your platform to <span>Robinfun</span> in 5 minutes</h1>\n' +
-'    <p>One read-only HTTP API exposes every token launched on Robinfun with live price, market cap, volume and status. No API key, no signup — just fetch and go.</p>\n' +
+'    <h1>Connect your platform to <span>Famspad</span> in 5 minutes</h1>\n' +
+'    <p>One read-only HTTP API exposes every token launched on Famspad with live price, market cap, volume and status. No API key, no signup — just fetch and go.</p>\n' +
 '    <div class="baseurl"><span class="k">Base URL</span><span class="pill" id="baseurl">' + base + '<button onclick="rfCopyText(\'' + base + '\',this)">Copy</button></span></div>\n' +
 '  </div>\n' +
 '  <div class="feats">\n' +
@@ -765,11 +766,11 @@ function guideHtml(apiBase) {
 '  <p class="lead" style="margin-top:16px">Prefer a raw WebSocket? Same messages, same filters, over <code style="font-family:var(--fm);color:var(--lime2)">wss://</code>:</p>' + codeBlock('ws', cWs) +
 '  <div class="note"><b>Filters</b> (both transports): <code style="font-family:var(--fm);color:var(--lime2)">?token=0x…</code> for one token\'s trades, <code style="font-family:var(--fm);color:var(--lime2)">?types=trade,token.created</code> to subset events. A <b>hello</b> message greets you on connect and a heartbeat keeps the connection open. The feed is live-only — for trades from before you connected, page <code style="font-family:var(--fm);color:var(--lime2)">/tokens/{ca}/trades</code>.</div>\n' +
 '  <h3>Get pushed instead of polling (webhooks)</h3>\n' +
-'  <p class="lead">Prefer push? Register a URL and Robinfun POSTs to it the instant a token is <b>created</b> or <b>graduates</b> to Uniswap. Registration is operator-managed — send us your URL, or if you run the instance:</p>' + codeBlock('hookreg', cHookReg) +
-'  <p class="lead" style="margin-top:16px">Then verify the signature on your side so you know it\'s really from Robinfun:</p>' + codeBlock('hookrecv', cHookRecv) +
-'  <div class="note">Each delivery has header <b>x-robinfun-event</b> and, if you set a secret, <b>x-robinfun-signature: sha256=&lt;hmac&gt;</b> over the raw body. Body: <code style="font-family:var(--fm);color:var(--lime2)">{ event, ts, data }</code>.</div>\n' +
+'  <p class="lead">Prefer push? Register a URL and Famspad POSTs to it the instant a token is <b>created</b> or <b>graduates</b> to Uniswap. Registration is operator-managed — send us your URL, or if you run the instance:</p>' + codeBlock('hookreg', cHookReg) +
+'  <p class="lead" style="margin-top:16px">Then verify the signature on your side so you know it\'s really from Famspad:</p>' + codeBlock('hookrecv', cHookRecv) +
+'  <div class="note">Each delivery has header <b>x-famspad-event</b> and, if you set a secret, <b>x-famspad-signature: sha256=&lt;hmac&gt;</b> over the raw body. Body: <code style="font-family:var(--fm);color:var(--lime2)">{ event, ts, data }</code>.</div>\n' +
 '  <h3>For DEX aggregators &amp; trackers</h3>\n' +
-'  <p class="lead">A GeckoTerminal / DexScreener-shaped feed under <code style="font-family:var(--fm);color:var(--lime2)">/dex/*</code>, so an aggregator can ingest Robinfun with its standard adapter.</p>' + codeBlock('agg', cAgg) +
+'  <p class="lead">A GeckoTerminal / DexScreener-shaped feed under <code style="font-family:var(--fm);color:var(--lime2)">/dex/*</code>, so an aggregator can ingest Famspad with its standard adapter.</p>' + codeBlock('agg', cAgg) +
 '  <h3>Field cheat-sheet</h3>\n' +
 '  <table><thead><tr><th>Field</th><th>Meaning</th></tr></thead><tbody>\n' +
 '    <tr><td><code>address</code></td><td><span>Token contract address — the unique id.</span></td></tr>\n' +
@@ -784,7 +785,7 @@ function guideHtml(apiBase) {
 '  </tbody></table>\n' +
 '  <div class="note"><b>Rules of the road:</b> responses cache ~15s — please poll no faster. Field names are stable within v1 (we add, never rename). Treat <code style="font-family:var(--fm);color:var(--lime2)">null</code> market fields as &ldquo;not indexed yet&rdquo;, not zero.</div>\n' +
 '  <div class="cta"><a class="btn primary" href="' + refUrl + '">Open interactive reference →</a><a class="btn" href="' + specUrl + '">Download openapi.json</a></div>\n' +
-'  <div class="foot">Robinfun Public API v1 · Robinhood Chain (chainId 4663) · <a href="' + SITE + '">robinfun.io</a></div>\n' +
+'  <div class="foot">Famspad Public API v1 · Robinhood Chain (chainId 4663) · <a href="' + SITE + '">famspad.com</a></div>\n' +
 '</div>\n' +
 '<script>\n' +
 'function rfCopy(btn){var c=btn.parentNode.querySelector("code");rfCopyText(c.innerText,btn);}\n' +

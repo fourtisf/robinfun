@@ -1,17 +1,17 @@
 'use strict';
 /*
- * Robinfun real-time feed — pushes live market events to partners the instant
+ * Famspad real-time feed — pushes live market events to partners the instant
  * they happen, so integrations don't have to poll. This is the answer to the
  * common partner question "is there a WebSocket for real-time trades?".
  *
  * Two transports carry the SAME JSON messages — pick whichever your stack likes:
  *
- *   • SSE  GET  https://robinfun.io/api/v1/stream   (Server-Sent Events)
+ *   • SSE  GET  https://famspad.com/api/v1/stream   (Server-Sent Events)
  *          Zero-dependency, works from any browser (EventSource) or Node fetch,
  *          and survives nginx without special config (we set X-Accel-Buffering:no
  *          and heartbeat < the proxy read timeout).
  *
- *   • WS   wss://robinfun.io/api/v1/ws              (WebSocket)
+ *   • WS   wss://famspad.com/api/v1/ws              (WebSocket)
  *          Needs the optional `ws` package + an nginx upgrade block. If `ws`
  *          isn't installed the server still boots — SSE just carries everything.
  *
@@ -266,7 +266,7 @@ function startHeartbeat() {
 
 function helloData(filter) {
   return {
-    message: 'Robinfun real-time feed',
+    message: 'Famspad real-time feed',
     chainId: CHAIN_ID,
     types: ALL_TYPES,
     filter: { token: (filter && filter.token) || null, types: (filter && filter.types) ? [...filter.types] : null },

@@ -1,6 +1,6 @@
 'use strict';
 /**
- * Storage layer for the Robinfun API.
+ * Storage layer for the Famspad API.
  *
  * Two backends, chosen by env:
  *   - MONGODB_URI set  -> MongoDB (durable, replicated/backed-up if you use Atlas).
