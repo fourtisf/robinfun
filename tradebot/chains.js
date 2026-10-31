@@ -24,7 +24,7 @@ const CHAINS = {
     factory: env('FACTORY_ADDR', '0xf0a093bc6ab5bb408ca1f084ec2161d879edaa57'),
     router: env('DEX_ROUTER', '0x89e5db8b5aa49aa85ac63f691524311aeb649eba'),
     weth: env('WETH', '0x0bd7d308f8e1639fab988df18a8011f41eacad73'),
-    explorer: env('EXPLORER', 'https://explorer.mainnet.chain.robinhood.com').replace(/\/+$/, ''),
+    explorer: env('EXPLORER', 'https://robinhoodchain.blockscout.com').replace(/\/+$/, ''),
   },
   ethereum: {
     key: 'ethereum', name: 'Ethereum', emoji: '⟠', chainId: 1, native: 'ETH', curve: false,

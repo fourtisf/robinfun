@@ -16,7 +16,7 @@ const esc = (s) => String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replac
 const fmtUsd = (n) => n >= 1e6 ? '$' + (n / 1e6).toFixed(2) + 'M' : n >= 1e3 ? '$' + (n / 1e3).toFixed(1) + 'k' : '$' + n.toFixed(0);
 const ethShort = (wei) => { const n = Number(ethers.formatEther(wei)); return n === 0 ? '0' : n.toFixed(6).replace(/0+$/, '').replace(/\.$/, ''); };
 const usdOf = (wei, usd) => { if (!usd) return ''; const v = Number(ethers.formatEther(wei)) * usd; return ` (${v >= 1000 ? fmtUsd(v) : '$' + v.toFixed(2)})`; };
-const EXPLORER = (process.env.EXPLORER || 'https://explorer.mainnet.chain.robinhood.com').replace(/\/+$/, '');
+const EXPLORER = (process.env.EXPLORER || 'https://robinhoodchain.blockscout.com').replace(/\/+$/, '');
 // Only build a link for a well-formed tx hash (0x + 64 hex). This keeps the <a href>
 // safe even if a row's `hash` ever came from an untrusted source (esc doesn't escape ").
 const txLink = (hash) => /^0x[0-9a-fA-F]{64}$/.test(String(hash || '')) ? `<a href="${EXPLORER}/tx/${hash}">tx↗</a>` : (hash ? `tx <code>${esc(String(hash).slice(0, 14))}…</code>` : '');
